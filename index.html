@@ -1,0 +1,1429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Luminary — Local Media Gallery</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0b;
+    --surface: #111113;
+    --surface2: #1a1a1e;
+    --border: rgba(255,255,255,0.07);
+    --border-hover: rgba(255,255,255,0.15);
+    --text: #e8e6e0;
+    --text-muted: #6b6860;
+    --text-dim: #9e9b94;
+    --accent: #c8a97e;
+    --accent-dim: rgba(200,169,126,0.15);
+    --accent-glow: rgba(200,169,126,0.08);
+    --danger: #c87e7e;
+    --success: #7ec8a0;
+    --radius: 4px;
+    --font-display: 'Cormorant Garamond', Georgia, serif;
+    --font-mono: 'DM Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── SIDEBAR ── */
+  #sidebar {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 220px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    z-index: 100;
+    transition: transform 0.3s ease;
+  }
+
+  .sidebar-logo {
+    padding: 28px 24px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-logo h1 {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 300;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+  }
+  .sidebar-logo span {
+    display: block;
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-top: 3px;
+  }
+
+  .sidebar-section {
+    padding: 16px 0 8px;
+  }
+  .sidebar-label {
+    padding: 0 24px 8px;
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 24px;
+    cursor: pointer;
+    color: var(--text-dim);
+    transition: all 0.15s;
+    border-left: 2px solid transparent;
+    font-size: 12px;
+  }
+  .nav-item:hover { color: var(--text); background: var(--accent-glow); }
+  .nav-item.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-dim); }
+  .nav-item .icon { font-size: 14px; width: 16px; text-align: center; flex-shrink: 0; }
+
+  .sidebar-albums {
+    flex: 1;
+    overflow-y: auto;
+    padding-bottom: 16px;
+  }
+  .sidebar-albums::-webkit-scrollbar { width: 3px; }
+  .sidebar-albums::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .album-nav-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 24px 7px 20px;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 11px;
+    border-left: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .album-nav-item:hover { color: var(--text); background: var(--accent-glow); }
+  .album-nav-item.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-dim); }
+  .album-count {
+    font-size: 10px;
+    color: var(--text-muted);
+    background: var(--surface2);
+    padding: 1px 6px;
+    border-radius: 10px;
+  }
+
+  .sidebar-footer {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ── MAIN ── */
+  #main {
+    margin-left: 220px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── TOPBAR ── */
+  #topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(10,10,11,0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 32px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .topbar-title {
+    font-family: var(--font-display);
+    font-size: 18px;
+    font-weight: 300;
+    color: var(--text);
+    flex: 1;
+  }
+
+  .search-wrap {
+    position: relative;
+  }
+  .search-wrap input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 7px 14px 7px 34px;
+    width: 220px;
+    outline: none;
+    transition: all 0.2s;
+  }
+  .search-wrap input:focus { border-color: var(--accent); width: 280px; }
+  .search-wrap input::placeholder { color: var(--text-muted); }
+  .search-icon {
+    position: absolute;
+    left: 11px; top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    font-size: 12px;
+    pointer-events: none;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 16px;
+    border-radius: var(--radius);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px solid;
+    transition: all 0.15s;
+    letter-spacing: 0.04em;
+  }
+  .btn-ghost {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--text-dim);
+  }
+  .btn-ghost:hover { border-color: var(--border-hover); color: var(--text); background: var(--surface2); }
+  .btn-accent {
+    background: var(--accent-dim);
+    border-color: rgba(200,169,126,0.3);
+    color: var(--accent);
+  }
+  .btn-accent:hover { background: rgba(200,169,126,0.22); border-color: var(--accent); }
+  .btn-danger {
+    background: rgba(200,126,126,0.1);
+    border-color: rgba(200,126,126,0.3);
+    color: var(--danger);
+  }
+  .btn-danger:hover { background: rgba(200,126,126,0.2); }
+
+  .toggle-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .toggle {
+    width: 32px; height: 18px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    cursor: pointer;
+    position: relative;
+    transition: background 0.2s;
+  }
+  .toggle.on { background: rgba(200,169,126,0.3); border-color: var(--accent); }
+  .toggle::after {
+    content: '';
+    position: absolute;
+    width: 12px; height: 12px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    top: 2px; left: 2px;
+    transition: all 0.2s;
+  }
+  .toggle.on::after { left: 16px; background: var(--accent); }
+
+  /* ── FILTER BAR ── */
+  #filterbar {
+    padding: 12px 32px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--surface);
+  }
+  .filter-chip {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    transition: all 0.15s;
+  }
+  .filter-chip:hover { border-color: var(--border-hover); color: var(--text); }
+  .filter-chip.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+  .filter-sep { width: 1px; height: 20px; background: var(--border); }
+
+  select.filter-select {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    outline: none;
+    cursor: pointer;
+  }
+  select.filter-select:focus { border-color: var(--accent); }
+
+  /* ── GALLERY ── */
+  #content {
+    flex: 1;
+    padding: 28px 32px;
+  }
+
+  #stats-bar {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    margin-bottom: 20px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .stat { display: flex; align-items: center; gap: 6px; }
+  .stat strong { color: var(--text-dim); }
+
+  #gallery-grid {
+    columns: 4;
+    column-gap: 10px;
+  }
+
+  .media-item {
+    break-inside: avoid;
+    margin-bottom: 10px;
+    position: relative;
+    overflow: hidden;
+    border-radius: var(--radius);
+    background: var(--surface2);
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: border-color 0.2s;
+  }
+  .media-item:hover { border-color: var(--border-hover); }
+  .media-item:hover .item-overlay { opacity: 1; }
+  .media-item:hover .item-menu-btn { opacity: 1; }
+
+  .media-item img {
+    width: 100%;
+    display: block;
+    border-radius: var(--radius);
+    transition: transform 0.3s ease;
+  }
+  .media-item:hover img { transform: scale(1.02); }
+
+  /* Placeholder when no real images */
+  .media-placeholder {
+    width: 100%;
+    aspect-ratio: 4/3;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+    background: var(--surface2);
+    border-radius: var(--radius);
+  }
+  .media-placeholder .ph-icon { font-size: 28px; opacity: 0.4; }
+
+  .item-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 50%);
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+  }
+
+  .item-info {
+    position: absolute;
+    bottom: 8px; left: 10px; right: 36px;
+    pointer-events: none;
+  }
+  .item-name {
+    font-size: 10px;
+    color: rgba(255,255,255,0.85);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .item-date {
+    font-size: 9px;
+    color: rgba(255,255,255,0.5);
+    margin-top: 1px;
+  }
+
+  .item-menu-btn {
+    position: absolute;
+    top: 8px; right: 8px;
+    width: 28px; height: 28px;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 2;
+    font-size: 14px;
+    color: white;
+  }
+  .item-menu-btn:hover { background: rgba(0,0,0,0.85); border-color: rgba(255,255,255,0.3); }
+
+  .hidden-badge {
+    position: absolute;
+    top: 8px; left: 8px;
+    background: rgba(200,126,126,0.8);
+    color: white;
+    font-size: 8px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* ── CONTEXT MENU ── */
+  #ctx-menu {
+    position: fixed;
+    background: var(--surface);
+    border: 1px solid var(--border-hover);
+    border-radius: 6px;
+    padding: 6px 0;
+    min-width: 170px;
+    z-index: 1000;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    display: none;
+  }
+  .ctx-item {
+    padding: 9px 16px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: all 0.1s;
+  }
+  .ctx-item:hover { background: var(--surface2); color: var(--text); }
+  .ctx-item.danger { color: var(--danger); }
+  .ctx-item.danger:hover { background: rgba(200,126,126,0.1); }
+  .ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
+
+  /* ── MODALS ── */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.75);
+    backdrop-filter: blur(4px);
+    z-index: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: all; }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border-hover);
+    border-radius: 8px;
+    padding: 28px;
+    width: 440px;
+    max-height: 80vh;
+    overflow-y: auto;
+    transform: translateY(8px);
+    transition: transform 0.2s;
+  }
+  .modal-overlay.open .modal { transform: translateY(0); }
+  .modal h2 {
+    font-family: var(--font-display);
+    font-size: 20px;
+    font-weight: 300;
+    color: var(--text);
+    margin-bottom: 20px;
+  }
+  .modal input, .modal select {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 9px 12px;
+    outline: none;
+    transition: border-color 0.2s;
+    margin-bottom: 12px;
+  }
+  .modal input:focus, .modal select:focus { border-color: var(--accent); }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+  .modal-close {
+    position: absolute;
+    top: 16px; right: 16px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 18px;
+    padding: 4px;
+  }
+
+  /* Metadata modal wider */
+  #meta-modal .modal { width: 560px; }
+
+  .meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+  }
+  .meta-section {
+    margin-bottom: 16px;
+  }
+  .meta-section-title {
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .meta-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 11px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .meta-key { color: var(--text-muted); }
+  .meta-val { color: var(--text); text-align: right; max-width: 60%; word-break: break-all; }
+
+  /* ── LIGHTBOX ── */
+  #lightbox {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.92);
+    z-index: 800;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+  #lightbox.open { display: flex; }
+  #lightbox img {
+    max-width: 90vw;
+    max-height: 80vh;
+    border-radius: 4px;
+    object-fit: contain;
+  }
+  .lb-placeholder {
+    width: 600px;
+    height: 400px;
+    background: var(--surface2);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+  .lb-placeholder .lb-icon { font-size: 48px; opacity: 0.3; }
+  #lb-close {
+    position: absolute;
+    top: 20px; right: 24px;
+    color: white;
+    font-size: 24px;
+    cursor: pointer;
+    background: rgba(255,255,255,0.1);
+    border: none;
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #lb-close:hover { background: rgba(255,255,255,0.2); }
+  #lb-info {
+    margin-top: 14px;
+    text-align: center;
+  }
+  #lb-info .lb-name { font-family: var(--font-display); font-size: 16px; color: var(--text); }
+  #lb-info .lb-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+  #lb-nav {
+    display: flex; gap: 16px; margin-top: 12px;
+  }
+  #lb-nav button {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: white;
+    padding: 8px 20px;
+    border-radius: var(--radius);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #lb-nav button:hover { background: rgba(255,255,255,0.2); }
+
+  /* ── TOAST ── */
+  #toast-container {
+    position: fixed;
+    bottom: 24px; right: 24px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .toast {
+    background: var(--surface);
+    border: 1px solid var(--border-hover);
+    border-radius: var(--radius);
+    padding: 12px 18px;
+    font-size: 12px;
+    color: var(--text);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    animation: slideUp 0.25s ease;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .toast.success { border-left: 3px solid var(--success); }
+  .toast.error { border-left: 3px solid var(--danger); }
+  .toast.info { border-left: 3px solid var(--accent); }
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── SYNC OVERLAY ── */
+  #sync-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 600;
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+  #sync-overlay.show { display: flex; }
+  .sync-card {
+    background: var(--surface);
+    border: 1px solid var(--border-hover);
+    border-radius: 8px;
+    padding: 32px 40px;
+    text-align: center;
+  }
+  .sync-spinner {
+    width: 40px; height: 40px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin: 0 auto 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .sync-card p { font-family: var(--font-display); font-size: 16px; color: var(--text-dim); }
+
+  /* ── EMPTY STATE ── */
+  #empty-state {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 400px;
+    gap: 16px;
+    color: var(--text-muted);
+    text-align: center;
+  }
+  .empty-icon { font-size: 56px; opacity: 0.2; }
+  .empty-title { font-family: var(--font-display); font-size: 22px; font-weight: 300; color: var(--text-dim); }
+  .empty-sub { font-size: 12px; line-height: 1.6; max-width: 320px; }
+
+  /* ── ALBUM HEADER ── */
+  #album-header {
+    display: none;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .album-header-icon { font-size: 32px; }
+  .album-header-name {
+    font-family: var(--font-display);
+    font-size: 26px;
+    font-weight: 300;
+    color: var(--text);
+  }
+  .album-header-count { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+  /* Scrollbar global */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* Load more */
+  #load-more-trigger { height: 60px; }
+
+  /* Album select in modal */
+  #album-list-select { max-height: 200px; overflow-y: auto; }
+  .album-check-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    cursor: pointer;
+    border-radius: var(--radius);
+    font-size: 12px;
+    color: var(--text-dim);
+    transition: background 0.1s;
+  }
+  .album-check-item:hover { background: var(--surface2); }
+  .album-check-item input[type="checkbox"] { accent-color: var(--accent); }
+
+  @media (max-width: 1200px) { #gallery-grid { columns: 3; } }
+  @media (max-width: 900px) { #gallery-grid { columns: 2; } }
+  @media (max-width: 600px) {
+    #sidebar { transform: translateX(-100%); }
+    #main { margin-left: 0; }
+    #gallery-grid { columns: 2; }
+  }
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside id="sidebar">
+  <div class="sidebar-logo">
+    <h1>Luminary</h1>
+    <span>Local Media Gallery</span>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-label">Library</div>
+    <div class="nav-item active" data-view="all" onclick="setView('all', this)">
+      <span class="icon">◈</span> All Photos
+    </div>
+    <div class="nav-item" data-view="hidden" onclick="setView('hidden', this)">
+      <span class="icon">◌</span> Hidden
+    </div>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-label" style="display:flex;justify-content:space-between;align-items:center;padding-right:12px">
+      Albums
+      <span style="cursor:pointer;color:var(--accent);font-size:16px" onclick="openCreateAlbum()" title="New album">+</span>
+    </div>
+    <div id="album-nav" class="sidebar-albums"></div>
+  </div>
+
+  <div class="sidebar-footer">
+    <div style="font-size:10px;color:var(--text-muted);line-height:1.6">
+      <div id="footer-count">— photos indexed</div>
+      <div id="footer-albums">— albums</div>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<div id="main">
+
+  <!-- TOPBAR -->
+  <div id="topbar">
+    <div class="topbar-title" id="topbar-title">All Photos</div>
+    <div class="search-wrap">
+      <span class="search-icon">⌕</span>
+      <input type="text" id="search-input" placeholder="Search by name, camera, date…" oninput="applyFilters()">
+    </div>
+    <div class="toggle-wrap">
+      <span>Hidden</span>
+      <div class="toggle" id="show-hidden-toggle" onclick="toggleHidden(this)"></div>
+    </div>
+    <button class="btn btn-ghost" onclick="openCreateAlbum()">＋ Album</button>
+    <button class="btn btn-accent" onclick="triggerSync()">↻ Sync</button>
+  </div>
+
+  <!-- FILTER BAR -->
+  <div id="filterbar">
+    <span class="filter-chip active" data-sort="date-desc" onclick="setSort('date-desc',this)">Newest First</span>
+    <span class="filter-chip" data-sort="date-asc" onclick="setSort('date-asc',this)">Oldest First</span>
+    <span class="filter-chip" data-sort="name" onclick="setSort('name',this)">Name</span>
+    <div class="filter-sep"></div>
+    <select class="filter-select" id="filter-format" onchange="applyFilters()">
+      <option value="">All Formats</option>
+      <option value="JPEG">JPEG</option>
+      <option value="PNG">PNG</option>
+      <option value="HEIC">HEIC</option>
+    </select>
+    <select class="filter-select" id="filter-camera" onchange="applyFilters()">
+      <option value="">All Cameras</option>
+    </select>
+  </div>
+
+  <!-- CONTENT -->
+  <div id="content">
+    <div id="album-header">
+      <span class="album-header-icon">⬡</span>
+      <div>
+        <div class="album-header-name" id="album-header-name"></div>
+        <div class="album-header-count" id="album-header-count"></div>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-danger" id="delete-album-btn" onclick="deleteCurrentAlbum()">✕ Delete Album</button>
+      </div>
+    </div>
+
+    <div id="stats-bar">
+      <div class="stat"><strong id="stat-visible">0</strong> visible</div>
+      <div class="stat"><strong id="stat-hidden">0</strong> hidden</div>
+      <div class="stat"><strong id="stat-albums">0</strong> albums</div>
+    </div>
+
+    <div id="empty-state">
+      <div class="empty-icon">⬡</div>
+      <div class="empty-title">No media found</div>
+      <div class="empty-sub">Add directories to media.json and hit Sync to index your photos.</div>
+    </div>
+
+    <div id="gallery-grid"></div>
+    <div id="load-more-trigger"></div>
+  </div>
+</div>
+
+<!-- CONTEXT MENU -->
+<div id="ctx-menu">
+  <div class="ctx-item" onclick="ctxAddToAlbum()"><span>⬡</span> Add to Album</div>
+  <div class="ctx-item" onclick="ctxRemoveFromAlbum()"><span>⊟</span> Remove from Album</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxToggleHide()"><span id="ctx-hide-label-icon">◌</span> <span id="ctx-hide-label">Hide Image</span></div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxViewMeta()"><span>≡</span> View Metadata</div>
+</div>
+
+<!-- LIGHTBOX -->
+<div id="lightbox">
+  <button id="lb-close" onclick="closeLightbox()">✕</button>
+  <div id="lb-content"></div>
+  <div id="lb-info">
+    <div class="lb-name" id="lb-name"></div>
+    <div class="lb-meta" id="lb-meta"></div>
+  </div>
+  <div id="lb-nav">
+    <button onclick="lbNav(-1)">← Prev</button>
+    <button onclick="lbNav(1)">Next →</button>
+  </div>
+</div>
+
+<!-- ADD TO ALBUM MODAL -->
+<div class="modal-overlay" id="add-album-modal">
+  <div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeModal('add-album-modal')">✕</button>
+    <h2>Add to Album</h2>
+    <div id="album-list-select"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('add-album-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="confirmAddToAlbum()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE ALBUM MODAL -->
+<div class="modal-overlay" id="create-album-modal">
+  <div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeModal('create-album-modal')">✕</button>
+    <h2>New Album</h2>
+    <input type="text" id="new-album-name" placeholder="Album name…">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('create-album-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="confirmCreateAlbum()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- METADATA MODAL -->
+<div class="modal-overlay" id="meta-modal">
+  <div class="modal" style="position:relative;max-width:560px;width:560px">
+    <button class="modal-close" onclick="closeModal('meta-modal')">✕</button>
+    <h2 id="meta-modal-title">Metadata</h2>
+    <div id="meta-content"></div>
+  </div>
+</div>
+
+<!-- SYNC OVERLAY -->
+<div id="sync-overlay">
+  <div class="sync-card">
+    <div class="sync-spinner"></div>
+    <p>Synchronising media library…</p>
+  </div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div id="toast-container"></div>
+
+<script>
+// ─────────────────────────────────────────────
+//  STATE
+// ─────────────────────────────────────────────
+let db = { media: [], albums: [] };
+let config = {};
+let currentView = 'all';      // 'all' | 'hidden' | album id
+let currentSort = 'date-desc';
+let showHidden = false;
+let ctxTarget = null;          // media item for context menu
+let currentAlbumId = null;
+let filteredMedia = [];
+let renderedCount = 0;
+const BATCH = 50;
+let lbIndex = 0;
+
+// ─────────────────────────────────────────────
+//  BOOT
+// ─────────────────────────────────────────────
+async function init() {
+  await loadConfig();
+  await loadDB();
+  renderAll();
+  setupIntersectionObserver();
+}
+
+async function loadConfig() {
+  try {
+    const r = await fetch('configuration.json');
+    config = await r.json();
+    if (config.show_hidden_default) {
+      showHidden = true;
+      document.getElementById('show-hidden-toggle').classList.add('on');
+    }
+  } catch {
+    config = { lazy_load_batch: 50, show_hidden_default: false };
+  }
+}
+
+async function loadDB() {
+  try {
+    const r = await fetch('db.json');
+    db = await r.json();
+    if (!db.media) db.media = [];
+    if (!db.albums) db.albums = [];
+  } catch {
+    db = { media: [], albums: [] };
+  }
+}
+
+// ─────────────────────────────────────────────
+//  RENDER
+// ─────────────────────────────────────────────
+function renderAll() {
+  renderAlbumNav();
+  applyFilters();
+  updateStats();
+  updateFooter();
+  populateCameraFilter();
+}
+
+function renderAlbumNav() {
+  const nav = document.getElementById('album-nav');
+  nav.innerHTML = '';
+  if (db.albums.length === 0) {
+    nav.innerHTML = '<div style="padding:8px 24px;font-size:11px;color:var(--text-muted)">No albums yet</div>';
+    return;
+  }
+  db.albums.forEach(album => {
+    const d = document.createElement('div');
+    d.className = 'album-nav-item' + (currentAlbumId === album.id ? ' active' : '');
+    d.innerHTML = `<span>${album.name}</span><span class="album-count">${album.media.length}</span>`;
+    d.onclick = () => setView(album.id, d);
+    nav.appendChild(d);
+  });
+}
+
+function applyFilters() {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  const fmt = document.getElementById('filter-format').value;
+  const cam = document.getElementById('filter-camera').value;
+
+  let pool = db.media.slice();
+
+  // View filter
+  if (currentView === 'hidden') {
+    pool = pool.filter(m => m.isHidden);
+  } else if (currentView !== 'all') {
+    const album = db.albums.find(a => a.id === currentView);
+    if (album) pool = pool.filter(m => album.media.includes(m.uniqueName));
+  } else {
+    if (!showHidden) pool = pool.filter(m => !m.isHidden);
+  }
+
+  // Search
+  if (q) {
+    pool = pool.filter(m => {
+      const name = m.name.toLowerCase();
+      const camera = (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '');
+      const date = m.metadata?.date?.created || '';
+      return name.includes(q) || camera.toLowerCase().includes(q) || date.includes(q);
+    });
+  }
+
+  // Format
+  if (fmt) pool = pool.filter(m => (m.metadata?.file?.format || '').toUpperCase() === fmt.toUpperCase());
+
+  // Camera
+  if (cam) pool = pool.filter(m => (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '') === cam);
+
+  // Sort
+  pool = sortMedia(pool);
+
+  filteredMedia = pool;
+  renderedCount = 0;
+  document.getElementById('gallery-grid').innerHTML = '';
+  renderBatch();
+  updateStats();
+
+  const empty = document.getElementById('empty-state');
+  empty.style.display = (pool.length === 0) ? 'flex' : 'none';
+}
+
+function sortMedia(arr) {
+  return arr.slice().sort((a, b) => {
+    if (currentSort === 'name') return a.name.localeCompare(b.name);
+    const da = new Date(a.metadata?.date?.created || 0);
+    const db2 = new Date(b.metadata?.date?.created || 0);
+    return currentSort === 'date-asc' ? da - db2 : db2 - da;
+  });
+}
+
+function renderBatch() {
+  const grid = document.getElementById('gallery-grid');
+  const end = Math.min(renderedCount + BATCH, filteredMedia.length);
+  for (let i = renderedCount; i < end; i++) {
+    grid.appendChild(createCard(filteredMedia[i], i));
+  }
+  renderedCount = end;
+}
+
+function createCard(item, idx) {
+  const div = document.createElement('div');
+  div.className = 'media-item';
+  div.dataset.unique = item.uniqueName;
+  div.dataset.idx = idx;
+
+  const path = item.metadata?.file?.path
+    ? item.metadata.file.path + item.name
+    : null;
+
+  let imgHtml = '';
+  if (path) {
+    imgHtml = `<img src="${path}" loading="lazy" onerror="this.parentElement.innerHTML = imgErrorFallback('${escHtml(item.name)}', '${escHtml(item.uniqueName)}')" alt="${escHtml(item.name)}">`;
+  } else {
+    imgHtml = `<div class="media-placeholder">
+      <span class="ph-icon">⬡</span>
+      <span>${escHtml(item.name)}</span>
+    </div>`;
+  }
+
+  const date = item.metadata?.date?.created
+    ? new Date(item.metadata.date.created).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'})
+    : '—';
+
+  div.innerHTML = `
+    ${imgHtml}
+    <div class="item-overlay"></div>
+    <div class="item-info">
+      <div class="item-name">${escHtml(item.name)}</div>
+      <div class="item-date">${date}</div>
+    </div>
+    ${item.isHidden ? '<span class="hidden-badge">hidden</span>' : ''}
+    <div class="item-menu-btn" onclick="openCtxMenu(event, '${item.uniqueName}')">⋮</div>
+  `;
+
+  div.addEventListener('click', (e) => {
+    if (e.target.classList.contains('item-menu-btn')) return;
+    openLightbox(idx);
+  });
+
+  return div;
+}
+
+function imgErrorFallback(name, unique) {
+  return `<div class="media-placeholder"><span class="ph-icon">⬡</span><span>${name}</span></div>`;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─────────────────────────────────────────────
+//  STATS & FOOTER
+// ─────────────────────────────────────────────
+function updateStats() {
+  document.getElementById('stat-visible').textContent = db.media.filter(m => !m.isHidden).length;
+  document.getElementById('stat-hidden').textContent = db.media.filter(m => m.isHidden).length;
+  document.getElementById('stat-albums').textContent = db.albums.length;
+}
+
+function updateFooter() {
+  document.getElementById('footer-count').textContent = `${db.media.length} photos indexed`;
+  document.getElementById('footer-albums').textContent = `${db.albums.length} albums`;
+}
+
+function populateCameraFilter() {
+  const cameras = [...new Set(db.media.map(m => (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '')).filter(c => c.trim()))];
+  const sel = document.getElementById('filter-camera');
+  sel.innerHTML = '<option value="">All Cameras</option>';
+  cameras.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o); });
+}
+
+// ─────────────────────────────────────────────
+//  VIEW SWITCHING
+// ─────────────────────────────────────────────
+function setView(view, el) {
+  currentView = view;
+  currentAlbumId = (view !== 'all' && view !== 'hidden') ? view : null;
+
+  document.querySelectorAll('.nav-item, .album-nav-item').forEach(n => n.classList.remove('active'));
+  if (el) el.classList.add('active');
+
+  const albumHeader = document.getElementById('album-header');
+  if (currentAlbumId) {
+    const album = db.albums.find(a => a.id === currentAlbumId);
+    if (album) {
+      albumHeader.style.display = 'flex';
+      document.getElementById('album-header-name').textContent = album.name;
+      document.getElementById('album-header-count').textContent = `${album.media.length} items`;
+      document.getElementById('topbar-title').textContent = album.name;
+    }
+  } else {
+    albumHeader.style.display = 'none';
+    document.getElementById('topbar-title').textContent = view === 'hidden' ? 'Hidden Media' : 'All Photos';
+  }
+
+  applyFilters();
+}
+
+function setSort(sort, el) {
+  currentSort = sort;
+  document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  applyFilters();
+}
+
+function toggleHidden(el) {
+  el.classList.toggle('on');
+  showHidden = el.classList.contains('on');
+  applyFilters();
+}
+
+// ─────────────────────────────────────────────
+//  INFINITE SCROLL
+// ─────────────────────────────────────────────
+function setupIntersectionObserver() {
+  const trigger = document.getElementById('load-more-trigger');
+  const obs = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting && renderedCount < filteredMedia.length) {
+      renderBatch();
+    }
+  }, { rootMargin: '200px' });
+  obs.observe(trigger);
+}
+
+// ─────────────────────────────────────────────
+//  CONTEXT MENU
+// ─────────────────────────────────────────────
+function openCtxMenu(e, uniqueName) {
+  e.stopPropagation();
+  ctxTarget = db.media.find(m => m.uniqueName === uniqueName);
+  if (!ctxTarget) return;
+
+  const menu = document.getElementById('ctx-menu');
+  const lbl = document.getElementById('ctx-hide-label');
+  const ico = document.getElementById('ctx-hide-label-icon');
+  if (ctxTarget.isHidden) { lbl.textContent = 'Unhide Image'; ico.textContent = '◉'; }
+  else { lbl.textContent = 'Hide Image'; ico.textContent = '◌'; }
+
+  menu.style.display = 'block';
+  let x = e.clientX, y = e.clientY;
+  if (x + 180 > window.innerWidth) x -= 180;
+  if (y + 220 > window.innerHeight) y -= 220;
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+}
+
+document.addEventListener('click', () => {
+  document.getElementById('ctx-menu').style.display = 'none';
+});
+
+function ctxAddToAlbum() {
+  if (!ctxTarget) return;
+  openAddToAlbum(ctxTarget.uniqueName);
+}
+
+function ctxRemoveFromAlbum() {
+  if (!ctxTarget || !currentAlbumId) { toast('Navigate into an album first', 'info'); return; }
+  const album = db.albums.find(a => a.id === currentAlbumId);
+  if (!album) return;
+  const idx = album.media.indexOf(ctxTarget.uniqueName);
+  if (idx > -1) { album.media.splice(idx, 1); saveDB(); renderAll(); toast('Removed from album', 'success'); }
+}
+
+function ctxToggleHide() {
+  if (!ctxTarget) return;
+  ctxTarget.isHidden = !ctxTarget.isHidden;
+  saveDB();
+  renderAll();
+  toast(ctxTarget.isHidden ? 'Image hidden' : 'Image unhidden', 'info');
+}
+
+function ctxViewMeta() {
+  if (!ctxTarget) return;
+  openMetaModal(ctxTarget);
+}
+
+// ─────────────────────────────────────────────
+//  LIGHTBOX
+// ─────────────────────────────────────────────
+function openLightbox(idx) {
+  lbIndex = idx;
+  renderLightbox();
+  document.getElementById('lightbox').classList.add('open');
+}
+
+function renderLightbox() {
+  const item = filteredMedia[lbIndex];
+  if (!item) return;
+  const lb = document.getElementById('lb-content');
+  const path = item.metadata?.file?.path ? item.metadata.file.path + item.name : null;
+
+  if (path) {
+    lb.innerHTML = `<img src="${path}" alt="${escHtml(item.name)}" onerror="this.replaceWith(Object.assign(document.createElement('div'), {className:'lb-placeholder', innerHTML:'<span class=\\'lb-icon\\'>⬡</span><span>${escHtml(item.name)}</span>'}))">`;
+  } else {
+    lb.innerHTML = `<div class="lb-placeholder"><span class="lb-icon">⬡</span><span>${escHtml(item.name)}</span></div>`;
+  }
+
+  document.getElementById('lb-name').textContent = item.name;
+  const cam = item.metadata?.camera;
+  const dt = item.metadata?.date?.created ? new Date(item.metadata.date.created).toLocaleString() : '';
+  document.getElementById('lb-meta').textContent = [cam?.model, dt].filter(Boolean).join(' · ');
+}
+
+function closeLightbox() { document.getElementById('lightbox').classList.remove('open'); }
+
+function lbNav(dir) {
+  lbIndex = (lbIndex + dir + filteredMedia.length) % filteredMedia.length;
+  renderLightbox();
+}
+
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('lightbox').classList.contains('open')) return;
+  if (e.key === 'ArrowLeft') lbNav(-1);
+  if (e.key === 'ArrowRight') lbNav(1);
+  if (e.key === 'Escape') closeLightbox();
+});
+
+// ─────────────────────────────────────────────
+//  METADATA MODAL
+// ─────────────────────────────────────────────
+function openMetaModal(item) {
+  const m = item.metadata || {};
+  document.getElementById('meta-modal-title').textContent = item.name;
+
+  const sections = [
+    { title: 'File', rows: [
+      ['Name', item.name],
+      ['Format', m.file?.format],
+      ['Size', m.file?.size ? (m.file.size / 1024 / 1024).toFixed(2) + ' MB' : null],
+      ['Path', m.file?.path],
+    ]},
+    { title: 'Image', rows: [
+      ['Dimensions', m.image?.resolution],
+      ['Color Space', m.image?.color_space],
+      ['Orientation', m.image?.orientation],
+    ]},
+    { title: 'Camera', rows: [
+      ['Make', m.camera?.make],
+      ['Model', m.camera?.model],
+      ['Lens', m.camera?.lens],
+      ['ISO', m.camera?.iso],
+      ['Aperture', m.camera?.aperture],
+      ['Shutter Speed', m.camera?.shutter_speed],
+      ['Focal Length', m.camera?.focal_length],
+    ]},
+    { title: 'Date', rows: [
+      ['Created', m.date?.created],
+      ['Modified', m.date?.modified],
+    ]},
+    { title: 'Location', rows: [
+      ['Latitude', m.location?.latitude],
+      ['Longitude', m.location?.longitude],
+      ['City', m.location?.city],
+      ['Country', m.location?.country],
+    ]},
+    { title: 'Software', rows: [
+      ['Editor', m.software?.editor],
+      ['Version', m.software?.version],
+    ]},
+  ];
+
+  let html = '';
+  sections.forEach(sec => {
+    const rows = sec.rows.filter(r => r[1] != null && r[1] !== '');
+    if (rows.length === 0) return;
+    html += `<div class="meta-section"><div class="meta-section-title">${sec.title}</div>`;
+    rows.forEach(([k, v]) => {
+      html += `<div class="meta-row"><span class="meta-key">${k}</span><span class="meta-val">${escHtml(String(v))}</span></div>`;
+    });
+    html += '</div>';
+  });
+
+  document.getElementById('meta-content').innerHTML = html || '<p style="color:var(--text-muted);font-size:12px">No metadata available.</p>';
+  document.getElementById('meta-modal').classList.add('open');
+}
+
+// ─────────────────────────────────────────────
+//  ALBUM MODALS
+// ─────────────────────────────────────────────
+let pendingAddUnique = null;
+
+function openAddToAlbum(uniqueName) {
+  pendingAddUnique = uniqueName;
+  const list = document.getElementById('album-list-select');
+  if (db.albums.length === 0) {
+    list.innerHTML = '<p style="color:var(--text-muted);font-size:12px;padding:8px 0">No albums yet. Create one first.</p>';
+  } else {
+    list.innerHTML = db.albums.map(a => `
+      <label class="album-check-item">
+        <input type="checkbox" value="${a.id}" ${a.media.includes(uniqueName) ? 'checked' : ''}>
+        ${escHtml(a.name)} <span style="color:var(--text-muted);margin-left:auto">${a.media.length}</span>
+      </label>
+    `).join('');
+  }
+  document.getElementById('add-album-modal').classList.add('open');
+}
+
+function confirmAddToAlbum() {
+  if (!pendingAddUnique) return;
+  const checks = document.getElementById('album-list-select').querySelectorAll('input[type=checkbox]');
+  checks.forEach(cb => {
+    const album = db.albums.find(a => a.id === cb.value);
+    if (!album) return;
+    if (cb.checked && !album.media.includes(pendingAddUnique)) album.media.push(pendingAddUnique);
+    if (!cb.checked) { const i = album.media.indexOf(pendingAddUnique); if (i > -1) album.media.splice(i, 1); }
+  });
+  saveDB();
+  renderAll();
+  closeModal('add-album-modal');
+  toast('Album membership updated', 'success');
+}
+
+function openCreateAlbum() {
+  document.getElementById('new-album-name').value = '';
+  document.getElementById('create-album-modal').classList.add('open');
+  setTimeout(() => document.getElementById('new-album-name').focus(), 100);
+}
+
+function confirmCreateAlbum() {
+  const name = document.getElementById('new-album-name').value.trim();
+  if (!name) { toast('Enter an album name', 'error'); return; }
+  const id = 'album_' + Date.now();
+  db.albums.push({ name, id, media: [] });
+  saveDB();
+  renderAll();
+  closeModal('create-album-modal');
+  toast(`Album "${name}" created`, 'success');
+}
+
+document.getElementById('new-album-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmCreateAlbum();
+});
+
+function deleteCurrentAlbum() {
+  if (!currentAlbumId) return;
+  const album = db.albums.find(a => a.id === currentAlbumId);
+  if (!confirm(`Delete album "${album?.name}"? Media files are not affected.`)) return;
+  db.albums = db.albums.filter(a => a.id !== currentAlbumId);
+  saveDB();
+  currentAlbumId = null;
+  setView('all', document.querySelector('[data-view="all"]'));
+  renderAll();
+  toast('Album deleted', 'info');
+}
+
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+// ─────────────────────────────────────────────
+//  SYNC
+// ─────────────────────────────────────────────
+async function triggerSync() {
+  document.getElementById('sync-overlay').classList.add('show');
+  try {
+    const r = await fetch('http://localhost:5000/api/sync', { method: 'POST' });
+    if (!r.ok) throw new Error('Backend returned ' + r.status);
+    const result = await r.json();
+    await loadDB();
+    renderAll();
+    toast(`Sync complete — ${result.added || 0} new, ${result.total || db.media.length} total`, 'success');
+  } catch (err) {
+    // Backend may not be running — try reloading db.json directly
+    try {
+      await loadDB();
+      renderAll();
+      toast('db.json refreshed (backend offline)', 'info');
+    } catch {
+      toast('Sync failed — is app.py running?', 'error');
+    }
+  }
+  document.getElementById('sync-overlay').classList.remove('show');
+}
+
+// ─────────────────────────────────────────────
+//  PERSIST (saves to localStorage as fallback)
+// ─────────────────────────────────────────────
+function saveDB() {
+  // Post to backend if available, else store in memory/localStorage for demo
+  fetch('http://localhost:5000/api/db', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(db)
+  }).catch(() => {});
+  // Always keep in-memory state consistent
+  updateFooter();
+  renderAlbumNav();
+  updateStats();
+}
+
+// ─────────────────────────────────────────────
+//  TOAST
+// ─────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const icons = { success: '✓', error: '✕', info: '◆' };
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span>${icons[type] || '◆'}</span> ${escHtml(msg)}`;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ─────────────────────────────────────────────
+//  BOOT
+// ─────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
