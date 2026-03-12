@@ -295,9 +295,9 @@ if FLASK_AVAILABLE:
 
     @app.route("/api/image/<unique_name>", methods=["GET"])
     def api_image(unique_name):
-        """Serve an image file by its uniqueName, read from db.json."""
-        from flask import send_file, abort
-        import mimetypes
+        """Serve an image file by uniqueName. HEIC/HEIF are converted to JPEG on the fly."""
+        from flask import send_file, abort, Response
+        import io
         db = load_json(DB_JSON, {"media": [], "albums": []})
         item = next((m for m in db.get("media", []) if m["uniqueName"] == unique_name), None)
         if not item:
@@ -307,8 +307,84 @@ if FLASK_AVAILABLE:
         if not os.path.isfile(full_path):
             log.warning("Image file not found on disk: %s", full_path)
             abort(404)
+
+        ext = Path(full_path).suffix.lower()
+
+        # ── HEIC / HEIF: browsers cannot decode these natively ────────────────
+        if ext in (".heic", ".heif"):
+            # Strategy 1: pillow-heif (preferred, best quality)
+            try:
+                import pillow_heif
+                pillow_heif.register_heif_opener()
+                from PIL import Image as PilImage
+                with PilImage.open(full_path) as img:
+                    buf = io.BytesIO()
+                    img.convert("RGB").save(buf, format="JPEG", quality=90)
+                    buf.seek(0)
+                log.debug("HEIC→JPEG via pillow-heif: %s", full_path)
+                return Response(buf, mimetype="image/jpeg",
+                                headers={"Cache-Control": "max-age=3600"})
+            except ImportError:
+                pass  # fall through to next strategy
+
+            # Strategy 2: pyheif
+            try:
+                import pyheif
+                from PIL import Image as PilImage
+                heif_file = pyheif.read(full_path)
+                img = PilImage.frombytes(
+                    heif_file.mode, heif_file.size, heif_file.data,
+                    "raw", heif_file.mode, heif_file.stride,
+                )
+                buf = io.BytesIO()
+                img.convert("RGB").save(buf, format="JPEG", quality=90)
+                buf.seek(0)
+                log.debug("HEIC→JPEG via pyheif: %s", full_path)
+                return Response(buf, mimetype="image/jpeg",
+                                headers={"Cache-Control": "max-age=3600"})
+            except ImportError:
+                pass  # fall through to next strategy
+
+            # Strategy 3: ImageMagick / ffmpeg via subprocess (system tools)
+            import subprocess, tempfile
+            for tool, cmd_fn in [
+                ("magick",  lambda src, dst: ["magick", src, dst]),
+                ("convert", lambda src, dst: ["convert", src, dst]),
+                ("ffmpeg",  lambda src, dst: ["ffmpeg", "-y", "-i", src, dst]),
+            ]:
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                        tmp_path = tmp.name
+                    result = subprocess.run(
+                        cmd_fn(full_path, tmp_path),
+                        capture_output=True, timeout=15
+                    )
+                    if result.returncode == 0 and os.path.isfile(tmp_path):
+                        with open(tmp_path, "rb") as f:
+                            data = f.read()
+                        os.unlink(tmp_path)
+                        log.debug("HEIC→JPEG via %s: %s", tool, full_path)
+                        return Response(io.BytesIO(data), mimetype="image/jpeg",
+                                        headers={"Cache-Control": "max-age=3600"})
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    continue
+
+            # No HEIC decoder found — return a 415 with a helpful message
+            log.error(
+                "Cannot decode HEIC — install pillow-heif: pip install pillow-heif\n"
+                "  File: %s", full_path
+            )
+            return Response(
+                json.dumps({"error": "HEIC decoding unavailable",
+                            "fix": "pip install pillow-heif"}),
+                status=415, mimetype="application/json"
+            )
+
+        # ── All other formats: serve directly ─────────────────────────────────
+        import mimetypes
         mime, _ = mimetypes.guess_type(full_path)
-        return send_file(full_path, mimetype=mime or "image/jpeg")
+        return send_file(full_path, mimetype=mime or "image/jpeg",
+                         conditional=False)
 
     @app.route("/api/albums", methods=["GET"])
     def api_albums():
