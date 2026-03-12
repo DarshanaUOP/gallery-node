@@ -293,6 +293,23 @@ if FLASK_AVAILABLE:
         db = load_json(DB_JSON, {"media": [], "albums": []})
         return jsonify(db.get("media", []))
 
+    @app.route("/api/image/<unique_name>", methods=["GET"])
+    def api_image(unique_name):
+        """Serve an image file by its uniqueName, read from db.json."""
+        from flask import send_file, abort
+        import mimetypes
+        db = load_json(DB_JSON, {"media": [], "albums": []})
+        item = next((m for m in db.get("media", []) if m["uniqueName"] == unique_name), None)
+        if not item:
+            abort(404)
+        file_path = item.get("metadata", {}).get("file", {}).get("path", "")
+        full_path = os.path.join(file_path, item["name"])
+        if not os.path.isfile(full_path):
+            log.warning("Image file not found on disk: %s", full_path)
+            abort(404)
+        mime, _ = mimetypes.guess_type(full_path)
+        return send_file(full_path, mimetype=mime or "image/jpeg")
+
     @app.route("/api/albums", methods=["GET"])
     def api_albums():
         db = load_json(DB_JSON, {"media": [], "albums": []})

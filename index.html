@@ -877,6 +877,16 @@
 
 <script>
 // ─────────────────────────────────────────────
+//  CONFIG
+// ─────────────────────────────────────────────
+// Backend base URL — change port if you started app.py on a different port
+const API_BASE = `http://${location.hostname}:5000`;
+
+function imgUrl(uniqueName) {
+  return `${API_BASE}/api/image/${encodeURIComponent(uniqueName)}`;
+}
+
+// ─────────────────────────────────────────────
 //  STATE
 // ─────────────────────────────────────────────
 let db = { media: [], albums: [] };
@@ -1022,19 +1032,15 @@ function createCard(item, idx) {
   div.dataset.unique = item.uniqueName;
   div.dataset.idx = idx;
 
-  const path = item.metadata?.file?.path
-    ? item.metadata.file.path + item.name
-    : null;
-
-  let imgHtml = '';
-  if (path) {
-    imgHtml = `<img src="${path}" loading="lazy" onerror="this.parentElement.innerHTML = imgErrorFallback('${escHtml(item.name)}', '${escHtml(item.uniqueName)}')" alt="${escHtml(item.name)}">`;
-  } else {
-    imgHtml = `<div class="media-placeholder">
+  const src = imgUrl(item.uniqueName);
+  const imgHtml = `
+    <img src="${src}" loading="lazy"
+         onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"
+         alt="${escHtml(item.name)}">
+    <div class="media-placeholder" style="display:none">
       <span class="ph-icon">⬡</span>
       <span>${escHtml(item.name)}</span>
     </div>`;
-  }
 
   const date = item.metadata?.date?.created
     ? new Date(item.metadata.date.created).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'})
@@ -1206,13 +1212,9 @@ function renderLightbox() {
   const item = filteredMedia[lbIndex];
   if (!item) return;
   const lb = document.getElementById('lb-content');
-  const path = item.metadata?.file?.path ? item.metadata.file.path + item.name : null;
-
-  if (path) {
-    lb.innerHTML = `<img src="${path}" alt="${escHtml(item.name)}" onerror="this.replaceWith(Object.assign(document.createElement('div'), {className:'lb-placeholder', innerHTML:'<span class=\\'lb-icon\\'>⬡</span><span>${escHtml(item.name)}</span>'}))">`;
-  } else {
-    lb.innerHTML = `<div class="lb-placeholder"><span class="lb-icon">⬡</span><span>${escHtml(item.name)}</span></div>`;
-  }
+  const src = imgUrl(item.uniqueName);
+  lb.innerHTML = `<img src="${src}" alt="${escHtml(item.name)}"
+    onerror="this.replaceWith(Object.assign(document.createElement('div'), {className:'lb-placeholder', innerHTML:'<span class=\\'lb-icon\\'>⬡</span><span>${escHtml(item.name)}</span>'}))">`;
 
   document.getElementById('lb-name').textContent = item.name;
   const cam = item.metadata?.camera;
@@ -1373,7 +1375,7 @@ document.querySelectorAll('.modal-overlay').forEach(m => {
 async function triggerSync() {
   document.getElementById('sync-overlay').classList.add('show');
   try {
-    const r = await fetch('http://localhost:5000/api/sync', { method: 'POST' });
+    const r = await fetch(`${API_BASE}/api/sync`, { method: 'POST' });
     if (!r.ok) throw new Error('Backend returned ' + r.status);
     const result = await r.json();
     await loadDB();
@@ -1397,7 +1399,7 @@ async function triggerSync() {
 // ─────────────────────────────────────────────
 function saveDB() {
   // Post to backend if available, else store in memory/localStorage for demo
-  fetch('http://localhost:5000/api/db', {
+  fetch(`${API_BASE}/api/db`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(db)
