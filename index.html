@@ -387,6 +387,50 @@
   }
   .item-menu-btn:hover { background: rgba(0,0,0,0.85); border-color: rgba(255,255,255,0.3); }
 
+  /* Video play badge */
+  .play-btn-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .play-btn-circle {
+    width: 44px; height: 44px;
+    background: rgba(0,0,0,0.55);
+    border: 2px solid rgba(255,255,255,0.7);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(2px);
+    transition: transform 0.15s, background 0.15s;
+  }
+  .media-item:hover .play-btn-circle {
+    background: rgba(200,169,126,0.75);
+    border-color: var(--accent);
+    transform: scale(1.12);
+  }
+  .play-btn-triangle {
+    width: 0; height: 0;
+    border-top: 9px solid transparent;
+    border-bottom: 9px solid transparent;
+    border-left: 16px solid rgba(255,255,255,0.9);
+    margin-left: 4px;
+  }
+  .media-item:hover .play-btn-triangle { border-left-color: #fff; }
+
+  .video-duration {
+    position: absolute;
+    bottom: 8px; right: 8px;
+    background: rgba(0,0,0,0.65);
+    color: rgba(255,255,255,0.9);
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.04em;
+    pointer-events: none;
+  }
+
   .hidden-badge {
     position: absolute;
     top: 8px; left: 8px;
@@ -561,6 +605,17 @@
     height: auto;
     object-fit: contain;
     border-radius: 4px;
+  }
+
+  /* Video player in lightbox */
+  #lb-video {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    border-radius: 4px;
+    background: #000;
+    outline: none;
   }
 
   .lb-placeholder {
@@ -1249,15 +1304,24 @@ function createCard(item, idx) {
   div.dataset.unique = item.uniqueName;
   div.dataset.idx = idx;
 
+  const isVideo = item.type === 'video';
   const src = thumbUrl(item.uniqueName);
   const imgHtml = `
     <img src="${src}" loading="lazy"
          onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"
          alt="${escHtml(item.name)}">
     <div class="media-placeholder" style="display:none">
-      <span class="ph-icon">⬡</span>
+      <span class="ph-icon">${isVideo ? '▶' : '⬡'}</span>
       <span>${escHtml(item.name)}</span>
-    </div>`;
+    </div>
+    ${isVideo ? `
+      <div class="play-btn-overlay">
+        <div class="play-btn-circle"><div class="play-btn-triangle"></div></div>
+      </div>
+      ${item.metadata?.video?.duration_fmt
+        ? `<div class="video-duration">${escHtml(item.metadata.video.duration_fmt)}</div>`
+        : ''}
+    ` : ''}`;
 
   const date = item.metadata?.date?.created
     ? new Date(item.metadata.date.created).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'})
@@ -1427,31 +1491,71 @@ function renderLightbox() {
   const lb   = document.getElementById('lb-content');
   const name = escHtml(item.name);
 
-  lb.innerHTML = `
-    <img id="lb-thumb" src="${thumbUrl(item.uniqueName)}" alt="${name}"
-         style="filter:blur(12px);transform:scale(1.03);transition:filter 0.35s,transform 0.35s">
-    <img id="lb-full"  src="${imgUrl(item.uniqueName)}"  alt="${name}"
-         style="opacity:0;transition:opacity 0.35s"
-         onload="
-           this.style.opacity='1';
-           var t=document.getElementById('lb-thumb');
-           if(t){t.style.filter='none';t.style.transform='scale(1)';}
-         "
-         onerror="
-           this.remove();
-           var t=document.getElementById('lb-thumb');
-           if(t){t.style.filter='none';t.style.transform='scale(1)';}
-         ">`;
+  if (item.type === 'video') {
+    // ── Video: native <video> with range-streaming src ──────────────────────
+    // Pause & clear any previous video first to release network resources
+    const prev = lb.querySelector('video');
+    if (prev) { prev.pause(); prev.src = ''; prev.load(); }
+
+    const videoSrc = `${API_BASE}/api/video/${encodeURIComponent(item.uniqueName)}`;
+    lb.innerHTML = `
+      <video id="lb-video" controls autoplay playsinline preload="metadata"
+             onerror="this.insertAdjacentHTML('afterend','<div class=\\'lb-placeholder\\'><span class=\\'lb-icon\\'>▶</span><span>${name}</span></div>');this.remove()">
+        <source src="${videoSrc}" type="${_videoMime(item.name)}">
+        Your browser does not support this video format.
+      </video>`;
+  } else {
+    // ── Image: blurred thumb → full progressive swap ─────────────────────────
+    lb.innerHTML = `
+      <img id="lb-thumb" src="${thumbUrl(item.uniqueName)}" alt="${name}"
+           style="filter:blur(12px);transform:scale(1.03);transition:filter 0.35s,transform 0.35s">
+      <img id="lb-full"  src="${imgUrl(item.uniqueName)}"  alt="${name}"
+           style="opacity:0;transition:opacity 0.35s"
+           onload="
+             this.style.opacity='1';
+             var t=document.getElementById('lb-thumb');
+             if(t){t.style.filter='none';t.style.transform='scale(1)';}
+           "
+           onerror="
+             this.remove();
+             var t=document.getElementById('lb-thumb');
+             if(t){t.style.filter='none';t.style.transform='scale(1)';}
+           ">`;
+  }
 
   document.getElementById('lb-name').textContent = item.name;
-  const cam = item.metadata?.camera;
-  const dt  = item.metadata?.date?.created
-    ? new Date(item.metadata.date.created).toLocaleString() : '';
-  document.getElementById('lb-meta').textContent =
-    [cam?.model, dt].filter(Boolean).join(' · ');
+  const parts = [];
+  if (item.type === 'video') {
+    if (item.metadata?.video?.resolution)    parts.push(item.metadata.video.resolution);
+    if (item.metadata?.video?.codec)         parts.push(item.metadata.video.codec);
+    if (item.metadata?.video?.duration_fmt)  parts.push(item.metadata.video.duration_fmt);
+  } else {
+    const cam = item.metadata?.camera;
+    if (cam?.model) parts.push(cam.model);
+  }
+  if (item.metadata?.date?.created)
+    parts.push(new Date(item.metadata.date.created).toLocaleString());
+  document.getElementById('lb-meta').textContent = parts.join(' · ');
 }
 
-function closeLightbox() { document.getElementById('lightbox').classList.remove('open'); }
+// Guess MIME type for video src attribute
+function _videoMime(filename) {
+  const ext = filename.split('.').pop().toLowerCase();
+  const map = {
+    mp4:'video/mp4', mov:'video/quicktime', avi:'video/x-msvideo',
+    mkv:'video/x-matroska', webm:'video/webm', m4v:'video/mp4',
+    '3gp':'video/3gpp', wmv:'video/x-ms-wmv', flv:'video/x-flv',
+    ts:'video/mp2t', mts:'video/mp2t',
+  };
+  return map[ext] || 'video/mp4';
+}
+
+function closeLightbox() {
+  // Release video resources before hiding
+  const vid = document.getElementById('lb-content')?.querySelector('video');
+  if (vid) { vid.pause(); vid.src = ''; vid.load(); }
+  document.getElementById('lightbox').classList.remove('open');
+}
 
 function lbNav(dir) {
   lbIndex = (lbIndex + dir + filteredMedia.length) % filteredMedia.length;

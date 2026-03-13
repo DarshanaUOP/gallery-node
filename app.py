@@ -39,6 +39,13 @@ CONFIG_JSON    = BASE_DIR / "configuration.json"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger("luminary")
 
+# ── media type sets ────────────────────────────────────────────────────────────
+IMAGE_FORMATS = {"jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "bmp", "gif"}
+VIDEO_FORMATS = {"mp4", "mov", "avi", "mkv", "webm", "m4v", "3gp", "wmv", "flv", "ts", "mts"}
+
+def is_video(path: str) -> bool:
+    return Path(path).suffix.lstrip(".").lower() in VIDEO_FORMATS
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  HELPERS
@@ -102,8 +109,99 @@ def extract_gps(gps_info: dict) -> dict:
         pass
     return gps
 
+def extract_video_metadata(filepath: str) -> dict:
+    """Extract video metadata using ffprobe. Falls back to filesystem stats."""
+    import subprocess
+    p    = Path(filepath)
+    stat = p.stat()
+    meta = {
+        "file": {
+            "size":   stat.st_size,
+            "format": p.suffix.lstrip(".").upper(),
+            "path":   str(p.parent) + os.sep,
+        },
+        "video":  {},
+        "date":   {
+            "created":  datetime.fromtimestamp(stat.st_ctime).isoformat(),
+            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        },
+        "location": {},
+    }
+    try:
+        cmd = [
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_streams", "-show_format",
+            str(filepath)
+        ]
+        r = subprocess.run(cmd, capture_output=True, timeout=15)
+        if r.returncode == 0:
+            info = json.loads(r.stdout)
+            fmt  = info.get("format", {})
+            tags = fmt.get("tags", {})
+
+            # Duration
+            duration = float(fmt.get("duration", 0))
+            meta["video"]["duration"] = round(duration, 2)
+            meta["video"]["duration_fmt"] = (
+                f"{int(duration//3600):02d}:{int((duration%3600)//60):02d}:{int(duration%60):02d}"
+            )
+
+            # Streams
+            for s in info.get("streams", []):
+                if s.get("codec_type") == "video":
+                    meta["video"]["width"]      = s.get("width")
+                    meta["video"]["height"]     = s.get("height")
+                    meta["video"]["codec"]      = s.get("codec_name", "").upper()
+                    meta["video"]["resolution"] = f"{s.get('width')}x{s.get('height')}"
+                    # FPS as fraction e.g. "30000/1001" → round
+                    fps_raw = s.get("r_frame_rate", "0/1")
+                    try:
+                        n, d = fps_raw.split("/")
+                        meta["video"]["fps"] = round(int(n) / int(d), 2)
+                    except Exception:
+                        pass
+                    break
+
+            # Creation date from tags
+            for key in ("creation_time", "date", "com.apple.quicktime.creationdate"):
+                if key in tags:
+                    try:
+                        from dateutil import parser as dp
+                        meta["date"]["created"] = dp.parse(tags[key]).isoformat()
+                    except Exception:
+                        meta["date"]["created"] = tags[key]
+                    break
+
+            # GPS from tags
+            lat = tags.get("location") or tags.get("com.apple.quicktime.location.ISO6709")
+            if lat:
+                try:
+                    # ISO 6709 format: +37.3861-122.0839/
+                    import re
+                    m = re.match(r'([+-]\d+\.?\d*)([+-]\d+\.?\d*)', lat)
+                    if m:
+                        meta["location"]["latitude"]  = float(m.group(1))
+                        meta["location"]["longitude"] = float(m.group(2))
+                except Exception:
+                    pass
+
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        log.warning("ffprobe not found — video metadata limited. Install ffmpeg for full support.")
+    except Exception as e:
+        log.warning("Video metadata extraction failed for %s: %s", filepath, e)
+
+    return meta
+
+
 def extract_metadata(filepath: str) -> dict:
-    """Extract metadata from an image file."""
+    """Dispatch to image or video metadata extractor."""
+    if is_video(filepath):
+        return extract_video_metadata(filepath)
+    return extract_image_metadata(filepath)
+
+
+def extract_image_metadata(filepath: str) -> dict:
     p = Path(filepath)
     stat = p.stat()
 
@@ -195,7 +293,8 @@ def extract_metadata(filepath: str) -> dict:
 
 def load_config() -> dict:
     defaults = {
-        "supported_formats": ["jpg", "jpeg", "png", "heic", "webp", "tiff", "bmp", "gif"],
+        "supported_image_formats": list(IMAGE_FORMATS),
+        "supported_video_formats": list(VIDEO_FORMATS),
         "thumbnail_size": 400,
         "thumbnail_quality": 60,
         "thumbnail_cache_path": "",
@@ -217,7 +316,10 @@ def sync_library() -> dict:
     if "media"  not in db: db["media"]  = []
     if "albums" not in db: db["albums"] = []
 
-    supported = {f.lower() for f in cfg.get("supported_formats", [])}
+    supported = (
+        {f.lower() for f in cfg.get("supported_image_formats", [])} |
+        {f.lower() for f in cfg.get("supported_video_formats", [])}
+    )
 
     # Build lookup maps
     existing_hashes = {m.get("hash") for m in db["media"] if m.get("hash")}
@@ -259,11 +361,13 @@ def sync_library() -> dict:
                     continue
 
                 # New file — extract and index
+                media_type = "video" if is_video(full_path) else "image"
                 meta = extract_metadata(full_path)
                 entry = {
                     "name":       filename,
                     "uniqueName": str(uuid.uuid4()),
                     "hash":       fhash,
+                    "type":       media_type,
                     "isHidden":   False,
                     "metadata":   meta,
                 }
@@ -271,7 +375,7 @@ def sync_library() -> dict:
                 existing_hashes.add(fhash)
                 existing_paths.add(full_path)
                 added += 1
-                log.info("Indexed: %s", filename)
+                log.info("Indexed [%s]: %s", media_type, filename)
 
     save_json(DB_JSON, db)
     log.info("Sync complete — scanned %d, added %d, total %d", scanned, added, len(db["media"]))
@@ -401,9 +505,11 @@ if FLASK_AVAILABLE:
     def api_thumb(unique_name):
         """
         Return a small thumbnail (default 400px max-side, quality 60).
-        Result is cached to disk so HEIC decode only happens once.
+        For videos: extracts a frame with ffmpeg (at 10% of duration or 1s).
+        Result is cached to disk so decoding only happens once.
         """
         from flask import Response, abort
+        import subprocess, tempfile
         cfg        = load_config()
         size       = int(request.args.get("size",    cfg.get("thumbnail_size",    400)))
         quality    = int(request.args.get("quality", cfg.get("thumbnail_quality", 60)))
@@ -416,11 +522,52 @@ if FLASK_AVAILABLE:
             return Response(data, mimetype="image/jpeg",
                             headers={"Cache-Control": "max-age=86400"})
 
-        full_path, _ = _resolve_path(unique_name)
+        full_path, item = _resolve_path(unique_name)
+
+        # ── Video thumbnail: extract frame with ffmpeg ────────────────────────
+        if item.get("type") == "video" or is_video(full_path):
+            try:
+                # Seek to 10% of duration (or 1s fallback) for a meaningful frame
+                duration = item.get("metadata", {}).get("video", {}).get("duration", 10)
+                seek_sec = max(1.0, round(float(duration) * 0.10, 2))
+
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    tmp_path = tmp.name
+
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", str(seek_sec),
+                    "-i", str(full_path),
+                    "-vframes", "1",
+                    "-vf", f"scale={size}:{size}:force_original_aspect_ratio=decrease",
+                    "-q:v", "3",
+                    tmp_path
+                ]
+                r = subprocess.run(cmd, capture_output=True, timeout=30)
+                if r.returncode == 0 and os.path.isfile(tmp_path):
+                    with open(tmp_path, "rb") as f:
+                        data = f.read()
+                    os.unlink(tmp_path)
+                    try:
+                        with open(cache_file, "wb") as f:
+                            f.write(data)
+                    except OSError as e:
+                        log.warning("Could not write thumb cache: %s", e)
+                    return Response(data, mimetype="image/jpeg",
+                                    headers={"Cache-Control": "max-age=86400"})
+                else:
+                    if os.path.isfile(tmp_path):
+                        os.unlink(tmp_path)
+                    log.warning("ffmpeg frame extract failed for %s", full_path)
+            except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                log.warning("ffmpeg not available for video thumbnail: %s", e)
+            # Return a generic video placeholder on failure
+            return _video_placeholder_response(size)
+
+        # ── Image thumbnail ───────────────────────────────────────────────────
         try:
             img  = _open_as_pil(full_path)
             resp = _jpeg_response(img, quality=quality, max_side=size)
-            # Write to disk cache
             try:
                 with open(cache_file, "wb") as f:
                     f.write(resp.get_data())
@@ -460,7 +607,120 @@ if FLASK_AVAILABLE:
             return Response(json.dumps({"error": str(e)}),
                             status=415, mimetype="application/json")
 
-    @app.route("/api/albums", methods=["GET"])
+    def _video_placeholder_response(size):
+        """Return a minimal dark JPEG with a play symbol for videos with no extractable frame."""
+        import io
+        from flask import Response
+        try:
+            from PIL import Image as PilImage, ImageDraw
+            img  = PilImage.new("RGB", (size, size), color=(20, 20, 24))
+            draw = ImageDraw.Draw(img)
+            cx, cy, r = size // 2, size // 2, size // 5
+            triangle = [
+                (cx - r // 2, cy - r),
+                (cx - r // 2, cy + r),
+                (cx + r, cy),
+            ]
+            draw.polygon(triangle, fill=(180, 180, 180))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=70)
+            buf.seek(0)
+            return Response(buf, mimetype="image/jpeg",
+                            headers={"Cache-Control": "max-age=86400"})
+        except Exception:
+            return Response(b"", status=204)
+
+    # ── /api/video/<unique_name>  — byte-range streaming for <video> ──────────
+    @app.route("/api/video/<unique_name>", methods=["GET"])
+    def api_video(unique_name):
+        """
+        Stream a video file with proper HTTP 206 range-request support.
+        This allows the browser <video> element to:
+          - Start playback without downloading the whole file
+          - Seek to arbitrary positions
+          - Load only the bytes it currently needs (lazy network usage)
+        """
+        import mimetypes
+        from flask import Response, abort
+        full_path, _ = _resolve_path(unique_name)
+
+        if not is_video(full_path):
+            abort(415)
+
+        file_size = os.path.getsize(full_path)
+        mime, _   = mimetypes.guess_type(full_path)
+        if not mime:
+            ext = Path(full_path).suffix.lower()
+            mime = {
+                ".mp4": "video/mp4", ".mov": "video/quicktime",
+                ".avi": "video/x-msvideo", ".mkv": "video/x-matroska",
+                ".webm": "video/webm", ".m4v": "video/mp4",
+                ".3gp": "video/3gpp", ".wmv": "video/x-ms-wmv",
+                ".flv": "video/x-flv", ".ts": "video/mp2t",
+                ".mts": "video/mp2t",
+            }.get(ext, "application/octet-stream")
+
+        range_header = request.headers.get("Range")
+        CHUNK = 1024 * 1024  # 1 MB chunks
+
+        if range_header:
+            # Parse "bytes=start-end"
+            try:
+                byte_range = range_header.replace("bytes=", "").strip()
+                parts      = byte_range.split("-")
+                start      = int(parts[0])
+                end        = int(parts[1]) if parts[1] else min(start + CHUNK - 1, file_size - 1)
+            except (ValueError, IndexError):
+                start, end = 0, min(CHUNK - 1, file_size - 1)
+
+            end   = min(end, file_size - 1)
+            length = end - start + 1
+
+            def generate():
+                with open(full_path, "rb") as f:
+                    f.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = f.read(min(65536, remaining))  # 64 KB read chunks
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                        yield chunk
+
+            headers = {
+                "Content-Range":  f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges":  "bytes",
+                "Content-Length": str(length),
+                "Content-Type":   mime,
+                "Cache-Control":  "no-store",
+            }
+            return Response(generate(), status=206, headers=headers, direct_passthrough=True)
+
+        else:
+            # No Range header: send first chunk only, advertise range support
+            # Browser will follow up with Range requests for the rest
+            end    = min(CHUNK - 1, file_size - 1)
+            length = end + 1
+
+            def generate_initial():
+                with open(full_path, "rb") as f:
+                    remaining = length
+                    while remaining > 0:
+                        chunk = f.read(min(65536, remaining))
+                        if not chunk:
+                            break
+                        remaining -= len(chunk)
+                        yield chunk
+
+            headers = {
+                "Content-Range":  f"bytes 0-{end}/{file_size}",
+                "Accept-Ranges":  "bytes",
+                "Content-Length": str(length),
+                "Content-Type":   mime,
+                "Cache-Control":  "no-store",
+            }
+            return Response(generate_initial(), status=206, headers=headers,
+                            direct_passthrough=True)
     def api_albums():
         db = load_json(DB_JSON, {"media": [], "albums": []})
         return jsonify(db.get("albums", []))
