@@ -780,6 +780,40 @@
   }
   .album-header-count { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 
+  /* Inline rename input inside album header */
+  #album-header-name {
+    cursor: pointer;
+  }
+  #album-header-name:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--border-hover); }
+
+  .album-rename-input {
+    font-family: var(--font-display);
+    font-size: 26px;
+    font-weight: 300;
+    color: var(--text);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid var(--accent);
+    outline: none;
+    padding: 0 2px;
+    width: 260px;
+    max-width: 50vw;
+  }
+
+  /* Rename pencil icon in sidebar album list */
+  .album-nav-item .album-rename-icon {
+    opacity: 0;
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: opacity 0.15s, color 0.15s;
+    flex-shrink: 0;
+  }
+  .album-nav-item:hover .album-rename-icon { opacity: 1; }
+  .album-nav-item .album-rename-icon:hover { color: var(--accent); }
+
   /* Scrollbar global */
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -1129,10 +1163,12 @@
     <div id="album-header">
       <span class="album-header-icon">⬡</span>
       <div>
-        <div class="album-header-name" id="album-header-name"></div>
+        <div class="album-header-name" id="album-header-name"
+             title="Click to rename" onclick="startInlineRename()"></div>
         <div class="album-header-count" id="album-header-count"></div>
       </div>
       <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-ghost" onclick="startInlineRename()" title="Rename album">✎ Rename</button>
         <button class="btn btn-accent" id="add-photos-btn" onclick="openPhotoPicker()">＋ Add Photos</button>
         <button class="btn btn-danger" id="delete-album-btn" onclick="deleteCurrentAlbum()">✕ Delete Album</button>
       </div>
@@ -1359,7 +1395,10 @@ function renderAlbumNav() {
   db.albums.forEach(album => {
     const d = document.createElement('div');
     d.className = 'album-nav-item' + (currentAlbumId === album.id ? ' active' : '');
-    d.innerHTML = `<span>${album.name}</span><span class="album-count">${album.media.length}</span>`;
+    d.innerHTML = `
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(album.name)}</span>
+      <span class="album-rename-icon" title="Rename" onclick="event.stopPropagation();promptRenameAlbum('${album.id}')">✎</span>
+      <span class="album-count">${album.media.length}</span>`;
     d.onclick = () => setView(album.id, d);
     nav.appendChild(d);
   });
@@ -1852,6 +1891,58 @@ function deleteCurrentAlbum() {
   setView('all', document.querySelector('[data-view="all"]'));
   renderAll();
   toast('Album deleted', 'info');
+}
+
+// ── Inline rename from album header ───────────────────────────────────────────
+function startInlineRename() {
+  if (!currentAlbumId) return;
+  const album     = db.albums.find(a => a.id === currentAlbumId);
+  if (!album) return;
+  const nameEl    = document.getElementById('album-header-name');
+  const oldName   = album.name;
+
+  // Replace the display div content with an input
+  nameEl.innerHTML = '';
+  const input = document.createElement('input');
+  input.className = 'album-rename-input';
+  input.value     = oldName;
+  nameEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  function commit() {
+    const newName = input.value.trim();
+    if (newName && newName !== oldName) {
+      album.name = newName;
+      saveDB();
+      renderAll();
+      toast(`Renamed to "${newName}"`, 'success');
+    } else {
+      // Restore without saving
+      nameEl.textContent = oldName;
+    }
+  }
+
+  input.addEventListener('blur',    commit);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { input.blur(); }
+    if (e.key === 'Escape') { input.value = oldName; input.blur(); }
+  });
+}
+
+// ── Rename from sidebar pencil icon ───────────────────────────────────────────
+function promptRenameAlbum(albumId) {
+  const album = db.albums.find(a => a.id === albumId);
+  if (!album) return;
+  const newName = window.prompt('Rename album:', album.name);
+  if (newName === null) return;          // cancelled
+  const trimmed = newName.trim();
+  if (!trimmed) { toast('Name cannot be empty', 'error'); return; }
+  if (trimmed === album.name) return;
+  album.name = trimmed;
+  saveDB();
+  renderAll();
+  toast(`Renamed to "${trimmed}"`, 'success');
 }
 
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
