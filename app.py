@@ -293,98 +293,158 @@ if FLASK_AVAILABLE:
         db = load_json(DB_JSON, {"media": [], "albums": []})
         return jsonify(db.get("media", []))
 
-    @app.route("/api/image/<unique_name>", methods=["GET"])
-    def api_image(unique_name):
-        """Serve an image file by uniqueName. HEIC/HEIF are converted to JPEG on the fly."""
-        from flask import send_file, abort, Response
-        import io
+    # ── shared image helpers ──────────────────────────────────────────────────
+
+    def _resolve_path(unique_name):
+        """Return (full_path, item) or raise 404."""
+        from flask import abort
         db = load_json(DB_JSON, {"media": [], "albums": []})
         item = next((m for m in db.get("media", []) if m["uniqueName"] == unique_name), None)
         if not item:
             abort(404)
-        file_path = item.get("metadata", {}).get("file", {}).get("path", "")
-        full_path = os.path.join(file_path, item["name"])
+        file_dir  = item.get("metadata", {}).get("file", {}).get("path", "")
+        full_path = os.path.join(file_dir, item["name"])
         if not os.path.isfile(full_path):
-            log.warning("Image file not found on disk: %s", full_path)
+            log.warning("File not found on disk: %s", full_path)
             abort(404)
+        return full_path, item
 
+    def _open_as_pil(full_path):
+        """
+        Open any supported image (including HEIC/HEIF) and return a PIL Image.
+        Tries pillow-heif → pyheif → ImageMagick/ffmpeg for HEIC.
+        Returns PIL Image or raises RuntimeError.
+        """
+        from PIL import Image as PilImage
         ext = Path(full_path).suffix.lower()
 
-        # ── HEIC / HEIF: browsers cannot decode these natively ────────────────
         if ext in (".heic", ".heif"):
-            # Strategy 1: pillow-heif (preferred, best quality)
+            # Strategy 1: pillow-heif
             try:
                 import pillow_heif
                 pillow_heif.register_heif_opener()
-                from PIL import Image as PilImage
-                with PilImage.open(full_path) as img:
-                    buf = io.BytesIO()
-                    img.convert("RGB").save(buf, format="JPEG", quality=90)
-                    buf.seek(0)
-                log.debug("HEIC→JPEG via pillow-heif: %s", full_path)
-                return Response(buf, mimetype="image/jpeg",
-                                headers={"Cache-Control": "max-age=3600"})
+                return PilImage.open(full_path).copy()
             except ImportError:
-                pass  # fall through to next strategy
+                pass
 
             # Strategy 2: pyheif
             try:
                 import pyheif
-                from PIL import Image as PilImage
                 heif_file = pyheif.read(full_path)
-                img = PilImage.frombytes(
+                return PilImage.frombytes(
                     heif_file.mode, heif_file.size, heif_file.data,
                     "raw", heif_file.mode, heif_file.stride,
                 )
-                buf = io.BytesIO()
-                img.convert("RGB").save(buf, format="JPEG", quality=90)
-                buf.seek(0)
-                log.debug("HEIC→JPEG via pyheif: %s", full_path)
-                return Response(buf, mimetype="image/jpeg",
-                                headers={"Cache-Control": "max-age=3600"})
             except ImportError:
-                pass  # fall through to next strategy
+                pass
 
-            # Strategy 3: ImageMagick / ffmpeg via subprocess (system tools)
+            # Strategy 3: system tools → temp JPEG → re-open
             import subprocess, tempfile
-            for tool, cmd_fn in [
-                ("magick",  lambda src, dst: ["magick", src, dst]),
-                ("convert", lambda src, dst: ["convert", src, dst]),
-                ("ffmpeg",  lambda src, dst: ["ffmpeg", "-y", "-i", src, dst]),
+            for cmd_fn in [
+                lambda s, d: ["magick", s, d],
+                lambda s, d: ["convert", s, d],
+                lambda s, d: ["ffmpeg", "-y", "-i", s, d],
             ]:
                 try:
                     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                         tmp_path = tmp.name
-                    result = subprocess.run(
-                        cmd_fn(full_path, tmp_path),
-                        capture_output=True, timeout=15
-                    )
-                    if result.returncode == 0 and os.path.isfile(tmp_path):
-                        with open(tmp_path, "rb") as f:
-                            data = f.read()
+                    r = subprocess.run(cmd_fn(full_path, tmp_path),
+                                       capture_output=True, timeout=15)
+                    if r.returncode == 0 and os.path.isfile(tmp_path):
+                        img = PilImage.open(tmp_path).copy()
                         os.unlink(tmp_path)
-                        log.debug("HEIC→JPEG via %s: %s", tool, full_path)
-                        return Response(io.BytesIO(data), mimetype="image/jpeg",
-                                        headers={"Cache-Control": "max-age=3600"})
+                        return img
                 except (FileNotFoundError, subprocess.TimeoutExpired):
                     continue
 
-            # No HEIC decoder found — return a 415 with a helpful message
-            log.error(
-                "Cannot decode HEIC — install pillow-heif: pip install pillow-heif\n"
-                "  File: %s", full_path
-            )
-            return Response(
-                json.dumps({"error": "HEIC decoding unavailable",
-                            "fix": "pip install pillow-heif"}),
-                status=415, mimetype="application/json"
-            )
+            raise RuntimeError("No HEIC decoder found — run: pip install pillow-heif")
 
-        # ── All other formats: serve directly ─────────────────────────────────
+        # Standard formats
+        return PilImage.open(full_path).copy()
+
+    def _jpeg_response(img, quality, max_side=None):
+        """Resize (if requested) and return a JPEG Flask Response."""
+        import io
+        from flask import Response
+        img = img.convert("RGB")
+        if max_side:
+            img.thumbnail((max_side, max_side), resample=3)  # LANCZOS=3
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        buf.seek(0)
+        return Response(buf, mimetype="image/jpeg",
+                        headers={"Cache-Control": "max-age=86400"})
+
+    # Disk cache directory for thumbnails
+    THUMB_CACHE_DIR = BASE_DIR / ".thumb_cache"
+    THUMB_CACHE_DIR.mkdir(exist_ok=True)
+
+    def _thumb_cache_path(unique_name, size, quality):
+        return THUMB_CACHE_DIR / f"{unique_name}_{size}q{quality}.jpg"
+
+    # ── /api/thumb/<unique_name>  — small, cached, for grid ──────────────────
+    @app.route("/api/thumb/<unique_name>", methods=["GET"])
+    def api_thumb(unique_name):
+        """
+        Return a small thumbnail (default 400px max-side, quality 60).
+        Result is cached to disk so HEIC decode only happens once.
+        """
+        from flask import Response, abort
+        cfg        = load_config()
+        size       = int(request.args.get("size", cfg.get("thumbnail_size", 400)))
+        quality    = int(request.args.get("quality", 60))
+        cache_file = _thumb_cache_path(unique_name, size, quality)
+
+        # Serve from disk cache if available
+        if cache_file.is_file():
+            with open(cache_file, "rb") as f:
+                data = f.read()
+            return Response(data, mimetype="image/jpeg",
+                            headers={"Cache-Control": "max-age=86400"})
+
+        full_path, _ = _resolve_path(unique_name)
+        try:
+            img  = _open_as_pil(full_path)
+            resp = _jpeg_response(img, quality=quality, max_side=size)
+            # Write to disk cache
+            try:
+                with open(cache_file, "wb") as f:
+                    f.write(resp.get_data())
+            except OSError as e:
+                log.warning("Could not write thumb cache: %s", e)
+            return resp
+        except RuntimeError as e:
+            log.error(str(e))
+            return Response(json.dumps({"error": str(e)}),
+                            status=415, mimetype="application/json")
+
+    # ── /api/image/<unique_name>  — full quality, for lightbox ───────────────
+    @app.route("/api/image/<unique_name>", methods=["GET"])
+    def api_image(unique_name):
+        """
+        Return the full-resolution image (JPEG quality 92).
+        HEIC/HEIF are transcoded; all others are re-encoded to ensure
+        browser compatibility and avoid 206 partial-content issues.
+        """
+        from flask import send_file, Response, abort
         import mimetypes
-        mime, _ = mimetypes.guess_type(full_path)
-        return send_file(full_path, mimetype=mime or "image/jpeg",
-                         conditional=False)
+        full_path, _ = _resolve_path(unique_name)
+        ext = Path(full_path).suffix.lower()
+
+        # Non-HEIC formats that browsers handle natively — send directly
+        if ext not in (".heic", ".heif"):
+            mime, _ = mimetypes.guess_type(full_path)
+            return send_file(full_path, mimetype=mime or "image/jpeg",
+                             conditional=False)
+
+        # HEIC — transcode to JPEG at full resolution
+        try:
+            img = _open_as_pil(full_path)
+            return _jpeg_response(img, quality=92)
+        except RuntimeError as e:
+            log.error(str(e))
+            return Response(json.dumps({"error": str(e)}),
+                            status=415, mimetype="application/json")
 
     @app.route("/api/albums", methods=["GET"])
     def api_albums():

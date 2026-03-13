@@ -885,6 +885,9 @@ const API_BASE = `http://${location.hostname}:5000`;
 function imgUrl(uniqueName) {
   return `${API_BASE}/api/image/${encodeURIComponent(uniqueName)}`;
 }
+function thumbUrl(uniqueName) {
+  return `${API_BASE}/api/thumb/${encodeURIComponent(uniqueName)}`;
+}
 
 // ─────────────────────────────────────────────
 //  STATE
@@ -913,7 +916,7 @@ async function init() {
 
 async function loadConfig() {
   try {
-    const r = await fetch('configuration.json');
+    const r = await fetch(`${API_BASE}/configuration.json`);
     config = await r.json();
     if (config.show_hidden_default) {
       showHidden = true;
@@ -926,7 +929,7 @@ async function loadConfig() {
 
 async function loadDB() {
   try {
-    const r = await fetch('db.json');
+    const r = await fetch(`${API_BASE}/api/db`);
     db = await r.json();
     if (!db.media) db.media = [];
     if (!db.albums) db.albums = [];
@@ -1032,7 +1035,7 @@ function createCard(item, idx) {
   div.dataset.unique = item.uniqueName;
   div.dataset.idx = idx;
 
-  const src = imgUrl(item.uniqueName);
+  const src = thumbUrl(item.uniqueName);
   const imgHtml = `
     <img src="${src}" loading="lazy"
          onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"
@@ -1063,10 +1066,6 @@ function createCard(item, idx) {
   });
 
   return div;
-}
-
-function imgErrorFallback(name, unique) {
-  return `<div class="media-placeholder"><span class="ph-icon">⬡</span><span>${name}</span></div>`;
 }
 
 function escHtml(s) {
@@ -1212,9 +1211,26 @@ function renderLightbox() {
   const item = filteredMedia[lbIndex];
   if (!item) return;
   const lb = document.getElementById('lb-content');
-  const src = imgUrl(item.uniqueName);
-  lb.innerHTML = `<img src="${src}" alt="${escHtml(item.name)}"
-    onerror="this.replaceWith(Object.assign(document.createElement('div'), {className:'lb-placeholder', innerHTML:'<span class=\\'lb-icon\\'>⬡</span><span>${escHtml(item.name)}</span>'}))">`;
+  const thumb = thumbUrl(item.uniqueName);
+  const full  = imgUrl(item.uniqueName);
+  const name  = escHtml(item.name);
+
+  // Show thumb immediately (blurred), swap to full when loaded
+  lb.innerHTML = `
+    <div style="position:relative;display:inline-block">
+      <img id="lb-thumb" src="${thumb}" alt="${name}"
+           style="display:block;max-width:90vw;max-height:80vh;object-fit:contain;
+                  border-radius:4px;filter:blur(8px);transform:scale(1.02);transition:filter 0.3s,transform 0.3s">
+      <img id="lb-full" src="${full}" alt="${name}"
+           style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+                  border-radius:4px;opacity:0;transition:opacity 0.3s"
+           onload="
+             this.style.opacity='1';
+             document.getElementById('lb-thumb').style.filter='none';
+             document.getElementById('lb-thumb').style.transform='scale(1)';
+           "
+           onerror="this.remove();document.getElementById('lb-thumb').style.filter='none'">
+    </div>`;
 
   document.getElementById('lb-name').textContent = item.name;
   const cam = item.metadata?.camera;
