@@ -1,10 +1,11 @@
 {
-  "thumbnail_size": 300,
+  "thumbnail_size": 400,
+  "thumbnail_quality": 60,
+  "thumbnail_cache_path": "/path/to/your/thumb_cache",
   "lazy_load_batch": 50,
   "supported_formats": ["jpg", "jpeg", "png", "heic", "webp", "tiff", "bmp", "gif"],
   "metadata_priority": ["exif", "filesystem"],
   "show_hidden_default": false,
-  "thumbnail_cache": true,
   "api_port": 5000,
   "log_level": "INFO",
   "max_images_per_request": 200

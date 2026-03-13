@@ -196,10 +196,12 @@ def extract_metadata(filepath: str) -> dict:
 def load_config() -> dict:
     defaults = {
         "supported_formats": ["jpg", "jpeg", "png", "heic", "webp", "tiff", "bmp", "gif"],
-        "thumbnail_size": 300,
+        "thumbnail_size": 400,
+        "thumbnail_quality": 60,
+        "thumbnail_cache_path": "",
         "lazy_load_batch": 50,
         "show_hidden_default": False,
-        "thumbnail_cache": True,
+        "api_port": 5000,
     }
     cfg = load_json(CONFIG_JSON, defaults)
     for k, v in defaults.items():
@@ -375,12 +377,24 @@ if FLASK_AVAILABLE:
         return Response(buf, mimetype="image/jpeg",
                         headers={"Cache-Control": "max-age=86400"})
 
-    # Disk cache directory for thumbnails
-    THUMB_CACHE_DIR = BASE_DIR / ".thumb_cache"
-    THUMB_CACHE_DIR.mkdir(exist_ok=True)
+    def _get_thumb_cache_dir() -> Path:
+        """Read thumbnail_cache_path from configuration.json. Falls back to .thumb_cache/ next to app.py."""
+        cfg = load_config()
+        raw = cfg.get("thumbnail_cache_path", "")
+        if raw:
+            p = Path(raw).expanduser()
+        else:
+            p = BASE_DIR / ".thumb_cache"
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            log.warning("Cannot create thumbnail cache dir %s: %s — falling back", p, e)
+            p = BASE_DIR / ".thumb_cache"
+            p.mkdir(parents=True, exist_ok=True)
+        return p
 
     def _thumb_cache_path(unique_name, size, quality):
-        return THUMB_CACHE_DIR / f"{unique_name}_{size}q{quality}.jpg"
+        return _get_thumb_cache_dir() / f"{unique_name}_{size}q{quality}.jpg"
 
     # ── /api/thumb/<unique_name>  — small, cached, for grid ──────────────────
     @app.route("/api/thumb/<unique_name>", methods=["GET"])
@@ -391,8 +405,8 @@ if FLASK_AVAILABLE:
         """
         from flask import Response, abort
         cfg        = load_config()
-        size       = int(request.args.get("size", cfg.get("thumbnail_size", 400)))
-        quality    = int(request.args.get("quality", 60))
+        size       = int(request.args.get("size",    cfg.get("thumbnail_size",    400)))
+        quality    = int(request.args.get("quality", cfg.get("thumbnail_quality", 60)))
         cache_file = _thumb_cache_path(unique_name, size, quality)
 
         # Serve from disk cache if available
