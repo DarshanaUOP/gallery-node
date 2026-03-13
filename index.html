@@ -1499,7 +1499,7 @@ function renderLightbox() {
 
     const videoSrc = `${API_BASE}/api/video/${encodeURIComponent(item.uniqueName)}`;
     lb.innerHTML = `
-      <video id="lb-video" controls autoplay playsinline preload="metadata"
+      <video id="lb-video" controls preload="metadata" playsinline
              onerror="this.insertAdjacentHTML('afterend','<div class=\\'lb-placeholder\\'><span class=\\'lb-icon\\'>▶</span><span>${name}</span></div>');this.remove()">
         <source src="${videoSrc}" type="${_videoMime(item.name)}">
         Your browser does not support this video format.

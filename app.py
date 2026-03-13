@@ -388,7 +388,7 @@ def sync_library() -> dict:
 
 if FLASK_AVAILABLE:
     app = Flask(__name__, static_folder=".", static_url_path="")
-    CORS(app)
+    CORS(app, expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"])
 
     @app.route("/")
     def serve_index():
@@ -673,37 +673,12 @@ if FLASK_AVAILABLE:
             except (ValueError, IndexError):
                 start, end = 0, min(CHUNK - 1, file_size - 1)
 
-            end   = min(end, file_size - 1)
+            end    = min(end, file_size - 1)
             length = end - start + 1
 
-            def generate():
+            def generate_range():
                 with open(full_path, "rb") as f:
                     f.seek(start)
-                    remaining = length
-                    while remaining > 0:
-                        chunk = f.read(min(65536, remaining))  # 64 KB read chunks
-                        if not chunk:
-                            break
-                        remaining -= len(chunk)
-                        yield chunk
-
-            headers = {
-                "Content-Range":  f"bytes {start}-{end}/{file_size}",
-                "Accept-Ranges":  "bytes",
-                "Content-Length": str(length),
-                "Content-Type":   mime,
-                "Cache-Control":  "no-store",
-            }
-            return Response(generate(), status=206, headers=headers, direct_passthrough=True)
-
-        else:
-            # No Range header: send first chunk only, advertise range support
-            # Browser will follow up with Range requests for the rest
-            end    = min(CHUNK - 1, file_size - 1)
-            length = end + 1
-
-            def generate_initial():
-                with open(full_path, "rb") as f:
                     remaining = length
                     while remaining > 0:
                         chunk = f.read(min(65536, remaining))
@@ -712,15 +687,43 @@ if FLASK_AVAILABLE:
                         remaining -= len(chunk)
                         yield chunk
 
-            headers = {
-                "Content-Range":  f"bytes 0-{end}/{file_size}",
-                "Accept-Ranges":  "bytes",
-                "Content-Length": str(length),
-                "Content-Type":   mime,
-                "Cache-Control":  "no-store",
-            }
-            return Response(generate_initial(), status=206, headers=headers,
-                            direct_passthrough=True)
+            return Response(
+                generate_range(),
+                status=206,
+                headers={
+                    "Content-Range":  f"bytes {start}-{end}/{file_size}",
+                    "Accept-Ranges":  "bytes",
+                    "Content-Length": str(length),
+                    "Content-Type":   mime,
+                    "Cache-Control":  "no-store",
+                },
+                direct_passthrough=True,
+            )
+
+        else:
+            # No Range header — return 200 and advertise range support.
+            # The browser will issue Range requests for actual playback.
+            def generate_full():
+                with open(full_path, "rb") as f:
+                    while True:
+                        chunk = f.read(65536)
+                        if not chunk:
+                            break
+                        yield chunk
+
+            return Response(
+                generate_full(),
+                status=200,
+                headers={
+                    "Accept-Ranges":  "bytes",
+                    "Content-Length": str(file_size),
+                    "Content-Type":   mime,
+                    "Cache-Control":  "no-store",
+                },
+                direct_passthrough=True,
+            )
+
+    @app.route("/api/albums", methods=["GET"])
     def api_albums():
         db = load_json(DB_JSON, {"media": [], "albums": []})
         return jsonify(db.get("albums", []))
