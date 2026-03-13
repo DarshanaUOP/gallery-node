@@ -818,6 +818,7 @@
     padding: 20px 24px;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    grid-auto-rows: 150px;
     gap: 10px;
     align-content: start;
   }
@@ -826,7 +827,8 @@
 
   .picker-item {
     position: relative;
-    aspect-ratio: 1;
+    width: 100%;
+    height: 100%;
     border-radius: var(--radius);
     overflow: hidden;
     cursor: pointer;
@@ -1687,9 +1689,16 @@ function renderPickerGrid(mediaList, album) {
     return;
   }
 
+  // Sort newest first
+  const sorted = mediaList.slice().sort((a, b) => {
+    const da = new Date(a.metadata?.date?.created || 0);
+    const db2 = new Date(b.metadata?.date?.created || 0);
+    return db2 - da;
+  });
+
   const alreadyIn = new Set(album ? album.media : []);
 
-  mediaList.forEach(item => {
+  sorted.forEach(item => {
     const inAlbum    = alreadyIn.has(item.uniqueName);
     const isSelected = pickerSelected.has(item.uniqueName);
 
