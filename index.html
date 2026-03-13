@@ -525,14 +525,44 @@
     align-items: center;
     justify-content: center;
     flex-direction: column;
+    padding: 60px 40px 20px;
   }
   #lightbox.open { display: flex; }
-  #lightbox img {
-    max-width: 90vw;
-    max-height: 80vh;
-    border-radius: 4px;
-    object-fit: contain;
+
+  #lb-content {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 0;
+    position: relative;
   }
+
+  /* The blurred thumb — fills the content area */
+  #lb-thumb {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 4px;
+  }
+
+  /* Full-res image overlaid on top, same box */
+  #lb-full {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 4px;
+  }
+
   .lb-placeholder {
     width: 600px;
     height: 400px;
@@ -561,13 +591,15 @@
   }
   #lb-close:hover { background: rgba(255,255,255,0.2); }
   #lb-info {
-    margin-top: 14px;
+    margin-top: 12px;
     text-align: center;
+    flex-shrink: 0;
   }
   #lb-info .lb-name { font-family: var(--font-display); font-size: 16px; color: var(--text); }
   #lb-info .lb-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
   #lb-nav {
-    display: flex; gap: 16px; margin-top: 12px;
+    display: flex; gap: 16px; margin-top: 10px;
+    flex-shrink: 0;
   }
   #lb-nav button {
     background: rgba(255,255,255,0.1);
@@ -1210,32 +1242,31 @@ function openLightbox(idx) {
 function renderLightbox() {
   const item = filteredMedia[lbIndex];
   if (!item) return;
-  const lb = document.getElementById('lb-content');
-  const thumb = thumbUrl(item.uniqueName);
-  const full  = imgUrl(item.uniqueName);
-  const name  = escHtml(item.name);
+  const lb   = document.getElementById('lb-content');
+  const name = escHtml(item.name);
 
-  // Show thumb immediately (blurred), swap to full when loaded
   lb.innerHTML = `
-    <div style="position:relative;display:inline-block">
-      <img id="lb-thumb" src="${thumb}" alt="${name}"
-           style="display:block;max-width:90vw;max-height:80vh;object-fit:contain;
-                  border-radius:4px;filter:blur(8px);transform:scale(1.02);transition:filter 0.3s,transform 0.3s">
-      <img id="lb-full" src="${full}" alt="${name}"
-           style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
-                  border-radius:4px;opacity:0;transition:opacity 0.3s"
-           onload="
-             this.style.opacity='1';
-             document.getElementById('lb-thumb').style.filter='none';
-             document.getElementById('lb-thumb').style.transform='scale(1)';
-           "
-           onerror="this.remove();document.getElementById('lb-thumb').style.filter='none'">
-    </div>`;
+    <img id="lb-thumb" src="${thumbUrl(item.uniqueName)}" alt="${name}"
+         style="filter:blur(12px);transform:scale(1.03);transition:filter 0.35s,transform 0.35s">
+    <img id="lb-full"  src="${imgUrl(item.uniqueName)}"  alt="${name}"
+         style="opacity:0;transition:opacity 0.35s"
+         onload="
+           this.style.opacity='1';
+           var t=document.getElementById('lb-thumb');
+           if(t){t.style.filter='none';t.style.transform='scale(1)';}
+         "
+         onerror="
+           this.remove();
+           var t=document.getElementById('lb-thumb');
+           if(t){t.style.filter='none';t.style.transform='scale(1)';}
+         ">`;
 
   document.getElementById('lb-name').textContent = item.name;
   const cam = item.metadata?.camera;
-  const dt = item.metadata?.date?.created ? new Date(item.metadata.date.created).toLocaleString() : '';
-  document.getElementById('lb-meta').textContent = [cam?.model, dt].filter(Boolean).join(' · ');
+  const dt  = item.metadata?.date?.created
+    ? new Date(item.metadata.date.created).toLocaleString() : '';
+  document.getElementById('lb-meta').textContent =
+    [cam?.model, dt].filter(Boolean).join(' · ');
 }
 
 function closeLightbox() { document.getElementById('lightbox').classList.remove('open'); }
