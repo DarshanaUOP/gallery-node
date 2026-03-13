@@ -972,6 +972,85 @@
     opacity: 0.4;
     cursor: not-allowed;
   }
+
+  /* ── LOCATIONS MANAGER ── */
+  .loc-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: start;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    background: var(--surface2);
+    transition: border-color 0.15s;
+  }
+  .loc-row:hover { border-color: var(--border-hover); }
+  .loc-row.loc-hidden-row { opacity: 0.5; }
+
+  .loc-fields { display: flex; flex-direction: column; gap: 6px; }
+
+  .loc-name-input,
+  .loc-path-input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 6px 10px;
+    width: 100%;
+    outline: none;
+    transition: border-color 0.2s;
+    box-sizing: border-box;
+  }
+  .loc-name-input { font-weight: 400; }
+  .loc-path-input { font-size: 11px; color: var(--text-dim); }
+  .loc-name-input:focus,
+  .loc-path-input:focus { border-color: var(--accent); }
+
+  .loc-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding-top: 2px;
+  }
+
+  .loc-vis-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+  .loc-vis-toggle input { accent-color: var(--accent); cursor: pointer; }
+
+  .loc-delete-btn {
+    background: none;
+    border: 1px solid rgba(200,126,126,0.3);
+    color: var(--danger);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 4px 10px;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .loc-delete-btn:hover { background: rgba(200,126,126,0.15); border-color: var(--danger); }
+
+  #locations-list:empty::after {
+    content: 'No locations configured. Add one below.';
+    display: block;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 24px 0;
+  }
 </style>
 </head>
 <body>
@@ -1024,6 +1103,7 @@
       <div class="toggle" id="show-hidden-toggle" onclick="toggleHidden(this)"></div>
     </div>
     <button class="btn btn-ghost" onclick="openCreateAlbum()">＋ Album</button>
+    <button class="btn btn-ghost" onclick="openLocationsManager()">⊞ Locations</button>
     <button class="btn btn-accent" onclick="triggerSync()">↻ Sync</button>
   </div>
 
@@ -1151,6 +1231,36 @@
       </div>
     </div>
     <div id="photo-picker-grid"></div>
+  </div>
+</div>
+
+<!-- LOCATIONS MANAGER MODAL -->
+<div class="modal-overlay" id="locations-modal">
+  <div class="modal" style="position:relative;width:580px;max-width:96vw">
+    <button class="modal-close" onclick="closeModal('locations-modal')">✕</button>
+    <h2>Media Locations</h2>
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:18px;line-height:1.6">
+      Directories scanned during Sync. Toggle visibility to include or exclude a location without deleting it.
+    </p>
+    <div id="locations-list"></div>
+    <div id="locations-add-form" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
+      <div style="font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-muted);margin-bottom:10px">Add New Location</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <input type="text" id="loc-new-name" placeholder="Label  (e.g. Travel Photos)">
+        <input type="text" id="loc-new-path" placeholder="Absolute path  (e.g. /home/user/photos/travel)">
+        <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-dim)">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="loc-new-vis" checked style="accent-color:var(--accent)">
+            Visible (scanned during Sync)
+          </label>
+          <button class="btn btn-accent" style="margin-left:auto" onclick="addLocation()">＋ Add</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('locations-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="saveLocations()">Save Changes</button>
+    </div>
   </div>
 </div>
 
@@ -1800,6 +1910,110 @@ function toast(msg, type = 'info') {
   el.innerHTML = `<span>${icons[type] || '◆'}</span> ${escHtml(msg)}`;
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+// ─────────────────────────────────────────────
+//  LOCATIONS MANAGER
+// ─────────────────────────────────────────────
+let locationsData = [];   // working copy while modal is open
+
+async function openLocationsManager() {
+  try {
+    const r = await fetch(`${API_BASE}/api/locations`);
+    if (!r.ok) throw new Error('Backend returned ' + r.status);
+    locationsData = await r.json();
+  } catch {
+    toast('Could not load media.json — is app.py running?', 'error');
+    return;
+  }
+  renderLocationsList();
+  document.getElementById('loc-new-name').value = '';
+  document.getElementById('loc-new-path').value = '';
+  document.getElementById('loc-new-vis').checked = true;
+  document.getElementById('locations-modal').classList.add('open');
+}
+
+function renderLocationsList() {
+  const list = document.getElementById('locations-list');
+  list.innerHTML = '';
+
+  if (locationsData.length === 0) {
+    list.innerHTML = '';   // CSS :empty will show placeholder
+    return;
+  }
+
+  locationsData.forEach((loc, idx) => {
+    const row = document.createElement('div');
+    row.className = 'loc-row' + (loc.visibility === false ? ' loc-hidden-row' : '');
+    row.dataset.idx = idx;
+
+    row.innerHTML = `
+      <div class="loc-fields">
+        <input class="loc-name-input" type="text"
+               value="${escHtml(loc.name || '')}"
+               placeholder="Label"
+               oninput="locationsData[${idx}].name = this.value">
+        <input class="loc-path-input" type="text"
+               value="${escHtml(loc.path || '')}"
+               placeholder="Absolute path"
+               oninput="locationsData[${idx}].path = this.value">
+        <label class="loc-vis-toggle">
+          <input type="checkbox" ${loc.visibility !== false ? 'checked' : ''}
+                 onchange="locationsData[${idx}].visibility = this.checked; this.closest('.loc-row').classList.toggle('loc-hidden-row', !this.checked)">
+          Scan during Sync
+        </label>
+      </div>
+      <div class="loc-actions">
+        <button class="loc-delete-btn" onclick="deleteLocation(${idx})">✕ Remove</button>
+      </div>`;
+
+    list.appendChild(row);
+  });
+}
+
+function deleteLocation(idx) {
+  const loc = locationsData[idx];
+  if (!confirm(`Remove "${loc.name || loc.path}"?\n\nThis only removes it from the scan list — your files are not affected.`)) return;
+  locationsData.splice(idx, 1);
+  renderLocationsList();
+}
+
+function addLocation() {
+  const name = document.getElementById('loc-new-name').value.trim();
+  const path = document.getElementById('loc-new-path').value.trim();
+  const vis  = document.getElementById('loc-new-vis').checked;
+
+  if (!path) { toast('Path is required', 'error'); return; }
+
+  locationsData.push({ name: name || path, path, visibility: vis });
+  renderLocationsList();
+
+  document.getElementById('loc-new-name').value = '';
+  document.getElementById('loc-new-path').value = '';
+  document.getElementById('loc-new-vis').checked = true;
+  toast('Location added — click Save Changes to write to media.json', 'info');
+}
+
+async function saveLocations() {
+  // Validate — each entry must have a path
+  const invalid = locationsData.filter(l => !l.path || !l.path.trim());
+  if (invalid.length) {
+    toast('All locations must have a path', 'error');
+    return;
+  }
+
+  try {
+    const r = await fetch(`${API_BASE}/api/locations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(locationsData),
+    });
+    if (!r.ok) throw new Error('Backend returned ' + r.status);
+    closeModal('locations-modal');
+    toast('media.json saved — run Sync to index changes', 'success');
+  } catch {
+    toast('Could not save — is app.py running?', 'error');
+  }
 }
 
 // ─────────────────────────────────────────────

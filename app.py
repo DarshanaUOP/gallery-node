@@ -719,6 +719,32 @@ if FLASK_AVAILABLE:
         db = load_json(DB_JSON, {"media": [], "albums": []})
         return jsonify(db.get("albums", []))
 
+    @app.route("/api/locations", methods=["GET"])
+    def api_locations_get():
+        """Return current contents of media.json."""
+        sources = load_json(MEDIA_JSON, [])
+        return jsonify(sources)
+
+    @app.route("/api/locations", methods=["POST"])
+    def api_locations_post():
+        """Overwrite media.json with updated location list from frontend."""
+        data = request.get_json(force=True)
+        if not isinstance(data, list):
+            return jsonify({"error": "Expected a JSON array"}), 400
+        # Sanitise: ensure every entry has at minimum a path key
+        cleaned = []
+        for entry in data:
+            if not isinstance(entry, dict) or not entry.get("path", "").strip():
+                continue
+            cleaned.append({
+                "name":       str(entry.get("name", entry["path"])).strip(),
+                "path":       str(entry["path"]).strip(),
+                "visibility": bool(entry.get("visibility", True)),
+            })
+        save_json(MEDIA_JSON, cleaned)
+        log.info("media.json updated — %d locations", len(cleaned))
+        return jsonify({"ok": True, "count": len(cleaned)})
+
     @app.route("/api/sync", methods=["POST"])
     def api_sync():
         result = sync_library()
