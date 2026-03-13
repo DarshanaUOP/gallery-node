@@ -1149,9 +1149,6 @@
     <div class="filter-sep"></div>
     <select class="filter-select" id="filter-format" onchange="applyFilters()">
       <option value="">All Formats</option>
-      <option value="JPEG">JPEG</option>
-      <option value="PNG">PNG</option>
-      <option value="HEIC">HEIC</option>
     </select>
     <select class="filter-select" id="filter-camera" onchange="applyFilters()">
       <option value="">All Cameras</option>
@@ -1383,6 +1380,7 @@ function renderAll() {
   updateStats();
   updateFooter();
   populateCameraFilter();
+  populateFormatFilter();
 }
 
 function renderAlbumNav() {
@@ -1431,8 +1429,15 @@ function applyFilters() {
     });
   }
 
-  // Format
-  if (fmt) pool = pool.filter(m => (m.metadata?.file?.format || '').toUpperCase() === fmt.toUpperCase());
+  // Format — normalise with same aliases used when populating the dropdown
+  if (fmt) {
+    const fmtAliases = { 'HEIF': 'HEIC', 'JPG': 'JPEG' };
+    pool = pool.filter(m => {
+      let mfmt = (m.metadata?.file?.format || '').toUpperCase().trim();
+      mfmt = fmtAliases[mfmt] || mfmt;
+      return mfmt === fmt;
+    });
+  }
 
   // Camera
   if (cam) pool = pool.filter(m => (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '') === cam);
@@ -1539,6 +1544,30 @@ function populateCameraFilter() {
   const sel = document.getElementById('filter-camera');
   sel.innerHTML = '<option value="">All Cameras</option>';
   cameras.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o); });
+}
+
+function populateFormatFilter() {
+  // Normalise: uppercase, collapse HEIC/HEIF → HEIC, JPG → JPEG
+  const aliases = { 'HEIF': 'HEIC', 'JPG': 'JPEG' };
+  const formats = new Set();
+  db.media.forEach(m => {
+    let fmt = (m.metadata?.file?.format || '').toUpperCase().trim();
+    if (!fmt) return;
+    fmt = aliases[fmt] || fmt;
+    formats.add(fmt);
+  });
+  const sorted = [...formats].sort();
+  const sel = document.getElementById('filter-format');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">All Formats</option>';
+  sorted.forEach(f => {
+    const o = document.createElement('option');
+    o.value = f;
+    o.textContent = f;
+    sel.appendChild(o);
+  });
+  // Restore selection if still valid
+  if (prev && formats.has(prev)) sel.value = prev;
 }
 
 // ─────────────────────────────────────────────
