@@ -631,97 +631,88 @@ if FLASK_AVAILABLE:
             return Response(b"", status=204)
 
     # ── /api/video/<unique_name>  — byte-range streaming for <video> ──────────
-    @app.route("/api/video/<unique_name>", methods=["GET"])
+    @app.route("/api/video/<unique_name>", methods=["GET", "HEAD"])
     def api_video(unique_name):
         """
-        Stream a video file with proper HTTP 206 range-request support.
-        This allows the browser <video> element to:
-          - Start playback without downloading the whole file
-          - Seek to arbitrary positions
-          - Load only the bytes it currently needs (lazy network usage)
+        Stream video with proper HTTP range-request support.
+        Uses send_file for simple requests; manual range slicing for seek requests.
         """
         import mimetypes
-        from flask import Response, abort
+        from flask import Response, abort, send_file
+
         full_path, _ = _resolve_path(unique_name)
 
         if not is_video(full_path):
             abort(415)
 
-        file_size = os.path.getsize(full_path)
-        mime, _   = mimetypes.guess_type(full_path)
-        if not mime:
-            ext = Path(full_path).suffix.lower()
-            mime = {
-                ".mp4": "video/mp4", ".mov": "video/quicktime",
-                ".avi": "video/x-msvideo", ".mkv": "video/x-matroska",
-                ".webm": "video/webm", ".m4v": "video/mp4",
-                ".3gp": "video/3gpp", ".wmv": "video/x-ms-wmv",
-                ".flv": "video/x-flv", ".ts": "video/mp2t",
-                ".mts": "video/mp2t",
-            }.get(ext, "application/octet-stream")
+        # MIME type
+        ext  = Path(full_path).suffix.lower()
+        mime = {
+            ".mp4":  "video/mp4",
+            ".m4v":  "video/mp4",
+            ".mov":  "video/quicktime",
+            ".avi":  "video/x-msvideo",
+            ".mkv":  "video/x-matroska",
+            ".webm": "video/webm",
+            ".3gp":  "video/3gpp",
+            ".wmv":  "video/x-ms-wmv",
+            ".flv":  "video/x-flv",
+            ".ts":   "video/mp2t",
+            ".mts":  "video/mp2t",
+        }.get(ext, mimetypes.guess_type(full_path)[0] or "application/octet-stream")
 
-        range_header = request.headers.get("Range")
-        CHUNK = 1024 * 1024  # 1 MB chunks
+        file_size    = os.path.getsize(full_path)
+        range_header = request.headers.get("Range", None)
 
-        if range_header:
-            # Parse "bytes=start-end"
-            try:
-                byte_range = range_header.replace("bytes=", "").strip()
-                parts      = byte_range.split("-")
-                start      = int(parts[0])
-                end        = int(parts[1]) if parts[1] else min(start + CHUNK - 1, file_size - 1)
-            except (ValueError, IndexError):
-                start, end = 0, min(CHUNK - 1, file_size - 1)
+        # ── HEAD request ──────────────────────────────────────────────────────
+        if request.method == "HEAD":
+            return Response(status=200, headers={
+                "Accept-Ranges":  "bytes",
+                "Content-Length": str(file_size),
+                "Content-Type":   mime,
+            })
 
-            end    = min(end, file_size - 1)
-            length = end - start + 1
+        # ── No Range header: full file, 200 ──────────────────────────────────
+        if not range_header:
+            resp = send_file(full_path, mimetype=mime, conditional=False)
+            resp.headers["Accept-Ranges"]  = "bytes"
+            resp.headers["Content-Length"] = str(file_size)
+            resp.headers["Cache-Control"]  = "no-store"
+            return resp
 
-            def generate_range():
-                with open(full_path, "rb") as f:
-                    f.seek(start)
-                    remaining = length
-                    while remaining > 0:
-                        chunk = f.read(min(65536, remaining))
-                        if not chunk:
-                            break
-                        remaining -= len(chunk)
-                        yield chunk
+        # ── Range request: respond with 206 ──────────────────────────────────
+        try:
+            raw   = range_header.replace("bytes=", "").strip()
+            parts = raw.split("-")
+            start = int(parts[0])
+            end   = int(parts[1]) if parts[1].strip() else file_size - 1
+        except Exception:
+            # Malformed range — send whole file
+            resp = send_file(full_path, mimetype=mime, conditional=False)
+            resp.headers["Accept-Ranges"] = "bytes"
+            return resp
 
-            return Response(
-                generate_range(),
-                status=206,
-                headers={
-                    "Content-Range":  f"bytes {start}-{end}/{file_size}",
-                    "Accept-Ranges":  "bytes",
-                    "Content-Length": str(length),
-                    "Content-Type":   mime,
-                    "Cache-Control":  "no-store",
-                },
-                direct_passthrough=True,
-            )
+        start  = max(0, start)
+        end    = min(end, file_size - 1)
+        length = end - start + 1
 
-        else:
-            # No Range header — return 200 and advertise range support.
-            # The browser will issue Range requests for actual playback.
-            def generate_full():
-                with open(full_path, "rb") as f:
-                    while True:
-                        chunk = f.read(65536)
-                        if not chunk:
-                            break
-                        yield chunk
+        # Read the exact requested byte range into memory
+        # (safe for typical browser chunks of 256 KB – 2 MB)
+        with open(full_path, "rb") as f:
+            f.seek(start)
+            data = f.read(length)
 
-            return Response(
-                generate_full(),
-                status=200,
-                headers={
-                    "Accept-Ranges":  "bytes",
-                    "Content-Length": str(file_size),
-                    "Content-Type":   mime,
-                    "Cache-Control":  "no-store",
-                },
-                direct_passthrough=True,
-            )
+        return Response(
+            data,
+            status=206,
+            mimetype=mime,
+            headers={
+                "Content-Range":  f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges":  "bytes",
+                "Content-Length": str(len(data)),
+                "Cache-Control":  "no-store",
+            },
+        )
 
     @app.route("/api/albums", methods=["GET"])
     def api_albums():
