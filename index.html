@@ -1163,6 +1163,9 @@
     <select class="filter-select" id="filter-camera" onchange="applyFilters()">
       <option value="">All Cameras</option>
     </select>
+    <select class="filter-select" id="filter-location" onchange="applyFilters()" style="max-width:200px">
+      <option value="">All Locations</option>
+    </select>
   </div>
 
   <!-- CONTENT -->
@@ -1353,6 +1356,11 @@ let lbIndex = 0;
 async function init() {
   await loadConfig();
   await loadDB();
+  // Pre-load locations so the filter dropdown can show human-readable names
+  try {
+    const r = await fetch(`${API_BASE}/api/locations`);
+    if (r.ok) window._locationsCache = await r.json();
+  } catch { /* backend not running yet — labels fall back to path segments */ }
   renderAll();
   setupIntersectionObserver();
 }
@@ -1391,6 +1399,7 @@ function renderAll() {
   updateFooter();
   populateCameraFilter();
   populateFormatFilter();
+  populateLocationFilter();
 }
 
 // Soft refresh: update sidebar/stats/dropdowns WITHOUT resetting the grid or scroll position.
@@ -1401,6 +1410,7 @@ function softRefresh() {
   updateFooter();
   populateCameraFilter();
   populateFormatFilter();
+  populateLocationFilter();
   // Update visible cards in-place (hidden badge, etc.) without rebuilding the grid
   document.querySelectorAll('.media-item').forEach(card => {
     const item = db.media.find(m => m.uniqueName === card.dataset.unique);
@@ -1440,6 +1450,7 @@ function applyFilters() {
   const q = document.getElementById('search-input').value.toLowerCase();
   const fmt = document.getElementById('filter-format').value;
   const cam = document.getElementById('filter-camera').value;
+  const loc = document.getElementById('filter-location').value;
 
   let pool = db.media.slice();
 
@@ -1475,6 +1486,18 @@ function applyFilters() {
 
   // Camera
   if (cam) pool = pool.filter(m => (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '') === cam);
+
+  // Location — match by source_root, or fall back to checking file path prefix
+  if (loc) {
+    const locNorm = loc.replace(/\/+$/, '');
+    pool = pool.filter(m => {
+      const root = m.metadata?.file?.source_root;
+      if (root) return root.replace(/\/+$/, '') === locNorm;
+      // Fallback for older entries without source_root
+      const filePath = (m.metadata?.file?.path || '') + (m.name || '');
+      return filePath.startsWith(locNorm + '/') || filePath.startsWith(locNorm);
+    });
+  }
 
   // Sort
   pool = sortMedia(pool);
@@ -1576,7 +1599,45 @@ function updateFooter() {
   document.getElementById('footer-albums').textContent = `${db.albums.length} albums`;
 }
 
-function populateCameraFilter() {
+function populateLocationFilter() {
+  // Collect unique source_root values present in db, map to their label from media.json if known
+  const roots = new Map(); // source_root → label
+  db.media.forEach(m => {
+    const root = m.metadata?.file?.source_root;
+    if (root && !roots.has(root)) roots.set(root, root); // label defaults to path
+  });
+
+  // Try to enrich labels from the in-memory locations list (if loaded)
+  if (Array.isArray(window._locationsCache)) {
+    window._locationsCache.forEach(loc => {
+      const resolved = loc.path?.replace(/\/+$/, '');
+      if (resolved && roots.has(resolved)) roots.set(resolved, loc.name || resolved);
+      // Also try with trailing slash stripped from stored root
+      roots.forEach((_, key) => {
+        if (key === resolved) roots.set(key, loc.name || resolved);
+      });
+    });
+  }
+
+  const sel  = document.getElementById('filter-location');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">All Locations</option>';
+
+  // Sort by label
+  [...roots.entries()]
+    .sort((a, b) => a[1].localeCompare(b[1]))
+    .forEach(([root, label]) => {
+      const o = document.createElement('option');
+      o.value       = root;
+      o.textContent = label === root
+        ? root.split('/').filter(Boolean).pop() || root   // show just the last folder segment if no label
+        : label;
+      o.title = root;   // full path on hover
+      sel.appendChild(o);
+    });
+
+  if (prev && [...roots.keys()].includes(prev)) sel.value = prev;
+}
   const cameras = [...new Set(db.media.map(m => (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '')).filter(c => c.trim()))];
   const sel = document.getElementById('filter-camera');
   sel.innerHTML = '<option value="">All Cameras</option>';
@@ -2089,6 +2150,7 @@ async function openLocationsManager() {
     const r = await fetch(`${API_BASE}/api/locations`);
     if (!r.ok) throw new Error('Backend returned ' + r.status);
     locationsData = await r.json();
+    window._locationsCache = locationsData; // share with populateLocationFilter
   } catch {
     toast('Could not load media.json — is app.py running?', 'error');
     return;
