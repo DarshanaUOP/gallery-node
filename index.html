@@ -1638,6 +1638,8 @@ function populateLocationFilter() {
 
   if (prev && [...roots.keys()].includes(prev)) sel.value = prev;
 }
+
+function populateCameraFilter() {
   const cameras = [...new Set(db.media.map(m => (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '')).filter(c => c.trim()))];
   const sel = document.getElementById('filter-camera');
   sel.innerHTML = '<option value="">All Cameras</option>';
