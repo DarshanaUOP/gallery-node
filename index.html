@@ -1383,6 +1383,30 @@ function renderAll() {
   populateFormatFilter();
 }
 
+// Soft refresh: update sidebar/stats/dropdowns WITHOUT resetting the grid or scroll position.
+// Use this after hide/album/rename operations that don't change filter results.
+function softRefresh() {
+  renderAlbumNav();
+  updateStats();
+  updateFooter();
+  populateCameraFilter();
+  populateFormatFilter();
+  // Update visible cards in-place (hidden badge, etc.) without rebuilding the grid
+  document.querySelectorAll('.media-item').forEach(card => {
+    const item = db.media.find(m => m.uniqueName === card.dataset.unique);
+    if (!item) return;
+    const badge = card.querySelector('.hidden-badge');
+    if (item.isHidden && !badge) {
+      const b = document.createElement('span');
+      b.className = 'hidden-badge';
+      b.textContent = 'hidden';
+      card.appendChild(b);
+    } else if (!item.isHidden && badge) {
+      badge.remove();
+    }
+  });
+}
+
 function renderAlbumNav() {
   const nav = document.getElementById('album-nav');
   nav.innerHTML = '';
@@ -1666,7 +1690,12 @@ function ctxToggleHide() {
   if (!ctxTarget) return;
   ctxTarget.isHidden = !ctxTarget.isHidden;
   saveDB();
-  renderAll();
+  // If showing hidden is off, hiding a card means it should disappear from the grid
+  if (!showHidden) {
+    const card = document.querySelector(`.media-item[data-unique="${ctxTarget.uniqueName}"]`);
+    if (card && ctxTarget.isHidden) card.remove();
+  }
+  softRefresh();
   toast(ctxTarget.isHidden ? 'Image hidden' : 'Image unhidden', 'info');
 }
 
@@ -1884,7 +1913,7 @@ function confirmAddToAlbum() {
     if (!cb.checked) { const i = album.media.indexOf(pendingAddUnique); if (i > -1) album.media.splice(i, 1); }
   });
   saveDB();
-  renderAll();
+  softRefresh();
   closeModal('add-album-modal');
   toast('Album membership updated', 'success');
 }
@@ -1944,10 +1973,12 @@ function startInlineRename() {
     if (newName && newName !== oldName) {
       album.name = newName;
       saveDB();
-      renderAll();
+      // Update header name and sidebar without rebuilding grid
+      document.getElementById('album-header-name').textContent = newName;
+      document.getElementById('topbar-title').textContent = newName;
+      softRefresh();
       toast(`Renamed to "${newName}"`, 'success');
     } else {
-      // Restore without saving
       nameEl.textContent = oldName;
     }
   }
@@ -1970,7 +2001,7 @@ function promptRenameAlbum(albumId) {
   if (trimmed === album.name) return;
   album.name = trimmed;
   saveDB();
-  renderAll();
+  softRefresh();
   toast(`Renamed to "${trimmed}"`, 'success');
 }
 
@@ -2279,7 +2310,7 @@ function confirmPhotoPicker() {
   });
 
   saveDB();
-  renderAll();
+  softRefresh();
   closePhotoPicker();
   toast(`Added ${added} photo${added !== 1 ? 's' : ''} to "${album.name}"`, 'success');
 }
