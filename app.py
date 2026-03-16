@@ -321,12 +321,17 @@ def sync_library() -> dict:
         {f.lower() for f in cfg.get("supported_video_formats", [])}
     )
 
-    # Build lookup maps
+    # Build lookup sets — use resolved absolute paths for reliable dedup
     existing_hashes = {m.get("hash") for m in db["media"] if m.get("hash")}
-    existing_paths  = {(m["metadata"]["file"]["path"] + m["name"]) for m in db["media"]
-                       if m.get("metadata", {}).get("file", {}).get("path")}
+    existing_paths  = set()
+    for m in db["media"]:
+        file_meta = m.get("metadata", {}).get("file", {})
+        dir_part  = file_meta.get("path", "")
+        name_part = m.get("name", "")
+        if dir_part and name_part:
+            existing_paths.add(str(Path(os.path.join(dir_part, name_part)).resolve()))
 
-    added = 0
+    added   = 0
     scanned = 0
 
     for source in sources:
@@ -334,27 +339,33 @@ def sync_library() -> dict:
             log.info("Skipping hidden source: %s", source.get("name"))
             continue
 
-        dir_path = source.get("path", "")
+        dir_path = source.get("path", "").rstrip("/\\")
         if not os.path.isdir(dir_path):
             log.warning("Directory not found: %s", dir_path)
             continue
 
-        log.info("Scanning: %s (%s)", source.get("name"), dir_path)
+        source_root = str(Path(dir_path).resolve())
+        log.info("Scanning: %s → %s (recursive)", source.get("name", dir_path), source_root)
 
-        for root, _, files in os.walk(dir_path):
-            for filename in files:
+        # os.walk recurses into ALL subdirectories automatically
+        for root, dirs, files in os.walk(dir_path, followlinks=True):
+            # Sort dirs for deterministic order
+            dirs.sort()
+            for filename in sorted(files):
                 ext = Path(filename).suffix.lstrip(".").lower()
                 if ext not in supported:
                     continue
 
-                full_path = os.path.join(root, filename)
+                full_path     = os.path.join(root, filename)
+                resolved_path = str(Path(full_path).resolve())
                 scanned += 1
 
-                # Dedup by path
-                if full_path in existing_paths:
+                # Dedup by resolved absolute path (catches symlinks, trailing slash variants)
+                if resolved_path in existing_paths:
+                    log.debug("Already indexed (path): %s", resolved_path)
                     continue
 
-                # Dedup by hash
+                # Dedup by hash (catches duplicates in different directories)
                 fhash = file_hash(full_path)
                 if fhash in existing_hashes:
                     log.debug("Duplicate (hash): %s", filename)
@@ -362,7 +373,24 @@ def sync_library() -> dict:
 
                 # New file — extract and index
                 media_type = "video" if is_video(full_path) else "image"
-                meta = extract_metadata(full_path)
+                meta       = extract_metadata(full_path)
+
+                # Store the actual directory this file lives in (with trailing sep)
+                meta["file"]["path"] = str(Path(full_path).parent) + os.sep
+
+                # Store path relative to the source root for display/hierarchy
+                try:
+                    rel = str(Path(full_path).relative_to(source_root))
+                    meta["file"]["relative_path"] = rel
+                    meta["file"]["source_root"]   = source_root
+                    # Subfolder relative to source root (empty string if file is at root level)
+                    rel_dir = str(Path(rel).parent)
+                    meta["file"]["subfolder"] = "" if rel_dir == "." else rel_dir
+                except ValueError:
+                    meta["file"]["relative_path"] = filename
+                    meta["file"]["source_root"]   = source_root
+                    meta["file"]["subfolder"]     = ""
+
                 entry = {
                     "name":       filename,
                     "uniqueName": str(uuid.uuid4()),
@@ -373,9 +401,9 @@ def sync_library() -> dict:
                 }
                 db["media"].append(entry)
                 existing_hashes.add(fhash)
-                existing_paths.add(full_path)
+                existing_paths.add(resolved_path)
                 added += 1
-                log.info("Indexed [%s]: %s", media_type, filename)
+                log.info("Indexed [%s]: %s", media_type, meta["file"].get("relative_path", filename))
 
     save_json(DB_JSON, db)
     log.info("Sync complete — scanned %d, added %d, total %d", scanned, added, len(db["media"]))

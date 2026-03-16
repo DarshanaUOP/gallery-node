@@ -369,6 +369,14 @@
     color: rgba(255,255,255,0.5);
     margin-top: 1px;
   }
+  .item-path {
+    font-size: 9px;
+    color: rgba(200,169,126,0.6);
+    margin-top: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   .item-menu-btn {
     position: absolute;
@@ -1528,11 +1536,14 @@ function createCard(item, idx) {
     ? new Date(item.metadata.date.modified).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'})
     : '—';
 
+  const subfolder = item.metadata?.file?.subfolder;
+
   div.innerHTML = `
     ${imgHtml}
     <div class="item-overlay"></div>
     <div class="item-info">
       <div class="item-name">${escHtml(item.name)}</div>
+      ${subfolder ? `<div class="item-path">⊂ ${escHtml(subfolder)}</div>` : ''}
       <div class="item-date">${date}</div>
     </div>
     ${item.isHidden ? '<span class="hidden-badge">hidden</span>' : ''}
@@ -1838,6 +1849,9 @@ function openMetaModal(item) {
       ['Format', m.file?.format],
       ['Size', m.file?.size ? (m.file.size / 1024 / 1024).toFixed(2) + ' MB' : null],
       ['Path', m.file?.path],
+      ['Subfolder', m.file?.subfolder || null],
+      ['Relative Path', m.file?.relative_path || null],
+      ['Source Root', m.file?.source_root || null],
     ]},
     { title: 'Image', rows: [
       ['Dimensions', m.image?.resolution],
