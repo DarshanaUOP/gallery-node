@@ -1458,8 +1458,8 @@ function applyFilters() {
 function sortMedia(arr) {
   return arr.slice().sort((a, b) => {
     if (currentSort === 'name') return a.name.localeCompare(b.name);
-    const da = new Date(a.metadata?.date?.created || 0);
-    const db2 = new Date(b.metadata?.date?.created || 0);
+    const da  = new Date(a.metadata?.date?.modified || a.metadata?.date?.created || 0);
+    const db2 = new Date(b.metadata?.date?.modified || b.metadata?.date?.created || 0);
     return currentSort === 'date-asc' ? da - db2 : db2 - da;
   });
 }
@@ -1498,8 +1498,8 @@ function createCard(item, idx) {
         : ''}
     ` : ''}`;
 
-  const date = item.metadata?.date?.created
-    ? new Date(item.metadata.date.created).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'})
+  const date = item.metadata?.date?.modified
+    ? new Date(item.metadata.date.modified).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'})
     : '—';
 
   div.innerHTML = `
@@ -2174,10 +2174,10 @@ function renderPickerGrid(mediaList, album) {
     return;
   }
 
-  // Sort newest first
+  // Sort newest first (by modified date)
   const sorted = mediaList.slice().sort((a, b) => {
-    const da = new Date(a.metadata?.date?.created || 0);
-    const db2 = new Date(b.metadata?.date?.created || 0);
+    const da  = new Date(a.metadata?.date?.modified || a.metadata?.date?.created || 0);
+    const db2 = new Date(b.metadata?.date?.modified || b.metadata?.date?.created || 0);
     return db2 - da;
   });
 
