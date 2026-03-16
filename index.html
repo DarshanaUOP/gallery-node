@@ -298,13 +298,13 @@
   .stat strong { color: var(--text-dim); }
 
   #gallery-grid {
-    columns: 4;
-    column-gap: 10px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    grid-auto-rows: 220px;
+    gap: 10px;
   }
 
   .media-item {
-    break-inside: avoid;
-    margin-bottom: 10px;
     position: relative;
     overflow: hidden;
     border-radius: var(--radius);
@@ -319,7 +319,9 @@
 
   .media-item img {
     width: 100%;
+    height: 100%;
     display: block;
+    object-fit: cover;
     border-radius: var(--radius);
     transition: transform 0.3s ease;
   }
@@ -328,7 +330,7 @@
   /* Placeholder when no real images */
   .media-placeholder {
     width: 100%;
-    aspect-ratio: 4/3;
+    height: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -838,12 +840,12 @@
   .album-check-item:hover { background: var(--surface2); }
   .album-check-item input[type="checkbox"] { accent-color: var(--accent); }
 
-  @media (max-width: 1200px) { #gallery-grid { columns: 3; } }
-  @media (max-width: 900px) { #gallery-grid { columns: 2; } }
+  @media (max-width: 1200px) { #gallery-grid { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 900px)  { #gallery-grid { grid-template-columns: repeat(2, 1fr); } }
   @media (max-width: 600px) {
     #sidebar { transform: translateX(-100%); }
     #main { margin-left: 0; }
-    #gallery-grid { columns: 2; }
+    #gallery-grid { grid-template-columns: repeat(2, 1fr); }
   }
 
   /* ── PHOTO PICKER ── */
@@ -1643,7 +1645,7 @@ function setupIntersectionObserver() {
     if (entries[0].isIntersecting && renderedCount < filteredMedia.length) {
       renderBatch();
     }
-  }, { rootMargin: '200px' });
+  }, { rootMargin: '400px' });
   obs.observe(trigger);
 }
 
