@@ -1,5 +1,10 @@
 # Luminary — .gitignore
 
+# Runtime data (generated, not source-controlled)
+data/db.json
+data/albums.json
+data/media.json
+
 # Daily log files
 logs/*.log
 

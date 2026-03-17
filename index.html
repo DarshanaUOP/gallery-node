@@ -1400,7 +1400,7 @@ async function init() {
 
 async function loadConfig() {
   try {
-    const r = await fetch(`${API_BASE}/configuration.json`);
+    const r = await fetch(`${API_BASE}/api/config`);
     config = await r.json();
     if (config.show_hidden_default) {
       showHidden = true;

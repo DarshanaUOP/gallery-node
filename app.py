@@ -32,10 +32,13 @@ except ImportError:
 
 # ── config ─────────────────────────────────────────────────────────────────────
 BASE_DIR       = Path(__file__).parent
-MEDIA_JSON     = BASE_DIR / "media.json"
-DB_JSON        = BASE_DIR / "db.json"
-ALBUMS_JSON    = BASE_DIR / "albums.json"
-CONFIG_JSON    = BASE_DIR / "configuration.json"
+DATA_DIR       = BASE_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
+
+MEDIA_JSON     = DATA_DIR / "media.json"
+DB_JSON        = DATA_DIR / "db.json"
+ALBUMS_JSON    = DATA_DIR / "albums.json"
+CONFIG_JSON    = DATA_DIR / "configuration.json"
 LOGS_DIR       = BASE_DIR / "logs"
 
 # ── logging setup ──────────────────────────────────────────────────────────────
@@ -456,6 +459,11 @@ if FLASK_AVAILABLE:
     @app.route("/")
     def serve_index():
         return app.send_static_file("index.html")
+
+    @app.route("/api/config", methods=["GET"])
+    def api_config_get():
+        """Return configuration.json from data/."""
+        return jsonify(load_config())
 
     @app.route("/api/media", methods=["GET"])
     def api_media():
