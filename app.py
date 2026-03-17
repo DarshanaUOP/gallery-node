@@ -41,6 +41,41 @@ ALBUMS_JSON    = DATA_DIR / "albums.json"
 CONFIG_JSON    = DATA_DIR / "configuration.json"
 LOGS_DIR       = BASE_DIR / "logs"
 
+# ── bootstrap missing data files ───────────────────────────────────────────────
+def _bootstrap():
+    """Create default data files on first run if they don't exist."""
+    if not MEDIA_JSON.exists():
+        import json as _json
+        MEDIA_JSON.write_text(_json.dumps([
+            {
+                "name": "My Photos",
+                "path": str(Path.home() / "Pictures"),
+                "visibility": True
+            }
+        ], indent=2), encoding="utf-8")
+        print(f"[INFO] Created default {MEDIA_JSON} — edit it to point at your photo directories.")
+
+    if not CONFIG_JSON.exists():
+        import json as _json
+        CONFIG_JSON.write_text(_json.dumps({
+            "thumbnail_size": 400,
+            "thumbnail_quality": 60,
+            "thumbnail_cache_path": "",
+            "lazy_load_batch": 50,
+            "supported_image_formats": [
+                "jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "bmp", "gif"
+            ],
+            "supported_video_formats": [
+                "mp4", "mov", "avi", "mkv", "webm", "m4v", "3gp", "wmv", "flv", "ts", "mts"
+            ],
+            "show_hidden_default": False,
+            "api_port": 5000,
+            "log_level": "INFO"
+        }, indent=2), encoding="utf-8")
+        print(f"[INFO] Created default {CONFIG_JSON}.")
+
+_bootstrap()
+
 # ── logging setup ──────────────────────────────────────────────────────────────
 LOGS_DIR.mkdir(exist_ok=True)
 
