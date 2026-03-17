@@ -459,16 +459,15 @@ if FLASK_AVAILABLE:
 
     @app.route("/api/media", methods=["GET"])
     def api_media():
-        db = load_json(DB_JSON, {"media": [], "albums": []})
-        return jsonify(db.get("media", []))
+        return jsonify(load_media())
 
     # ── shared image helpers ──────────────────────────────────────────────────
 
     def _resolve_path(unique_name):
         """Return (full_path, item) or raise 404."""
         from flask import abort
-        db = load_json(DB_JSON, {"media": [], "albums": []})
-        item = next((m for m in db.get("media", []) if m["uniqueName"] == unique_name), None)
+        media = load_media()
+        item  = next((m for m in media if m["uniqueName"] == unique_name), None)
         if not item:
             abort(404)
         file_dir  = item.get("metadata", {}).get("file", {}).get("path", "")
