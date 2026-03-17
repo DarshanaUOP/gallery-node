@@ -1182,11 +1182,6 @@
     <span class="filter-chip" data-sort="date-asc" onclick="setSort('date-asc',this)">Oldest First</span>
     <span class="filter-chip" data-sort="name" onclick="setSort('name',this)">Name</span>
     <div class="filter-sep"></div>
-    <select class="filter-select" id="filter-date-field" onchange="setDateField(this.value)">
-      <option value="modified">Modified Date</option>
-      <option value="created">Created Date</option>
-    </select>
-    <div class="filter-sep"></div>
     <select class="filter-select" id="filter-format" onchange="applyFilters()">
       <option value="">All Formats</option>
     </select>
@@ -1380,7 +1375,6 @@ let db = { media: [], albums: [] };
 let config = {};
 let currentView = 'all';      // 'all' | 'hidden' | album id
 let currentSort = 'date-desc';
-let currentDateField = 'modified';   // 'modified' | 'created'
 let showHidden = false;
 let ctxTarget = null;          // media item for context menu
 let currentAlbumId = null;
@@ -1554,15 +1548,8 @@ function applyFilters() {
 function sortMedia(arr) {
   return arr.slice().sort((a, b) => {
     if (currentSort === 'name') return a.name.localeCompare(b.name);
-    const getDate = m => {
-      const primary   = m.metadata?.date?.[currentDateField];
-      const fallback  = currentDateField === 'modified'
-        ? m.metadata?.date?.created
-        : m.metadata?.date?.modified;
-      return new Date(primary || fallback || 0);
-    };
-    const da  = getDate(a);
-    const db2 = getDate(b);
+    const da  = new Date(a.metadata?.date?.modified || a.metadata?.date?.created || 0);
+    const db2 = new Date(b.metadata?.date?.modified || b.metadata?.date?.created || 0);
     return currentSort === 'date-asc' ? da - db2 : db2 - da;
   });
 }
@@ -1601,11 +1588,8 @@ function createCard(item, idx) {
         : ''}
     ` : ''}`;
 
-  const dateIso = currentDateField === 'created'
-    ? (item.metadata?.date?.created || item.metadata?.date?.modified)
-    : (item.metadata?.date?.modified || item.metadata?.date?.created);
-  const date = dateIso
-    ? new Date(dateIso).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'})
+  const date = (item.metadata?.date?.modified || item.metadata?.date?.created)
+    ? new Date(item.metadata.date.modified || item.metadata.date.created).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'})
     : '—';
 
   const subfolder = item.metadata?.file?.subfolder;
@@ -1753,11 +1737,6 @@ function setSort(sort, el) {
   applyFilters();
 }
 
-function setDateField(field) {
-  currentDateField = field;
-  applyFilters();
-}
-
 function toggleHidden(el) {
   el.classList.toggle('on');
   showHidden = el.classList.contains('on');
@@ -1806,11 +1785,7 @@ function setupIntersectionObserver() {
       if (rect.bottom > vpTop && rect.top < vpBottom) {
         const un   = card.dataset.unique;
         const item = filteredMedia.find(m => m.uniqueName === un);
-        const primary  = item?.metadata?.date?.[currentDateField];
-        const fallback = currentDateField === 'modified'
-          ? item?.metadata?.date?.created
-          : item?.metadata?.date?.modified;
-        const iso  = primary || fallback;
+        const iso  = item?.metadata?.date?.modified || item?.metadata?.date?.created;
         const d    = iso ? new Date(iso) : null;
         if (d && !isNaN(d)) dates.push(d);
       }
