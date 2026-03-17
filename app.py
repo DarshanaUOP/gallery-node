@@ -35,8 +35,39 @@ BASE_DIR       = Path(__file__).parent
 MEDIA_JSON     = BASE_DIR / "media.json"
 DB_JSON        = BASE_DIR / "db.json"
 CONFIG_JSON    = BASE_DIR / "configuration.json"
+LOGS_DIR       = BASE_DIR / "logs"
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
+# ── logging setup ──────────────────────────────────────────────────────────────
+LOGS_DIR.mkdir(exist_ok=True)
+
+_log_formatter = logging.Formatter(
+    "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+# Console handler
+_console_handler = logging.StreamHandler(sys.stdout)
+_console_handler.setFormatter(_log_formatter)
+
+# Daily rotating file handler — one file per day: logs/log-yyyy-mm-dd.log
+from logging.handlers import TimedRotatingFileHandler
+_log_file = LOGS_DIR / f"log-{datetime.now().strftime('%Y-%m-%d')}.log"
+_file_handler = TimedRotatingFileHandler(
+    filename=str(_log_file),
+    when="midnight",        # rotate at midnight
+    interval=1,             # every 1 day
+    backupCount=30,         # keep 30 days of logs
+    encoding="utf-8",
+    utc=False,
+)
+# Rename rotated files to log-yyyy-mm-dd.log instead of the default .log.YYYY-MM-DD suffix
+_file_handler.namer = lambda name: str(
+    LOGS_DIR / ("log-" + name.rsplit(".", 1)[-1] + ".log")
+    if "." in Path(name).name else name
+)
+_file_handler.setFormatter(_log_formatter)
+
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
 log = logging.getLogger("luminary")
 
 # ── media type sets ────────────────────────────────────────────────────────────

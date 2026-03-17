@@ -1,0 +1,17 @@
+# Luminary — .gitignore
+
+# Daily log files
+logs/*.log
+
+# Thumbnail cache
+.thumb_cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# OS
+.DS_Store
+Thumbs.db
