@@ -379,14 +379,40 @@ def extract_image_metadata(filepath: str) -> dict:
 
 def load_config() -> dict:
     defaults = {
-        "supported_image_formats": list(IMAGE_FORMATS),
-        "supported_video_formats": list(VIDEO_FORMATS),
-        "thumbnail_size": 400,
-        "thumbnail_quality": 60,
-        "thumbnail_cache_path": "",
-        "lazy_load_batch": 50,
-        "show_hidden_default": False,
-        "api_port": 5000,
+        # Appearance
+        "theme":                    "dark",       # dark | light | system
+        "grid_columns":             4,            # 2 | 3 | 4 | auto
+        "card_size":                "medium",     # small | medium | large
+        "show_filename_on_card":    True,
+        "show_date_on_card":        True,
+        "show_subfolder_on_card":   True,
+        # Sorting & Filtering
+        "default_sort":             "date-desc",  # date-desc | date-asc | name
+        "default_date_field":       "modified",   # modified | created
+        "show_hidden_default":      False,
+        # Performance
+        "lazy_load_batch":          50,
+        "media_page_size":          500,
+        "thumbnail_size":           400,
+        "thumbnail_quality":        60,
+        "thumbnail_cache_path":     "",
+        # Media Types
+        "supported_image_formats":  list(IMAGE_FORMATS),
+        "supported_video_formats":  list(VIDEO_FORMATS),
+        "video_autoplay":           False,
+        "video_preload":            "metadata",   # none | metadata | auto
+        # Sync Behaviour
+        "follow_symlinks":          True,
+        "skip_hidden_dirs":         True,
+        "max_scan_depth":           0,            # 0 = unlimited
+        "dedup_method":             "both",       # path | hash | both
+        # Metadata
+        "show_gps_in_metadata":     True,
+        "extract_video_metadata":   True,
+        # Server
+        "api_port":                 5000,
+        "log_level":                "INFO",
+        "log_retention_days":       30,
     }
     cfg = load_json(CONFIG_JSON, defaults)
     for k, v in defaults.items():
@@ -427,10 +453,23 @@ def sync_library() -> dict:
             log.warning("Directory not found: %s", dir_path)
             continue
 
-        source_root = str(Path(dir_path).resolve())
+        source_root     = str(Path(dir_path).resolve())
+        follow_links    = cfg.get("follow_symlinks", True)
+        skip_hidden     = cfg.get("skip_hidden_dirs", True)
+        max_depth       = int(cfg.get("max_scan_depth", 0))   # 0 = unlimited
+        dedup_method    = cfg.get("dedup_method", "both")
+        source_depth    = source_root.rstrip("/").count("/")
         log.info("Scanning: %s → %s (recursive)", source.get("name", dir_path), source_root)
 
-        for root, dirs, files in os.walk(dir_path, followlinks=True):
+        for root, dirs, files in os.walk(dir_path, followlinks=follow_links):
+            # Skip hidden directories (names starting with .)
+            if skip_hidden:
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+            # Enforce max scan depth
+            if max_depth > 0:
+                current_depth = str(Path(root).resolve()).rstrip("/").count("/") - source_depth
+                if current_depth >= max_depth:
+                    dirs.clear()
             dirs.sort()
             for filename in sorted(files):
                 ext = Path(filename).suffix.lstrip(".").lower()
@@ -441,14 +480,18 @@ def sync_library() -> dict:
                 resolved_path = str(Path(full_path).resolve())
                 scanned += 1
 
-                if resolved_path in existing_paths:
-                    log.debug("Already indexed (path): %s", resolved_path)
-                    continue
+                if dedup_method in ("path", "both"):
+                    if resolved_path in existing_paths:
+                        log.debug("Already indexed (path): %s", resolved_path)
+                        continue
 
-                fhash = file_hash(full_path)
-                if fhash in existing_hashes:
-                    log.debug("Duplicate (hash): %s", filename)
-                    continue
+                if dedup_method in ("hash", "both"):
+                    fhash = file_hash(full_path)
+                    if fhash in existing_hashes:
+                        log.debug("Duplicate (hash): %s", filename)
+                        continue
+                else:
+                    fhash = file_hash(full_path)
 
                 media_type = "video" if is_video(full_path) else "image"
                 meta       = extract_metadata(full_path)
@@ -499,6 +542,19 @@ if FLASK_AVAILABLE:
     def api_config_get():
         """Return configuration.json from data/."""
         return jsonify(load_config())
+
+    @app.route("/api/config", methods=["POST"])
+    def api_config_post():
+        """Save updated configuration to data/configuration.json."""
+        data = request.get_json(force=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Expected a JSON object"}), 400
+        # Merge with existing — never wipe keys we don't know about
+        cfg = load_config()
+        cfg.update(data)
+        save_json(CONFIG_JSON, cfg)
+        log.info("configuration.json updated")
+        return jsonify({"ok": True})
 
     @app.route("/api/media/count", methods=["GET"])
     def api_media_count():

@@ -1017,6 +1017,123 @@
     cursor: not-allowed;
   }
 
+  /* ── SETTINGS PANEL ── */
+  .settings-section {
+    margin-bottom: 28px;
+  }
+  .settings-section-title {
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    min-height: 38px;
+  }
+  .settings-row-top { align-items: flex-start; padding-top: 10px; }
+  .settings-label {
+    font-size: 12px;
+    color: var(--text-dim);
+    flex: 1;
+    line-height: 1.5;
+  }
+  .settings-hint {
+    display: block;
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 1px;
+  }
+  .settings-select {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 5px 10px;
+    outline: none;
+    cursor: pointer;
+    flex-shrink: 0;
+    min-width: 140px;
+    transition: border-color 0.2s;
+  }
+  .settings-select:focus { border-color: var(--accent); }
+  .settings-input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 5px 10px;
+    outline: none;
+    width: 90px;
+    flex-shrink: 0;
+    transition: border-color 0.2s;
+  }
+  .settings-input-wide { width: 200px; }
+  .settings-input:focus { border-color: var(--accent); }
+  .settings-toggle {
+    width: 36px; height: 20px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    position: relative;
+    transition: background 0.2s;
+    flex-shrink: 0;
+  }
+  .settings-toggle.on { background: rgba(200,169,126,0.3); border-color: var(--accent); }
+  .settings-toggle::after {
+    content: '';
+    position: absolute;
+    width: 14px; height: 14px;
+    background: var(--text-muted);
+    border-radius: 50%;
+    top: 2px; left: 2px;
+    transition: all 0.2s;
+  }
+  .settings-toggle.on::after { left: 18px; background: var(--accent); }
+  /* Format chips */
+  .settings-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    justify-content: flex-end;
+    max-width: 280px;
+  }
+  .settings-chip {
+    padding: 3px 9px;
+    border-radius: 12px;
+    font-size: 10px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    transition: all 0.15s;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    user-select: none;
+  }
+  .settings-chip.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-dim);
+  }
+
+  /* Card visibility toggles from Settings */
+  body.hide-card-filename .item-name     { display: none; }
+  body.hide-card-date     .item-date     { display: none; }
+  body.hide-card-subfolder .item-path    { display: none; }
+
   /* ── SCROLL DATE INDICATOR ── */
   #scroll-date-pill {
     position: fixed;
@@ -1153,6 +1270,9 @@
     <div style="font-size:10px;color:var(--text-muted);line-height:1.6">
       <div id="footer-count">— photos indexed</div>
       <div id="footer-albums">— albums</div>
+    </div>
+    <div style="margin-top:12px">
+      <button class="btn btn-ghost" style="width:100%;justify-content:center;font-size:11px" onclick="openSettings()">⚙ Settings</button>
     </div>
   </div>
 </aside>
@@ -1343,6 +1463,209 @@
   </div>
 </div>
 
+<!-- SETTINGS PANEL -->
+<div id="settings-overlay" class="modal-overlay">
+  <div id="settings-panel" class="modal" style="position:relative;width:640px;max-width:96vw;max-height:88vh;overflow-y:auto">
+    <button class="modal-close" onclick="closeSettings()">✕</button>
+    <h2 style="margin-bottom:6px">Settings</h2>
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:24px">Changes are saved immediately to <code style="background:var(--surface2);padding:1px 5px;border-radius:3px">data/configuration.json</code></p>
+
+    <!-- ── APPEARANCE ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Appearance</div>
+
+      <div class="settings-row">
+        <div class="settings-label">Theme</div>
+        <select class="settings-select" id="s-theme">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+          <option value="system">System</option>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">Grid Columns</div>
+        <select class="settings-select" id="s-grid-columns">
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="auto">Auto</option>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">Card Size</div>
+        <select class="settings-select" id="s-card-size">
+          <option value="small">Small</option>
+          <option value="medium">Medium</option>
+          <option value="large">Large</option>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">Show filename on cards</div>
+        <div class="settings-toggle" id="s-show-filename" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Show date on cards</div>
+        <div class="settings-toggle" id="s-show-date" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Show subfolder path on cards</div>
+        <div class="settings-toggle" id="s-show-subfolder" onclick="settingsToggle(this)"></div>
+      </div>
+    </div>
+
+    <!-- ── SORTING & FILTERING ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Sorting &amp; Filtering</div>
+
+      <div class="settings-row">
+        <div class="settings-label">Default sort order</div>
+        <select class="settings-select" id="s-default-sort">
+          <option value="date-desc">Newest First</option>
+          <option value="date-asc">Oldest First</option>
+          <option value="name">Name</option>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">Default date field</div>
+        <select class="settings-select" id="s-default-date-field">
+          <option value="modified">Modified Date</option>
+          <option value="created">Created Date</option>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">Show hidden media by default</div>
+        <div class="settings-toggle" id="s-show-hidden-default" onclick="settingsToggle(this)"></div>
+      </div>
+    </div>
+
+    <!-- ── PERFORMANCE ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Performance</div>
+
+      <div class="settings-row">
+        <div class="settings-label">Lazy load batch size <span class="settings-hint">cards per scroll batch</span></div>
+        <input class="settings-input" id="s-lazy-load-batch" type="number" min="10" max="200" step="10">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Media page size <span class="settings-hint">items per API page</span></div>
+        <input class="settings-input" id="s-media-page-size" type="number" min="50" max="2000" step="50">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Thumbnail size <span class="settings-hint">px max-side</span></div>
+        <input class="settings-input" id="s-thumbnail-size" type="number" min="100" max="800" step="50">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Thumbnail quality <span class="settings-hint">JPEG 1–95</span></div>
+        <input class="settings-input" id="s-thumbnail-quality" type="number" min="1" max="95" step="5">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Thumbnail cache path <span class="settings-hint">leave empty for default</span></div>
+        <input class="settings-input settings-input-wide" id="s-thumbnail-cache-path" type="text" placeholder="e.g. /tmp/luminary_cache">
+      </div>
+    </div>
+
+    <!-- ── MEDIA TYPES ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Media Types</div>
+
+      <div class="settings-row settings-row-top">
+        <div class="settings-label">Image formats</div>
+        <div class="settings-chips" id="s-image-formats"></div>
+      </div>
+      <div class="settings-row settings-row-top">
+        <div class="settings-label">Video formats</div>
+        <div class="settings-chips" id="s-video-formats"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Auto-play video in lightbox</div>
+        <div class="settings-toggle" id="s-video-autoplay" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Video preload</div>
+        <select class="settings-select" id="s-video-preload">
+          <option value="none">None</option>
+          <option value="metadata">Metadata only</option>
+          <option value="auto">Auto</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- ── SYNC BEHAVIOUR ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Sync Behaviour</div>
+
+      <div class="settings-row">
+        <div class="settings-label">Follow symlinks</div>
+        <div class="settings-toggle" id="s-follow-symlinks" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Skip hidden directories <span class="settings-hint">folders starting with .</span></div>
+        <div class="settings-toggle" id="s-skip-hidden-dirs" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Max scan depth <span class="settings-hint">0 = unlimited</span></div>
+        <input class="settings-input" id="s-max-scan-depth" type="number" min="0" max="20" step="1">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Duplicate detection</div>
+        <select class="settings-select" id="s-dedup-method">
+          <option value="both">Path + Hash (safest)</option>
+          <option value="path">Path only (faster)</option>
+          <option value="hash">Hash only (cross-dir)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- ── METADATA ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Metadata</div>
+
+      <div class="settings-row">
+        <div class="settings-label">Show GPS coordinates in metadata panel</div>
+        <div class="settings-toggle" id="s-show-gps" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Extract video metadata via ffprobe</div>
+        <div class="settings-toggle" id="s-extract-video-meta" onclick="settingsToggle(this)"></div>
+      </div>
+    </div>
+
+    <!-- ── SERVER ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Server</div>
+
+      <div class="settings-row">
+        <div class="settings-label">API port <span class="settings-hint">requires restart</span></div>
+        <input class="settings-input" id="s-api-port" type="number" min="1024" max="65535">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Log level</div>
+        <select class="settings-select" id="s-log-level">
+          <option value="DEBUG">Debug</option>
+          <option value="INFO">Info</option>
+          <option value="WARNING">Warning</option>
+          <option value="ERROR">Error</option>
+        </select>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Log retention days</div>
+        <input class="settings-input" id="s-log-retention" type="number" min="1" max="365">
+      </div>
+    </div>
+
+    <div class="modal-actions" style="position:sticky;bottom:0;background:var(--surface);padding:16px 0 4px;margin-top:8px;border-top:1px solid var(--border)">
+      <div id="settings-status" style="font-size:11px;color:var(--text-muted);flex:1;line-height:1.6"></div>
+      <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button class="btn btn-accent" onclick="saveSettings()">Save Settings</button>
+    </div>
+  </div>
+</div>
+
 <!-- SYNC OVERLAY -->
 <div id="sync-overlay">
   <div class="sync-card">
@@ -1380,7 +1703,6 @@ let ctxTarget = null;          // media item for context menu
 let currentAlbumId = null;
 let filteredMedia = [];
 let renderedCount = 0;
-const BATCH = 50;
 let lbIndex = 0;
 
 // ─────────────────────────────────────────────
@@ -1406,6 +1728,7 @@ async function loadConfig() {
       showHidden = true;
       document.getElementById('show-hidden-toggle').classList.add('on');
     }
+    applyConfigToUI(config);
   } catch {
     config = { lazy_load_batch: 50, show_hidden_default: false };
   }
@@ -1413,25 +1736,22 @@ async function loadConfig() {
 
 async function loadDB() {
   try {
-    // Load first page — albums come in full, media comes paginated
-    const r = await fetch(`${API_BASE}/api/db?offset=0&limit=500`);
+    const pageSize = config.media_page_size || 500;
+    const r = await fetch(`${API_BASE}/api/db?offset=0&limit=${pageSize}`);
     const data = await r.json();
     db.media  = data.media  || [];
     db.albums = data.albums || [];
     db._total    = data.total    || db.media.length;
     db._hasMore  = data.has_more || false;
     db._offset   = db.media.length;
-    // Kick off background loading of remaining pages without blocking UI
     if (db._hasMore) _loadRemainingMedia();
   } catch {
     db = { media: [], albums: [], _total: 0, _hasMore: false, _offset: 0 };
   }
 }
 
-// Load remaining media pages in the background, merging into db.media
-// and doing a soft refresh after each page so filters/dropdowns stay current.
 async function _loadRemainingMedia() {
-  const LIMIT = 500;
+  const LIMIT = config.media_page_size || 500;
   while (db._hasMore) {
     try {
       const r = await fetch(`${API_BASE}/api/media?offset=${db._offset}&limit=${LIMIT}`);
@@ -1441,7 +1761,6 @@ async function _loadRemainingMedia() {
       db._total   = data.total;
       db._hasMore = data.has_more;
       db._offset  = db.media.length;
-      // Refresh dropdowns and stats without rebuilding the visible grid
       softRefresh();
     } catch {
       break;
@@ -1582,6 +1901,7 @@ function sortMedia(arr) {
 }
 
 function renderBatch() {
+  const BATCH = config.lazy_load_batch || 50;
   const grid = document.getElementById('gallery-grid');
   const end = Math.min(renderedCount + BATCH, filteredMedia.length);
   for (let i = renderedCount; i < end; i++) {
@@ -1940,7 +2260,10 @@ function renderLightbox() {
 
     lb.innerHTML = `
       <div id="lb-video-wrap">
-        <video id="lb-video" controls preload="metadata" playsinline
+        <video id="lb-video" controls
+               preload="${config.video_preload || 'metadata'}"
+               ${config.video_autoplay ? 'autoplay muted' : ''}
+               playsinline
                onerror="document.getElementById('lb-video-err').style.display='flex'">
           <source src="${videoSrc}" type="${videoMime}">
         </video>
@@ -2270,6 +2593,210 @@ function toast(msg, type = 'info') {
   el.innerHTML = `<span>${icons[type] || '◆'}</span> ${escHtml(msg)}`;
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+// ─────────────────────────────────────────────
+//  SETTINGS PANEL
+// ─────────────────────────────────────────────
+let _settingsCurrent = {};   // live copy while panel is open
+
+const ALL_IMAGE_FORMATS = ['jpg','jpeg','png','heic','heif','webp','tiff','bmp','gif'];
+const ALL_VIDEO_FORMATS = ['mp4','mov','avi','mkv','webm','m4v','3gp','wmv','flv','ts','mts'];
+
+async function openSettings() {
+  try {
+    const r = await fetch(`${API_BASE}/api/config`);
+    _settingsCurrent = r.ok ? await r.json() : {};
+  } catch { _settingsCurrent = {}; }
+
+  _settingsPopulate(_settingsCurrent);
+  document.getElementById('settings-status').textContent = '';
+  document.getElementById('settings-overlay').classList.add('open');
+}
+
+function closeSettings() {
+  document.getElementById('settings-overlay').classList.remove('open');
+}
+
+function _settingsPopulate(c) {
+  // Helpers
+  const sel  = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? el.options[0]?.value; };
+  const tog  = (id, val) => { const el = document.getElementById(id); if (el) el.classList.toggle('on', !!val); };
+  const num  = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ''; };
+  const txt  = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ''; };
+
+  // Appearance
+  sel('s-theme',           c.theme            ?? 'dark');
+  sel('s-grid-columns',    String(c.grid_columns ?? 4));
+  sel('s-card-size',       c.card_size         ?? 'medium');
+  tog('s-show-filename',   c.show_filename_on_card  ?? true);
+  tog('s-show-date',       c.show_date_on_card      ?? true);
+  tog('s-show-subfolder',  c.show_subfolder_on_card ?? true);
+  // Sorting
+  sel('s-default-sort',        c.default_sort       ?? 'date-desc');
+  sel('s-default-date-field',  c.default_date_field ?? 'modified');
+  tog('s-show-hidden-default', c.show_hidden_default ?? false);
+  // Performance
+  num('s-lazy-load-batch',      c.lazy_load_batch      ?? 50);
+  num('s-media-page-size',      c.media_page_size      ?? 500);
+  num('s-thumbnail-size',       c.thumbnail_size       ?? 400);
+  num('s-thumbnail-quality',    c.thumbnail_quality    ?? 60);
+  txt('s-thumbnail-cache-path', c.thumbnail_cache_path ?? '');
+  // Media types — chips
+  _buildFormatChips('s-image-formats', ALL_IMAGE_FORMATS, c.supported_image_formats ?? ALL_IMAGE_FORMATS);
+  _buildFormatChips('s-video-formats', ALL_VIDEO_FORMATS, c.supported_video_formats ?? ALL_VIDEO_FORMATS);
+  sel('s-video-preload',   c.video_preload   ?? 'metadata');
+  tog('s-video-autoplay',  c.video_autoplay  ?? false);
+  // Sync
+  tog('s-follow-symlinks',  c.follow_symlinks  ?? true);
+  tog('s-skip-hidden-dirs', c.skip_hidden_dirs ?? true);
+  num('s-max-scan-depth',   c.max_scan_depth   ?? 0);
+  sel('s-dedup-method',     c.dedup_method     ?? 'both');
+  // Metadata
+  tog('s-show-gps',           c.show_gps_in_metadata   ?? true);
+  tog('s-extract-video-meta', c.extract_video_metadata ?? true);
+  // Server
+  num('s-api-port',      c.api_port         ?? 5000);
+  sel('s-log-level',     c.log_level        ?? 'INFO');
+  num('s-log-retention', c.log_retention_days ?? 30);
+}
+
+function _buildFormatChips(containerId, allFormats, activeFormats) {
+  const active = new Set((activeFormats || []).map(f => f.toLowerCase()));
+  const wrap   = document.getElementById(containerId);
+  wrap.innerHTML = '';
+  allFormats.forEach(fmt => {
+    const chip = document.createElement('span');
+    chip.className = 'settings-chip' + (active.has(fmt) ? ' active' : '');
+    chip.textContent = fmt;
+    chip.onclick = () => chip.classList.toggle('active');
+    wrap.appendChild(chip);
+  });
+}
+
+function _getToggle(id)   { return document.getElementById(id)?.classList.contains('on') ?? false; }
+function _getSelect(id)   { return document.getElementById(id)?.value ?? ''; }
+function _getNumber(id)   { return parseInt(document.getElementById(id)?.value ?? '0', 10); }
+function _getText(id)     { return document.getElementById(id)?.value?.trim() ?? ''; }
+function _getChips(id)    { return [...document.querySelectorAll(`#${id} .settings-chip.active`)].map(c => c.textContent); }
+
+async function saveSettings() {
+  const payload = {
+    // Appearance
+    theme:                    _getSelect('s-theme'),
+    grid_columns:             _getSelect('s-grid-columns') === 'auto' ? 'auto' : parseInt(_getSelect('s-grid-columns')),
+    card_size:                _getSelect('s-card-size'),
+    show_filename_on_card:    _getToggle('s-show-filename'),
+    show_date_on_card:        _getToggle('s-show-date'),
+    show_subfolder_on_card:   _getToggle('s-show-subfolder'),
+    // Sorting
+    default_sort:             _getSelect('s-default-sort'),
+    default_date_field:       _getSelect('s-default-date-field'),
+    show_hidden_default:      _getToggle('s-show-hidden-default'),
+    // Performance
+    lazy_load_batch:          _getNumber('s-lazy-load-batch'),
+    media_page_size:          _getNumber('s-media-page-size'),
+    thumbnail_size:           _getNumber('s-thumbnail-size'),
+    thumbnail_quality:        _getNumber('s-thumbnail-quality'),
+    thumbnail_cache_path:     _getText('s-thumbnail-cache-path'),
+    // Media types
+    supported_image_formats:  _getChips('s-image-formats'),
+    supported_video_formats:  _getChips('s-video-formats'),
+    video_autoplay:           _getToggle('s-video-autoplay'),
+    video_preload:            _getSelect('s-video-preload'),
+    // Sync
+    follow_symlinks:          _getToggle('s-follow-symlinks'),
+    skip_hidden_dirs:         _getToggle('s-skip-hidden-dirs'),
+    max_scan_depth:           _getNumber('s-max-scan-depth'),
+    dedup_method:             _getSelect('s-dedup-method'),
+    // Metadata
+    show_gps_in_metadata:     _getToggle('s-show-gps'),
+    extract_video_metadata:   _getToggle('s-extract-video-meta'),
+    // Server
+    api_port:                 _getNumber('s-api-port'),
+    log_level:                _getSelect('s-log-level'),
+    log_retention_days:       _getNumber('s-log-retention'),
+  };
+
+  const status = document.getElementById('settings-status');
+  try {
+    const r = await fetch(`${API_BASE}/api/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error('Server returned ' + r.status);
+    // Apply settings that take effect immediately (no restart needed)
+    _applyImmediateSettings(payload);
+    config = { ...config, ...payload };
+    closeSettings();
+    toast('Settings saved', 'success');
+  } catch {
+    status.textContent = '⚠ Could not save — is app.py running?';
+    status.style.color = 'var(--danger)';
+  }
+}
+
+function _applyImmediateSettings(s) {
+  // Grid columns
+  const grid = document.getElementById('gallery-grid');
+  if (s.grid_columns === 'auto') {
+    grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(180px, 1fr))';
+  } else {
+    grid.style.gridTemplateColumns = `repeat(${s.grid_columns}, 1fr)`;
+  }
+
+  // Card size → row height
+  const heights = { small: '160px', medium: '220px', large: '300px' };
+  grid.style.gridAutoRows = heights[s.card_size] || '220px';
+
+  // Show/hide card overlay elements — toggle CSS class on body
+  document.body.classList.toggle('hide-card-filename',  !s.show_filename_on_card);
+  document.body.classList.toggle('hide-card-date',      !s.show_date_on_card);
+  document.body.classList.toggle('hide-card-subfolder', !s.show_subfolder_on_card);
+
+  // Theme
+  _applyTheme(s.theme);
+
+  // Sort chips — sync active chip to new default if not already changed
+  if (s.default_sort !== currentSort) {
+    const chip = document.querySelector(`.filter-chip[data-sort="${s.default_sort}"]`);
+    if (chip) setSort(s.default_sort, chip);
+  }
+
+  // Show hidden
+  if (s.show_hidden_default !== showHidden) {
+    showHidden = s.show_hidden_default;
+    const tog = document.getElementById('show-hidden-toggle');
+    tog.classList.toggle('on', showHidden);
+    applyFilters();
+  }
+}
+
+function _applyTheme(theme) {
+  const root = document.documentElement;
+  const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  if (isDark) {
+    root.style.setProperty('--bg',      '#0a0a0b');
+    root.style.setProperty('--surface', '#111113');
+    root.style.setProperty('--surface2','#1a1a1e');
+    root.style.setProperty('--text',    '#e8e6e0');
+    root.style.setProperty('--text-dim','#9e9b94');
+    root.style.setProperty('--text-muted','#6b6860');
+  } else {
+    root.style.setProperty('--bg',      '#f5f4f0');
+    root.style.setProperty('--surface', '#ffffff');
+    root.style.setProperty('--surface2','#eeecea');
+    root.style.setProperty('--text',    '#1a1a1c');
+    root.style.setProperty('--text-dim','#4a4845');
+    root.style.setProperty('--text-muted','#8a8784');
+  }
+}
+
+// Apply settings on boot from loaded config
+function applyConfigToUI(cfg) {
+  if (!cfg) return;
+  _applyImmediateSettings(cfg);
 }
 
 // ─────────────────────────────────────────────
