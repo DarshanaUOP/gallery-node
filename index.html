@@ -1413,12 +1413,39 @@ async function loadConfig() {
 
 async function loadDB() {
   try {
-    const r = await fetch(`${API_BASE}/api/db`);
-    db = await r.json();
-    if (!db.media) db.media = [];
-    if (!db.albums) db.albums = [];
+    // Load first page — albums come in full, media comes paginated
+    const r = await fetch(`${API_BASE}/api/db?offset=0&limit=500`);
+    const data = await r.json();
+    db.media  = data.media  || [];
+    db.albums = data.albums || [];
+    db._total    = data.total    || db.media.length;
+    db._hasMore  = data.has_more || false;
+    db._offset   = db.media.length;
+    // Kick off background loading of remaining pages without blocking UI
+    if (db._hasMore) _loadRemainingMedia();
   } catch {
-    db = { media: [], albums: [] };
+    db = { media: [], albums: [], _total: 0, _hasMore: false, _offset: 0 };
+  }
+}
+
+// Load remaining media pages in the background, merging into db.media
+// and doing a soft refresh after each page so filters/dropdowns stay current.
+async function _loadRemainingMedia() {
+  const LIMIT = 500;
+  while (db._hasMore) {
+    try {
+      const r = await fetch(`${API_BASE}/api/media?offset=${db._offset}&limit=${LIMIT}`);
+      if (!r.ok) break;
+      const data = await r.json();
+      db.media.push(...(data.items || []));
+      db._total   = data.total;
+      db._hasMore = data.has_more;
+      db._offset  = db.media.length;
+      // Refresh dropdowns and stats without rebuilding the visible grid
+      softRefresh();
+    } catch {
+      break;
+    }
   }
 }
 
@@ -1628,7 +1655,10 @@ function updateStats() {
 }
 
 function updateFooter() {
-  document.getElementById('footer-count').textContent = `${db.media.length} photos indexed`;
+  const total = db._total || db.media.length;
+  const loaded = db.media.length;
+  const suffix = db._hasMore ? ` (${loaded} loaded)` : '';
+  document.getElementById('footer-count').textContent = `${total} photos indexed${suffix}`;
   document.getElementById('footer-albums').textContent = `${db.albums.length} albums`;
 }
 
@@ -2217,13 +2247,14 @@ async function triggerSync() {
 //  PERSIST (saves to localStorage as fallback)
 // ─────────────────────────────────────────────
 function saveDB() {
-  // Post to backend if available, else store in memory/localStorage for demo
+  // POST the full in-memory state back to the server
+  // db.media is always complete in memory after _loadRemainingMedia finishes;
+  // for in-flight saves, the server merges hashes so partial saves are safe.
   fetch(`${API_BASE}/api/db`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(db)
+    body: JSON.stringify({ media: db.media, albums: db.albums })
   }).catch(() => {});
-  // Always keep in-memory state consistent
   updateFooter();
   renderAlbumNav();
   updateStats();

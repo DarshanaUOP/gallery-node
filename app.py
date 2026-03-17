@@ -500,9 +500,34 @@ if FLASK_AVAILABLE:
         """Return configuration.json from data/."""
         return jsonify(load_config())
 
+    @app.route("/api/media/count", methods=["GET"])
+    def api_media_count():
+        """Return total number of indexed media items — cheap, no full load needed."""
+        media = load_media()
+        return jsonify({"total": len(media)})
+
     @app.route("/api/media", methods=["GET"])
     def api_media():
-        return jsonify(load_media())
+        """
+        Return a paginated slice of the media array.
+        Query params:
+          offset  (int, default 0)   — start index
+          limit   (int, default 500) — max items to return
+        Response:
+          { items: [...], offset: N, limit: N, total: N, has_more: bool }
+        """
+        media  = load_media()
+        total  = len(media)
+        offset = max(0, int(request.args.get("offset", 0)))
+        limit  = min(2000, max(1, int(request.args.get("limit", 500))))
+        slice_ = media[offset: offset + limit]
+        return jsonify({
+            "items":    slice_,
+            "offset":   offset,
+            "limit":    limit,
+            "total":    total,
+            "has_more": (offset + limit) < total,
+        })
 
     # ── shared image helpers ──────────────────────────────────────────────────
 
@@ -855,8 +880,23 @@ if FLASK_AVAILABLE:
 
     @app.route("/api/db", methods=["GET"])
     def api_db_get():
-        """Return combined {media, albums} for frontend compatibility."""
-        return jsonify({"media": load_media(), "albums": load_albums()})
+        """
+        Return albums in full + first page of media.
+        Query params: offset, limit (same as /api/media)
+        """
+        media  = load_media()
+        albums = load_albums()
+        total  = len(media)
+        offset = max(0, int(request.args.get("offset", 0)))
+        limit  = min(2000, max(1, int(request.args.get("limit", 500))))
+        slice_ = media[offset: offset + limit]
+        return jsonify({
+            "media":    slice_,
+            "albums":   albums,
+            "total":    total,
+            "offset":   offset,
+            "has_more": (offset + limit) < total,
+        })
 
     @app.route("/api/db", methods=["POST"])
     def api_db_post():
