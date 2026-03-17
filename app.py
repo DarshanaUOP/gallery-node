@@ -34,6 +34,7 @@ except ImportError:
 BASE_DIR       = Path(__file__).parent
 MEDIA_JSON     = BASE_DIR / "media.json"
 DB_JSON        = BASE_DIR / "db.json"
+ALBUMS_JSON    = BASE_DIR / "albums.json"
 CONFIG_JSON    = BASE_DIR / "configuration.json"
 LOGS_DIR       = BASE_DIR / "logs"
 
@@ -96,6 +97,22 @@ def save_json(path: Path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, default=str)
     log.info("Saved %s", path)
+
+def load_media() -> list:
+    """Return the media array from db.json."""
+    return load_json(DB_JSON, [])
+
+def save_media(media: list):
+    """Write only the media array to db.json."""
+    save_json(DB_JSON, media)
+
+def load_albums() -> list:
+    """Return the albums array from albums.json."""
+    return load_json(ALBUMS_JSON, [])
+
+def save_albums(albums: list):
+    """Write the albums array to albums.json."""
+    save_json(ALBUMS_JSON, albums)
 
 def file_hash(filepath: str) -> str:
     """MD5 hash of first 64 KB for fast deduplication."""
@@ -342,10 +359,7 @@ def sync_library() -> dict:
     """Scan configured directories and update db.json with new media."""
     cfg      = load_config()
     sources  = load_json(MEDIA_JSON, [])
-    db       = load_json(DB_JSON, {"media": [], "albums": []})
-
-    if "media"  not in db: db["media"]  = []
-    if "albums" not in db: db["albums"] = []
+    media    = load_media()
 
     supported = (
         {f.lower() for f in cfg.get("supported_image_formats", [])} |
@@ -353,9 +367,9 @@ def sync_library() -> dict:
     )
 
     # Build lookup sets — use resolved absolute paths for reliable dedup
-    existing_hashes = {m.get("hash") for m in db["media"] if m.get("hash")}
+    existing_hashes = {m.get("hash") for m in media if m.get("hash")}
     existing_paths  = set()
-    for m in db["media"]:
+    for m in media:
         file_meta = m.get("metadata", {}).get("file", {})
         dir_part  = file_meta.get("path", "")
         name_part = m.get("name", "")
@@ -378,9 +392,7 @@ def sync_library() -> dict:
         source_root = str(Path(dir_path).resolve())
         log.info("Scanning: %s → %s (recursive)", source.get("name", dir_path), source_root)
 
-        # os.walk recurses into ALL subdirectories automatically
         for root, dirs, files in os.walk(dir_path, followlinks=True):
-            # Sort dirs for deterministic order
             dirs.sort()
             for filename in sorted(files):
                 ext = Path(filename).suffix.lstrip(".").lower()
@@ -391,30 +403,22 @@ def sync_library() -> dict:
                 resolved_path = str(Path(full_path).resolve())
                 scanned += 1
 
-                # Dedup by resolved absolute path (catches symlinks, trailing slash variants)
                 if resolved_path in existing_paths:
                     log.debug("Already indexed (path): %s", resolved_path)
                     continue
 
-                # Dedup by hash (catches duplicates in different directories)
                 fhash = file_hash(full_path)
                 if fhash in existing_hashes:
                     log.debug("Duplicate (hash): %s", filename)
                     continue
 
-                # New file — extract and index
                 media_type = "video" if is_video(full_path) else "image"
                 meta       = extract_metadata(full_path)
-
-                # Store the actual directory this file lives in (with trailing sep)
-                meta["file"]["path"] = str(Path(full_path).parent) + os.sep
-
-                # Store path relative to the source root for display/hierarchy
+                meta["file"]["path"]          = str(Path(full_path).parent) + os.sep
                 try:
                     rel = str(Path(full_path).relative_to(source_root))
                     meta["file"]["relative_path"] = rel
                     meta["file"]["source_root"]   = source_root
-                    # Subfolder relative to source root (empty string if file is at root level)
                     rel_dir = str(Path(rel).parent)
                     meta["file"]["subfolder"] = "" if rel_dir == "." else rel_dir
                 except ValueError:
@@ -430,15 +434,15 @@ def sync_library() -> dict:
                     "isHidden":   False,
                     "metadata":   meta,
                 }
-                db["media"].append(entry)
+                media.append(entry)
                 existing_hashes.add(fhash)
                 existing_paths.add(resolved_path)
                 added += 1
                 log.info("Indexed [%s]: %s", media_type, meta["file"].get("relative_path", filename))
 
-    save_json(DB_JSON, db)
-    log.info("Sync complete — scanned %d, added %d, total %d", scanned, added, len(db["media"]))
-    return {"added": added, "scanned": scanned, "total": len(db["media"])}
+    save_media(media)
+    log.info("Sync complete — scanned %d, added %d, total %d", scanned, added, len(media))
+    return {"added": added, "scanned": scanned, "total": len(media)}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -775,8 +779,7 @@ if FLASK_AVAILABLE:
 
     @app.route("/api/albums", methods=["GET"])
     def api_albums():
-        db = load_json(DB_JSON, {"media": [], "albums": []})
-        return jsonify(db.get("albums", []))
+        return jsonify(load_albums())
 
     @app.route("/api/locations", methods=["GET"])
     def api_locations_get():
@@ -790,7 +793,6 @@ if FLASK_AVAILABLE:
         data = request.get_json(force=True)
         if not isinstance(data, list):
             return jsonify({"error": "Expected a JSON array"}), 400
-        # Sanitise: ensure every entry has at minimum a path key
         cleaned = []
         for entry in data:
             if not isinstance(entry, dict) or not entry.get("path", "").strip():
@@ -811,58 +813,65 @@ if FLASK_AVAILABLE:
 
     @app.route("/api/db", methods=["GET"])
     def api_db_get():
-        db = load_json(DB_JSON, {"media": [], "albums": []})
-        return jsonify(db)
+        """Return combined {media, albums} for frontend compatibility."""
+        return jsonify({"media": load_media(), "albums": load_albums()})
 
     @app.route("/api/db", methods=["POST"])
     def api_db_post():
-        """Receive updated db from frontend (albums, hidden flags, etc.)."""
+        """Accept {media, albums} from frontend and save to separate files."""
         data = request.get_json(force=True)
         if not data:
             return jsonify({"error": "No data"}), 400
-        # Preserve hashes from existing records
-        existing = load_json(DB_JSON, {"media": [], "albums": []})
-        hash_map = {m["uniqueName"]: m.get("hash") for m in existing.get("media", [])}
-        for m in data.get("media", []):
-            if m.get("uniqueName") in hash_map:
-                m.setdefault("hash", hash_map[m["uniqueName"]])
-        save_json(DB_JSON, data)
+
+        # Save media — preserve hashes
+        if "media" in data:
+            existing = load_media()
+            hash_map = {m["uniqueName"]: m.get("hash") for m in existing}
+            for m in data["media"]:
+                if m.get("uniqueName") in hash_map:
+                    m.setdefault("hash", hash_map[m["uniqueName"]])
+            save_media(data["media"])
+
+        # Save albums separately
+        if "albums" in data:
+            save_albums(data["albums"])
+
         return jsonify({"ok": True})
 
     @app.route("/api/album/create", methods=["POST"])
     def api_album_create():
-        body = request.get_json(force=True) or {}
-        name = body.get("name", "Untitled")
-        db = load_json(DB_JSON, {"media": [], "albums": []})
-        album = {"name": name, "id": "album_" + str(uuid.uuid4())[:8], "media": []}
-        db.setdefault("albums", []).append(album)
-        save_json(DB_JSON, db)
+        body   = request.get_json(force=True) or {}
+        name   = body.get("name", "Untitled")
+        albums = load_albums()
+        album  = {"name": name, "id": "album_" + str(uuid.uuid4())[:8], "media": []}
+        albums.append(album)
+        save_albums(albums)
         return jsonify(album)
 
     @app.route("/api/album/add", methods=["POST"])
     def api_album_add():
-        body = request.get_json(force=True) or {}
-        album_id   = body.get("albumId")
+        body        = request.get_json(force=True) or {}
+        album_id    = body.get("albumId")
         unique_name = body.get("uniqueName")
-        db = load_json(DB_JSON, {"media": [], "albums": []})
-        for a in db.get("albums", []):
+        albums      = load_albums()
+        for a in albums:
             if a["id"] == album_id:
                 if unique_name not in a["media"]:
                     a["media"].append(unique_name)
-                save_json(DB_JSON, db)
+                save_albums(albums)
                 return jsonify({"ok": True})
         return jsonify({"error": "Album not found"}), 404
 
     @app.route("/api/media/hide", methods=["POST"])
     def api_media_hide():
-        body = request.get_json(force=True) or {}
+        body        = request.get_json(force=True) or {}
         unique_name = body.get("uniqueName")
         hidden      = body.get("hidden", True)
-        db = load_json(DB_JSON, {"media": [], "albums": []})
-        for m in db.get("media", []):
+        media       = load_media()
+        for m in media:
             if m["uniqueName"] == unique_name:
                 m["isHidden"] = hidden
-                save_json(DB_JSON, db)
+                save_media(media)
                 return jsonify({"ok": True})
         return jsonify({"error": "Not found"}), 404
 
