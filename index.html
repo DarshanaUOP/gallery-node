@@ -586,14 +586,17 @@
 
   #lb-content {
     flex: 1;
-    min-height: 0;              /* critical — lets flex child shrink below content size */
+    min-height: 0;
     width: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
     position: relative;
     overflow: hidden;
+    cursor: default;
   }
+  #lb-content.zoomed   { cursor: grab; }
+  #lb-content.panning  { cursor: grabbing; }
 
   /* The blurred thumb — fills the content area */
   #lb-thumb {
@@ -604,9 +607,10 @@
     height: auto;
     object-fit: contain;
     border-radius: 4px;
+    pointer-events: none;
   }
 
-  /* Full-res image overlaid on top, same box */
+  /* Full-res image — zoom/pan transform applied here */
   #lb-full {
     position: absolute;
     inset: 0;
@@ -617,6 +621,48 @@
     height: auto;
     object-fit: contain;
     border-radius: 4px;
+    transform-origin: center center;
+    transition: transform 0.15s ease, opacity 0.35s;
+    will-change: transform;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
+
+  /* Zoom controls bar — hidden until full image loads */
+  #lb-zoom-bar {
+    display: none;
+    align-items: center;
+    gap: 4px;
+    background: rgba(15,15,18,0.82);
+    border: 1px solid var(--border-hover);
+    border-radius: 20px;
+    padding: 4px 10px;
+    backdrop-filter: blur(10px);
+    flex-shrink: 0;
+    margin-top: 8px;
+    user-select: none;
+  }
+  #lb-zoom-bar.visible { display: flex; }
+  .lb-zoom-btn {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 16px;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+    padding: 0;
+    line-height: 1;
+  }
+  .lb-zoom-btn:hover { background: rgba(255,255,255,0.1); color: var(--text); }
+  #lb-zoom-level {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 40px;
+    text-align: center;
   }
 
   /* Video wrapper — must be constrained so controls stay on screen */
@@ -1365,6 +1411,13 @@
 <div id="lightbox">
   <button id="lb-close" onclick="closeLightbox()">✕</button>
   <div id="lb-content"></div>
+  <div id="lb-zoom-bar">
+    <button class="lb-zoom-btn" id="lb-zoom-out" onclick="lbZoom(-0.25)" title="Zoom out (−)">−</button>
+    <span id="lb-zoom-level">100%</span>
+    <button class="lb-zoom-btn" id="lb-zoom-in"  onclick="lbZoom(+0.25)" title="Zoom in (+)">+</button>
+    <button class="lb-zoom-btn" id="lb-zoom-fit" onclick="lbZoomReset()" title="Fit to screen">⊡</button>
+    <button class="lb-zoom-btn" id="lb-zoom-100" onclick="lbZoom100()" title="Actual size (1:1)">1:1</button>
+  </div>
   <div id="lb-info">
     <div class="lb-name" id="lb-name"></div>
     <div class="lb-meta" id="lb-meta"></div>
@@ -2244,20 +2297,18 @@ function renderLightbox() {
   const lb   = document.getElementById('lb-content');
   const name = escHtml(item.name);
 
+  // Reset zoom state on every navigation
+  lbZoomReset(true);
+  document.getElementById('lb-zoom-bar').classList.remove('visible');
+
   if (item.type === 'video') {
-    // ── Video: native <video> with range-streaming src ──────────────────────
-    // Pause & clear any previous video first to release network resources
     const prev = lb.querySelector('video');
     if (prev) { prev.pause(); prev.src = ''; prev.load(); }
-
     const videoSrc  = `${API_BASE}/api/video/${encodeURIComponent(item.uniqueName)}`;
     const videoMime = _videoMime(item.name);
     const ext       = item.name.split('.').pop().toLowerCase();
-
-    // Formats browsers can't decode natively
     const unsupported = ['avi','mkv','wmv','flv','ts','mts'];
     const needsWarning = unsupported.includes(ext);
-
     lb.innerHTML = `
       <div id="lb-video-wrap">
         <video id="lb-video" controls
@@ -2280,16 +2331,18 @@ function renderLightbox() {
           ⚠ .${ext.toUpperCase()} may not play in browsers — MP4 or WebM recommended</div>` : ''}
       </div>`;
   } else {
-    // ── Image: blurred thumb → full progressive swap ─────────────────────────
     lb.innerHTML = `
       <img id="lb-thumb" src="${thumbUrl(item.uniqueName)}" alt="${name}"
            style="filter:blur(12px);transform:scale(1.03);transition:filter 0.35s,transform 0.35s">
       <img id="lb-full"  src="${imgUrl(item.uniqueName)}"  alt="${name}"
-           style="opacity:0;transition:opacity 0.35s"
+           style="opacity:0"
            onload="
              this.style.opacity='1';
+             this.style.transition='opacity 0.35s';
              var t=document.getElementById('lb-thumb');
              if(t){t.style.filter='none';t.style.transform='scale(1)';}
+             document.getElementById('lb-zoom-bar').classList.add('visible');
+             lbInitZoom();
            "
            onerror="
              this.remove();
@@ -2332,23 +2385,181 @@ function _videoMime(filename) {
   return map[ext] || 'video/mp4';
 }
 
+// ─────────────────────────────────────────────
+//  LIGHTBOX ZOOM & PAN
+// ─────────────────────────────────────────────
+let _lbScale   = 1;
+let _lbPanX    = 0;
+let _lbPanY    = 0;
+const LB_MIN   = 0.25;
+const LB_MAX   = 10;
+
+function _lbImg() { return document.getElementById('lb-full'); }
+function _lbBox() { return document.getElementById('lb-content'); }
+
+function _lbApply(animate) {
+  const img = _lbImg();
+  if (!img) return;
+  img.style.transition = animate ? 'transform 0.2s ease' : 'none';
+  img.style.transform  = `translate(${_lbPanX}px, ${_lbPanY}px) scale(${_lbScale})`;
+  // Clamp pan when zoomed out back toward fit
+  if (_lbScale <= 1) { _lbPanX = 0; _lbPanY = 0; img.style.transform = `scale(${_lbScale})`; }
+  // Update zoom label
+  document.getElementById('lb-zoom-level').textContent = Math.round(_lbScale * 100) + '%';
+  // Update cursor and zoomed class
+  _lbBox().classList.toggle('zoomed', _lbScale > 1);
+}
+
+function lbInitZoom() {
+  _lbScale = 1; _lbPanX = 0; _lbPanY = 0;
+  _lbApply(false);
+  _lbAttachEvents();
+}
+
+function lbZoom(delta, cx, cy) {
+  const prev = _lbScale;
+  _lbScale   = Math.min(LB_MAX, Math.max(LB_MIN, _lbScale + delta * _lbScale));
+  // Zoom toward cursor position if provided
+  if (cx !== undefined && prev !== _lbScale) {
+    const ratio = _lbScale / prev;
+    _lbPanX = cx + (_lbPanX - cx) * ratio;
+    _lbPanY = cy + (_lbPanY - cy) * ratio;
+  }
+  _lbApply(true);
+}
+
+function lbZoomReset(silent) {
+  _lbScale = 1; _lbPanX = 0; _lbPanY = 0;
+  if (!silent) _lbApply(true);
+  document.getElementById('lb-zoom-level').textContent = '100%';
+}
+
+function lbZoom100() {
+  const img = _lbImg();
+  if (!img) return;
+  // Compute natural size ratio vs displayed size
+  const rect = img.getBoundingClientRect();
+  const ratio = img.naturalWidth / (rect.width / _lbScale);
+  _lbPanX = 0; _lbPanY = 0;
+  _lbScale = Math.min(LB_MAX, Math.max(LB_MIN, ratio));
+  _lbApply(true);
+}
+
+// ── Attach mouse wheel + drag pan events ─────────────────────────────────────
+function _lbAttachEvents() {
+  const box = _lbBox();
+
+  // Mouse wheel zoom
+  box._lbWheel = (e) => {
+    e.preventDefault();
+    const rect  = box.getBoundingClientRect();
+    const cx    = e.clientX - rect.left - rect.width  / 2;
+    const cy    = e.clientY - rect.top  - rect.height / 2;
+    const delta = e.deltaY < 0 ? 0.15 : -0.15;
+    lbZoom(delta, cx, cy);
+  };
+  box.addEventListener('wheel', box._lbWheel, { passive: false });
+
+  // Drag pan
+  let dragging = false, startX = 0, startY = 0, startPX = 0, startPY = 0;
+
+  box._lbPointerDown = (e) => {
+    if (_lbScale <= 1) return;
+    if (e.button !== undefined && e.button !== 0) return;
+    dragging = true;
+    startX = e.clientX; startY = e.clientY;
+    startPX = _lbPanX;  startPY = _lbPanY;
+    box.classList.add('panning');
+    e.preventDefault();
+  };
+  box._lbPointerMove = (e) => {
+    if (!dragging) return;
+    _lbPanX = startPX + (e.clientX - startX);
+    _lbPanY = startPY + (e.clientY - startY);
+    _lbApply(false);
+  };
+  box._lbPointerUp = () => {
+    dragging = false;
+    box.classList.remove('panning');
+  };
+
+  box.addEventListener('mousedown',  box._lbPointerDown);
+  window.addEventListener('mousemove', box._lbPointerMove);
+  window.addEventListener('mouseup',   box._lbPointerUp);
+
+  // Touch pinch-to-zoom
+  let lastDist = 0, lastMidX = 0, lastMidY = 0;
+  box._lbTouchStart = (e) => {
+    if (e.touches.length === 2) {
+      const [a, b] = e.touches;
+      lastDist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      const rect = box.getBoundingClientRect();
+      lastMidX = (a.clientX + b.clientX) / 2 - rect.left - rect.width  / 2;
+      lastMidY = (a.clientY + b.clientY) / 2 - rect.top  - rect.height / 2;
+    }
+  };
+  box._lbTouchMove = (e) => {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const [a, b] = e.touches;
+      const dist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      if (lastDist > 0) {
+        const factor = dist / lastDist - 1;
+        lbZoom(factor, lastMidX, lastMidY);
+      }
+      lastDist = dist;
+    }
+  };
+  box.addEventListener('touchstart', box._lbTouchStart, { passive: true });
+  box.addEventListener('touchmove',  box._lbTouchMove,  { passive: false });
+
+  // Double-click: toggle fit ↔ 2×
+  box._lbDblClick = (e) => {
+    if (_lbScale > 1) {
+      lbZoomReset();
+    } else {
+      const rect = box.getBoundingClientRect();
+      lbZoom(1, e.clientX - rect.left - rect.width / 2, e.clientY - rect.top - rect.height / 2);
+    }
+  };
+  box.addEventListener('dblclick', box._lbDblClick);
+}
+
+// Clean up zoom events when lightbox closes or navigates
+function _lbDetachEvents() {
+  const box = _lbBox();
+  if (!box) return;
+  if (box._lbWheel)       { box.removeEventListener('wheel', box._lbWheel); }
+  if (box._lbPointerDown) { box.removeEventListener('mousedown', box._lbPointerDown); }
+  if (box._lbPointerMove) { window.removeEventListener('mousemove', box._lbPointerMove); }
+  if (box._lbPointerUp)   { window.removeEventListener('mouseup',   box._lbPointerUp); }
+  if (box._lbTouchStart)  { box.removeEventListener('touchstart', box._lbTouchStart); }
+  if (box._lbTouchMove)   { box.removeEventListener('touchmove',  box._lbTouchMove); }
+  if (box._lbDblClick)    { box.removeEventListener('dblclick',   box._lbDblClick); }
+}
+
 function closeLightbox() {
-  // Release video resources before hiding
+  _lbDetachEvents();
   const vid = document.getElementById('lb-content')?.querySelector('video');
   if (vid) { vid.pause(); vid.src = ''; vid.load(); }
   document.getElementById('lightbox').classList.remove('open');
 }
 
 function lbNav(dir) {
+  _lbDetachEvents();
   lbIndex = (lbIndex + dir + filteredMedia.length) % filteredMedia.length;
   renderLightbox();
 }
 
 document.addEventListener('keydown', e => {
   if (!document.getElementById('lightbox').classList.contains('open')) return;
-  if (e.key === 'ArrowLeft') lbNav(-1);
+  if (e.key === 'ArrowLeft')  lbNav(-1);
   if (e.key === 'ArrowRight') lbNav(1);
-  if (e.key === 'Escape') closeLightbox();
+  if (e.key === 'Escape')     closeLightbox();
+  if (e.key === '+' || e.key === '=') lbZoom(+0.25);
+  if (e.key === '-')                  lbZoom(-0.25);
+  if (e.key === '0')                  lbZoomReset();
+  if (e.key === '1')                  lbZoom100();
 });
 
 // ─────────────────────────────────────────────
