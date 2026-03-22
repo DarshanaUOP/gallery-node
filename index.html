@@ -1790,35 +1790,102 @@ async function loadConfig() {
 async function loadDB() {
   try {
     const pageSize = config.media_page_size || 500;
-    const r = await fetch(`${API_BASE}/api/db?offset=0&limit=${pageSize}`);
+    const sort     = _serverSort();
+    const r = await fetch(`${API_BASE}/api/db?offset=0&limit=${pageSize}&sort=${sort}`);
     const data = await r.json();
-    db.media  = data.media  || [];
-    db.albums = data.albums || [];
+    db.media     = data.media  || [];
+    db.albums    = data.albums || [];
     db._total    = data.total    || db.media.length;
     db._hasMore  = data.has_more || false;
     db._offset   = db.media.length;
-    if (db._hasMore) _loadRemainingMedia();
+    db._sort     = sort;
+    db._fetching = false;
   } catch {
-    db = { media: [], albums: [], _total: 0, _hasMore: false, _offset: 0 };
+    db = { media: [], albums: [], _total: 0, _hasMore: false, _offset: 0,
+           _sort: 'date-desc', _fetching: false };
   }
 }
 
-async function _loadRemainingMedia() {
-  const LIMIT = config.media_page_size || 500;
-  while (db._hasMore) {
-    try {
-      const r = await fetch(`${API_BASE}/api/media?offset=${db._offset}&limit=${LIMIT}`);
-      if (!r.ok) break;
-      const data = await r.json();
-      db.media.push(...(data.items || []));
-      db._total   = data.total;
-      db._hasMore = data.has_more;
-      db._offset  = db.media.length;
-      softRefresh();
-    } catch {
-      break;
+// Map client currentSort to server sort param
+function _serverSort() {
+  if (currentSort === 'name')     return 'name';
+  if (currentSort === 'date-asc') return 'date-asc';
+  return 'date-desc';
+}
+
+// Fetch the next page from the server and append only matching items
+// directly to filteredMedia + gallery grid. Called by intersection observer
+// on scroll — never loops on its own.
+async function _fetchNextPage() {
+  if (!db._hasMore || db._fetching) return;
+  db._fetching = true;
+
+  try {
+    const pageSize = config.media_page_size || 500;
+    const r = await fetch(
+      `${API_BASE}/api/media?offset=${db._offset}&limit=${pageSize}&sort=${db._sort}`
+    );
+    if (!r.ok) { db._fetching = false; return; }
+    const data     = await r.json();
+    const newItems = data.items || [];
+
+    db.media.push(...newItems);
+    db._total   = data.total;
+    db._hasMore = data.has_more;
+    db._offset  = db.media.length;
+
+    // Apply current client-side filters to new items only
+    const q          = document.getElementById('search-input').value.toLowerCase();
+    const fmt        = document.getElementById('filter-format').value;
+    const cam        = document.getElementById('filter-camera').value;
+    const loc        = document.getElementById('filter-location').value;
+    const fmtAliases = { 'HEIF': 'HEIC', 'JPG': 'JPEG' };
+
+    let filtered = newItems;
+
+    if (currentView === 'hidden') {
+      filtered = filtered.filter(m => m.isHidden);
+    } else if (currentView !== 'all') {
+      const album = db.albums.find(a => a.id === currentView);
+      if (album) filtered = filtered.filter(m => album.media.includes(m.uniqueName));
+    } else {
+      if (!showHidden) filtered = filtered.filter(m => !m.isHidden);
     }
-  }
+    if (q) filtered = filtered.filter(m =>
+      m.name.toLowerCase().includes(q) ||
+      ((m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '')).toLowerCase().includes(q) ||
+      (m.metadata?.date?.created || '').includes(q)
+    );
+    if (fmt) filtered = filtered.filter(m => {
+      let mfmt = (m.metadata?.file?.format || '').toUpperCase().trim();
+      mfmt = fmtAliases[mfmt] || mfmt;
+      return mfmt === fmt;
+    });
+    if (cam) filtered = filtered.filter(m =>
+      (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '') === cam
+    );
+    if (loc) {
+      const locNorm = loc.replace(/\/+$/, '');
+      filtered = filtered.filter(m => {
+        const root = m.metadata?.file?.source_root;
+        if (root) return root.replace(/\/+$/, '') === locNorm;
+        const fp = (m.metadata?.file?.path || '') + (m.name || '');
+        return fp.startsWith(locNorm + '/') || fp.startsWith(locNorm);
+      });
+    }
+
+    // Append matched items to filteredMedia and render directly into grid
+    if (filtered.length > 0) {
+      const startIdx = filteredMedia.length;
+      filteredMedia.push(...filtered);
+      const grid = document.getElementById('gallery-grid');
+      filtered.forEach((item, i) => grid.appendChild(createCard(item, startIdx + i)));
+      renderedCount = filteredMedia.length;
+      softRefresh();
+    }
+  } catch { /* network error — stop silently, observer will retry on next scroll */ }
+
+  db._fetching = false;
 }
 
 // ─────────────────────────────────────────────
@@ -2136,8 +2203,13 @@ function setView(view, el) {
 function setSort(sort, el) {
   currentSort = sort;
   document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-  el.classList.add('active');
-  applyFilters();
+  if (el) el.classList.add('active');
+  // Sort is now server-side — reload from offset 0 with new sort
+  db._sort    = _serverSort();
+  db._offset  = 0;
+  db._hasMore = false;   // will be reset by loadDB
+  db.media    = [];
+  loadDB().then(() => renderAll());
 }
 
 function toggleHidden(el) {
@@ -2152,8 +2224,13 @@ function toggleHidden(el) {
 function setupIntersectionObserver() {
   const trigger = document.getElementById('load-more-trigger');
   const obs = new IntersectionObserver(entries => {
-    if (entries[0].isIntersecting && renderedCount < filteredMedia.length) {
+    if (!entries[0].isIntersecting) return;
+    if (renderedCount < filteredMedia.length) {
+      // Still have locally filtered items to render
       renderBatch();
+    } else if (db._hasMore && !db._fetching) {
+      // All local items rendered — fetch next page from server
+      _fetchNextPage();
     }
   }, { rootMargin: '400px' });
   obs.observe(trigger);

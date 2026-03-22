@@ -556,6 +556,18 @@ if FLASK_AVAILABLE:
         log.info("configuration.json updated")
         return jsonify({"ok": True})
 
+    def _sort_media(media, sort):
+        """Sort media list server-side. sort: date-desc | date-asc | name"""
+        def _date(m):
+            d = m.get("metadata", {}).get("date", {})
+            return d.get("modified") or d.get("created") or ""
+        if sort == "date-asc":
+            return sorted(media, key=_date)
+        elif sort == "name":
+            return sorted(media, key=lambda m: m.get("name", "").lower())
+        else:  # date-desc (default)
+            return sorted(media, key=_date, reverse=True)
+
     @app.route("/api/media/count", methods=["GET"])
     def api_media_count():
         """Return total number of indexed media items — cheap, no full load needed."""
@@ -565,14 +577,17 @@ if FLASK_AVAILABLE:
     @app.route("/api/media", methods=["GET"])
     def api_media():
         """
-        Return a paginated slice of the media array.
+        Return a sorted, paginated slice of the media array.
         Query params:
-          offset  (int, default 0)   — start index
-          limit   (int, default 500) — max items to return
+          offset  (int, default 0)        — start index into sorted list
+          limit   (int, default 500)      — max items to return
+          sort    (str, default date-desc) — date-desc | date-asc | name
         Response:
           { items: [...], offset: N, limit: N, total: N, has_more: bool }
         """
         media  = load_media()
+        sort   = request.args.get("sort", "date-desc")
+        media  = _sort_media(media, sort)
         total  = len(media)
         offset = max(0, int(request.args.get("offset", 0)))
         limit  = min(2000, max(1, int(request.args.get("limit", 500))))
@@ -937,11 +952,13 @@ if FLASK_AVAILABLE:
     @app.route("/api/db", methods=["GET"])
     def api_db_get():
         """
-        Return albums in full + first page of media.
-        Query params: offset, limit (same as /api/media)
+        Return albums in full + first sorted page of media.
+        Query params: offset, limit, sort (same as /api/media)
         """
         media  = load_media()
         albums = load_albums()
+        sort   = request.args.get("sort", "date-desc")
+        media  = _sort_media(media, sort)
         total  = len(media)
         offset = max(0, int(request.args.get("offset", 0)))
         limit  = min(2000, max(1, int(request.args.get("limit", 500))))
