@@ -438,10 +438,23 @@ def extract_image_metadata(filepath: str) -> dict:
                         meta["software"]["editor"] = str(value).strip()
                     elif tag == "GPSInfo":
                         gps = {}
-                        for gps_id, gps_val in value.items():
-                            gps[gps_id] = gps_val
-                        coords = extract_gps(gps)
-                        meta["location"].update(coords)
+                        try:
+                            if isinstance(value, dict):
+                                # Old _getexif() returns a decoded dict directly
+                                gps = value
+                            elif isinstance(value, int):
+                                # New getexif() returns the IFD offset as an int;
+                                # use get_ifd() to decode the GPS sub-IFD
+                                if hasattr(img, "getexif"):
+                                    ifd = img.getexif().get_ifd(0x8825)  # 0x8825 = GPSInfo tag
+                                    if isinstance(ifd, dict):
+                                        gps = ifd
+                            # Any other type — skip silently
+                        except Exception:
+                            pass
+                        if gps:
+                            coords = extract_gps(gps)
+                            meta["location"].update(coords)
 
     except Exception as e:
         log.warning("Metadata extraction failed for %s: %s", filepath, e)
