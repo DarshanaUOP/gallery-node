@@ -287,6 +287,69 @@ def extract_metadata(filepath: str) -> dict:
     return extract_image_metadata(filepath)
 
 
+def open_image_any_format(filepath: str):
+    """
+    Open any supported image file and return a PIL Image object.
+    Handles HEIC/HEIF via pillow-heif, pyheif, or system tools (ImageMagick/ffmpeg).
+    All other formats use PIL.Image.open() directly.
+    Raises RuntimeError if no decoder is available for HEIC.
+    """
+    from PIL import Image as PilImage
+    ext = Path(filepath).suffix.lower()
+
+    if ext in (".heic", ".heif"):
+        # Strategy 1: pillow-heif (preferred — pip install pillow-heif)
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+            img = PilImage.open(filepath)
+            return img.copy()
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+        # Strategy 2: pyheif
+        try:
+            import pyheif
+            heif_file = pyheif.read(filepath)
+            return PilImage.frombytes(
+                heif_file.mode, heif_file.size, heif_file.data,
+                "raw", heif_file.mode, heif_file.stride,
+            )
+        except ImportError:
+            pass
+        except Exception:
+            pass
+
+        # Strategy 3: system tools — ImageMagick or ffmpeg
+        import subprocess, tempfile
+        for cmd_fn in [
+            lambda s, d: ["magick", s, d],
+            lambda s, d: ["convert", s, d],
+            lambda s, d: ["ffmpeg", "-y", "-i", s, d],
+        ]:
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    tmp_path = tmp.name
+                r = subprocess.run(cmd_fn(filepath, tmp_path),
+                                   capture_output=True, timeout=30)
+                if r.returncode == 0 and os.path.isfile(tmp_path):
+                    img = PilImage.open(tmp_path).copy()
+                    os.unlink(tmp_path)
+                    return img
+            except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+                continue
+
+        raise RuntimeError(
+            f"No HEIC decoder found for {filepath}. "
+            "Run: pip install pillow-heif"
+        )
+
+    # Standard formats
+    return PilImage.open(filepath).copy()
+
+
 def extract_image_metadata(filepath: str) -> dict:
     p = Path(filepath)
     stat = p.stat()
@@ -311,7 +374,8 @@ def extract_image_metadata(filepath: str) -> dict:
         return meta
 
     try:
-        with Image.open(filepath) as img:
+        img = open_image_any_format(filepath)
+        with img:
             w, h = img.size
             orientation = "landscape" if w >= h else "portrait"
             meta["image"] = {
@@ -322,7 +386,19 @@ def extract_image_metadata(filepath: str) -> dict:
                 "orientation": orientation,
             }
 
-            exif_data = img._getexif() if hasattr(img, "_getexif") else None
+            # Try both Pillow EXIF APIs (newer getexif() and older _getexif())
+            exif_data = None
+            try:
+                exif_obj = img.getexif() if hasattr(img, "getexif") else None
+                if exif_obj:
+                    exif_data = dict(exif_obj)
+            except Exception:
+                pass
+            if not exif_data and hasattr(img, "_getexif"):
+                try:
+                    exif_data = img._getexif()
+                except Exception:
+                    pass
             if exif_data:
                 for tag_id, value in exif_data.items():
                     tag = TAGS.get(tag_id, tag_id)
@@ -617,57 +693,8 @@ if FLASK_AVAILABLE:
         return full_path, item
 
     def _open_as_pil(full_path):
-        """
-        Open any supported image (including HEIC/HEIF) and return a PIL Image.
-        Tries pillow-heif → pyheif → ImageMagick/ffmpeg for HEIC.
-        Returns PIL Image or raises RuntimeError.
-        """
-        from PIL import Image as PilImage
-        ext = Path(full_path).suffix.lower()
-
-        if ext in (".heic", ".heif"):
-            # Strategy 1: pillow-heif
-            try:
-                import pillow_heif
-                pillow_heif.register_heif_opener()
-                return PilImage.open(full_path).copy()
-            except ImportError:
-                pass
-
-            # Strategy 2: pyheif
-            try:
-                import pyheif
-                heif_file = pyheif.read(full_path)
-                return PilImage.frombytes(
-                    heif_file.mode, heif_file.size, heif_file.data,
-                    "raw", heif_file.mode, heif_file.stride,
-                )
-            except ImportError:
-                pass
-
-            # Strategy 3: system tools → temp JPEG → re-open
-            import subprocess, tempfile
-            for cmd_fn in [
-                lambda s, d: ["magick", s, d],
-                lambda s, d: ["convert", s, d],
-                lambda s, d: ["ffmpeg", "-y", "-i", s, d],
-            ]:
-                try:
-                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                        tmp_path = tmp.name
-                    r = subprocess.run(cmd_fn(full_path, tmp_path),
-                                       capture_output=True, timeout=15)
-                    if r.returncode == 0 and os.path.isfile(tmp_path):
-                        img = PilImage.open(tmp_path).copy()
-                        os.unlink(tmp_path)
-                        return img
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    continue
-
-            raise RuntimeError("No HEIC decoder found — run: pip install pillow-heif")
-
-        # Standard formats
-        return PilImage.open(full_path).copy()
+        """Delegate to module-level open_image_any_format (handles HEIC/HEIF)."""
+        return open_image_any_format(full_path)
 
     def _jpeg_response(img, quality, max_side=None):
         """Resize (if requested) and return a JPEG Flask Response."""
