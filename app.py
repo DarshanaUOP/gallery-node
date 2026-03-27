@@ -646,76 +646,8 @@ if FLASK_AVAILABLE:
 
     @app.route("/api/media/count", methods=["GET"])
     def api_media_count():
-        """Return total number of indexed media items — cheap, no full load needed."""
-        media = load_media()
-        return jsonify({"total": len(media)})
-
-    @app.route("/api/media/formats", methods=["GET"])
-    def api_media_formats():
-        """
-        Return all unique, normalised image/video formats present in db.json.
-        Aliases: HEIF→HEIC, JPG→JPEG. Sorted alphabetically.
-        """
-        media   = load_media()
-        aliases = {"HEIF": "HEIC", "JPG": "JPEG"}
-        seen    = set()
-        for m in media:
-            raw = m.get("metadata", {}).get("file", {}).get("format", "")
-            fmt = aliases.get(raw.upper().strip(), raw.upper().strip())
-            if fmt:
-                seen.add(fmt)
-        return jsonify(sorted(seen))
-
-    @app.route("/api/media/cameras", methods=["GET"])
-    def api_media_cameras():
-        """
-        Return all unique camera identifiers (make + model) present in db.json.
-        Blank-only entries are excluded. Sorted alphabetically.
-        """
-        media = load_media()
-        seen  = set()
-        for m in media:
-            cam   = m.get("metadata", {}).get("camera", {})
-            make  = (cam.get("make")  or "").strip()
-            model = (cam.get("model") or "").strip()
-            label = (make + " " + model).strip()
-            if label:
-                seen.add(label)
-        return jsonify(sorted(seen))
-
-    @app.route("/api/media/locations", methods=["GET"])
-    def api_media_locations():
-        """
-        Return all unique source_root directories present in db.json,
-        enriched with labels from media.json where available.
-        Response: [{root, label}] sorted by label.
-        """
-        media   = load_media()
-        sources = load_json(MEDIA_JSON, [])
-
-        # Build root→label map from media.json
-        label_map = {}
-        for s in sources:
-            path = (s.get("path") or "").rstrip("/\\")
-            name = (s.get("name") or "").strip()
-            if path:
-                label_map[path] = name or path
-
-        roots = {}   # root path → label
-        for m in media:
-            root = m.get("metadata", {}).get("file", {}).get("source_root", "")
-            if not root:
-                continue
-            root_clean = root.rstrip("/\\")
-            if root_clean not in roots:
-                label = label_map.get(root_clean) or root_clean.split("/")[-1] or root_clean
-                roots[root_clean] = label
-
-        result = sorted(
-            [{"root": r, "label": l} for r, l in roots.items()],
-            key=lambda x: x["label"].lower(),
-        )
-        return jsonify(result)
+        """Return total number of indexed media items."""
+        return jsonify({"total": len(load_media())})
 
     @app.route("/api/media/formats", methods=["GET"])
     def api_media_formats():
