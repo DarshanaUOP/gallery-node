@@ -387,11 +387,13 @@ def extract_image_metadata(filepath: str) -> dict:
             }
 
             # Try both Pillow EXIF APIs (newer getexif() and older _getexif())
+            exif_obj  = None
             exif_data = None
             try:
-                exif_obj = img.getexif() if hasattr(img, "getexif") else None
-                if exif_obj:
-                    exif_data = dict(exif_obj)
+                if hasattr(img, "getexif"):
+                    exif_obj = img.getexif()
+                    if exif_obj:
+                        exif_data = dict(exif_obj)
             except Exception:
                 pass
             if not exif_data and hasattr(img, "_getexif"):
@@ -399,62 +401,65 @@ def extract_image_metadata(filepath: str) -> dict:
                     exif_data = img._getexif()
                 except Exception:
                     pass
-            if exif_data:
-                for tag_id, value in exif_data.items():
-                    tag = TAGS.get(tag_id, tag_id)
 
-                    if tag == "DateTimeOriginal":
-                        try:
-                            dt = datetime.strptime(str(value), "%Y:%m:%d %H:%M:%S")
-                            meta["date"]["created"] = dt.isoformat()
-                        except ValueError:
-                            pass
+            GPS_TAG_ID = 0x8825   # 34853 — GPSInfo IFD pointer
 
-                    elif tag == "Make":
-                        meta["camera"]["make"] = str(value).strip()
-                    elif tag == "Model":
-                        meta["camera"]["model"] = str(value).strip()
-                    elif tag == "LensModel":
-                        meta["camera"]["lens"] = str(value)
-                    elif tag == "ISOSpeedRatings":
-                        meta["camera"]["iso"] = int(value) if isinstance(value, (int, float)) else str(value)
-                    elif tag == "FNumber":
-                        try:
-                            meta["camera"]["aperture"] = f"f/{float(value):.1f}"
-                        except Exception:
-                            pass
-                    elif tag == "ExposureTime":
-                        try:
-                            v = float(value)
-                            meta["camera"]["shutter_speed"] = f"1/{int(round(1/v))}" if v < 1 else f"{v}s"
-                        except Exception:
-                            pass
-                    elif tag == "FocalLength":
-                        try:
-                            meta["camera"]["focal_length"] = f"{float(value):.0f}mm"
-                        except Exception:
-                            pass
-                    elif tag == "Software":
-                        meta["software"]["editor"] = str(value).strip()
-                    elif tag == "GPSInfo":
-                        gps = {}
-                        try:
-                            if isinstance(value, dict):
-                                # Old _getexif() returns a decoded dict directly
-                                gps = value
-                            elif isinstance(value, int):
-                                # New getexif() returns the IFD offset as an int;
-                                # use get_ifd() to decode the GPS sub-IFD
-                                if hasattr(img, "getexif"):
-                                    ifd = img.getexif().get_ifd(0x8825)  # 0x8825 = GPSInfo tag
-                                    if isinstance(ifd, dict):
-                                        gps = ifd
-                            # Any other type — skip silently
-                        except Exception:
-                            pass
-                        if gps:
-                            coords = extract_gps(gps)
-                            meta["location"].update(coords)
+            for tag_id, value in (exif_data or {}).items():
+                tag = TAGS.get(tag_id, tag_id)
+
+                if tag == "DateTimeOriginal":
+                    try:
+                        dt = datetime.strptime(str(value), "%Y:%m:%d %H:%M:%S")
+                        meta["date"]["created"] = dt.isoformat()
+                    except ValueError:
+                        pass
+
+                elif tag == "Make":
+                    meta["camera"]["make"] = str(value).strip()
+                elif tag == "Model":
+                    meta["camera"]["model"] = str(value).strip()
+                elif tag == "LensModel":
+                    meta["camera"]["lens"] = str(value)
+                elif tag == "ISOSpeedRatings":
+                    meta["camera"]["iso"] = int(value) if isinstance(value, (int, float)) else str(value)
+                elif tag == "FNumber":
+                    try:
+                        meta["camera"]["aperture"] = f"f/{float(value):.1f}"
+                    except Exception:
+                        pass
+                elif tag == "ExposureTime":
+                    try:
+                        v = float(value)
+                        meta["camera"]["shutter_speed"] = f"1/{int(round(1/v))}" if v < 1 else f"{v}s"
+                    except Exception:
+                        pass
+                elif tag == "FocalLength":
+                    try:
+                        meta["camera"]["focal_length"] = f"{float(value):.0f}mm"
+                    except Exception:
+                        pass
+                elif tag == "Software":
+                    meta["software"]["editor"] = str(value).strip()
+
+                elif tag == "GPSInfo" or tag_id == GPS_TAG_ID:
+                    gps_dict = None
+                    try:
+                        if isinstance(value, dict):
+                            # _getexif() already decoded the GPS sub-IFD into a dict
+                            gps_dict = value
+                        elif isinstance(value, int) and exif_obj is not None:
+                            # getexif() returns the raw IFD offset as int;
+                            # use get_ifd() on the still-open exif_obj to decode it
+                            raw_ifd = exif_obj.get_ifd(GPS_TAG_ID)
+                            if raw_ifd:
+                                gps_dict = dict(raw_ifd)
+                        elif hasattr(value, "items"):
+                            gps_dict = dict(value)
+                    except Exception:
+                        pass
+                    if gps_dict:
+                        coords = extract_gps(gps_dict)
+                        meta["location"].update(coords)
 
     except Exception as e:
         log.warning("Metadata extraction failed for %s: %s", filepath, e)
@@ -723,18 +728,87 @@ if FLASK_AVAILABLE:
         )
         return jsonify(result)
 
+    def _filter_media(media, params):
+        """
+        Apply server-side filters to a media list.
+        Supported params (all optional, empty string = no filter):
+          format   — normalised format string e.g. "HEIC", "JPEG"
+          camera   — "Make Model" string
+          location — source_root path
+          q        — search string (matches filename, camera, date)
+          hidden   — "true" | "false" | "" (default: exclude hidden)
+        """
+        fmt      = (params.get("format")   or "").strip().upper()
+        cam      = (params.get("camera")   or "").strip()
+        loc      = (params.get("location") or "").strip().rstrip("/")
+        q        = (params.get("q")        or "").strip().lower()
+        hidden   = (params.get("hidden")   or "").strip().lower()
+        aliases  = {"HEIF": "HEIC", "JPG": "JPEG"}
+
+        result = []
+        for m in media:
+            meta = m.get("metadata", {})
+
+            # Hidden filter
+            is_hidden = m.get("isHidden", False)
+            if hidden == "true":
+                if not is_hidden: continue
+            elif hidden != "include":
+                if is_hidden: continue   # default: exclude hidden
+
+            # Format filter
+            if fmt:
+                raw  = (meta.get("file", {}).get("format") or "").upper().strip()
+                norm = aliases.get(raw, raw)
+                if norm != fmt:
+                    continue
+
+            # Camera filter
+            if cam:
+                c     = meta.get("camera", {})
+                label = ((c.get("make") or "") + " " + (c.get("model") or "")).strip()
+                if label != cam:
+                    continue
+
+            # Location filter
+            if loc:
+                src  = (meta.get("file", {}).get("source_root") or "").rstrip("/")
+                path = (meta.get("file", {}).get("path") or "") + m.get("name", "")
+                if src:
+                    if src != loc: continue
+                else:
+                    if not (path.startswith(loc + "/") or path.startswith(loc)): continue
+
+            # Search filter
+            if q:
+                name   = m.get("name", "").lower()
+                c      = meta.get("camera", {})
+                camera = ((c.get("make") or "") + " " + (c.get("model") or "")).lower()
+                date   = (meta.get("date", {}).get("created") or "")
+                if not (q in name or q in camera or q in date):
+                    continue
+
+            result.append(m)
+        return result
+
     @app.route("/api/media", methods=["GET"])
     def api_media():
         """
-        Return a sorted, paginated slice of the media array.
+        Return a filtered, sorted, paginated slice of the media array.
         Query params:
-          offset  (int, default 0)        — start index into sorted list
-          limit   (int, default 500)      — max items to return
-          sort    (str, default date-desc) — date-desc | date-asc | name
+          offset   (int,    default 0)         — start index
+          limit    (int,    default 500)        — max items to return
+          sort     (str,    default date-desc)  — date-desc | date-asc | name
+          format   (str,    optional)           — filter by format e.g. HEIC
+          camera   (str,    optional)           — filter by "Make Model"
+          location (str,    optional)           — filter by source_root path
+          q        (str,    optional)           — search string
+          hidden   (str,    optional)           — true | false | include
         Response:
-          { items: [...], offset: N, limit: N, total: N, has_more: bool }
+          { items, offset, limit, total, has_more }
         """
         media  = load_media()
+        media  = _filter_media(media, request.args)
         sort   = request.args.get("sort", "date-desc")
         media  = _sort_media(media, sort)
         total  = len(media)
@@ -1052,11 +1126,12 @@ if FLASK_AVAILABLE:
     @app.route("/api/db", methods=["GET"])
     def api_db_get():
         """
-        Return albums in full + first sorted page of media.
-        Query params: offset, limit, sort (same as /api/media)
+        Return albums in full + first filtered/sorted page of media.
+        Accepts all the same filter params as /api/media.
         """
         media  = load_media()
         albums = load_albums()
+        media  = _filter_media(media, request.args)
         sort   = request.args.get("sort", "date-desc")
         media  = _sort_media(media, sort)
         total  = len(media)

@@ -1857,9 +1857,18 @@ async function loadConfig() {
 
 async function loadDB() {
   try {
-    const pageSize = config.media_page_size || 500;
-    const sort     = _serverSort();
-    const r = await fetch(`${API_BASE}/api/db?offset=0&limit=${pageSize}&sort=${sort}`);
+    const sort = _serverSort();
+    const url  = _buildMediaUrl('/api/db', 0).replace(
+      `sort=${sort}`, `sort=${sort}`
+    );
+    // Use /api/db for first load (returns albums too)
+    const p = new URLSearchParams({
+      offset: 0,
+      limit:  config.media_page_size || 500,
+      sort,
+      ..._serverFilters(),
+    });
+    const r    = await fetch(`${API_BASE}/api/db?${p.toString()}`);
     const data = await r.json();
     db.media     = data.media  || [];
     db.albums    = data.albums || [];
@@ -1881,18 +1890,51 @@ function _serverSort() {
   return 'date-desc';
 }
 
-// Fetch the next page from the server and append only matching items
-// directly to filteredMedia + gallery grid. Called by intersection observer
-// on scroll — never loops on its own.
+// Build the current active filter params to send to the server
+function _serverFilters() {
+  const params = {};
+  const fmt = document.getElementById('filter-format')?.value  || '';
+  const cam = document.getElementById('filter-camera')?.value  || '';
+  const loc = document.getElementById('filter-location')?.value || '';
+  const q   = document.getElementById('search-input')?.value   || '';
+
+  if (fmt) params.format   = fmt;
+  if (cam) params.camera   = cam;
+  if (loc) params.location = loc;
+  if (q)   params.q        = q;
+
+  // Hidden handling
+  if (currentView === 'hidden') {
+    params.hidden = 'true';
+  } else if (showHidden) {
+    params.hidden = 'include';
+  }
+  // else: default — server excludes hidden
+
+  return params;
+}
+
+// Build a URLSearchParams string from current filters + sort + pagination
+function _buildMediaUrl(base, offset) {
+  const p = new URLSearchParams({
+    offset: offset,
+    limit:  config.media_page_size || 500,
+    sort:   db._sort || _serverSort(),
+    ..._serverFilters(),
+  });
+  return `${API_BASE}${base}?${p.toString()}`;
+}
+
+// Fetch the next page from the server (with same active filters) and append
+// matching items directly to filteredMedia + gallery grid.
+// Called only by the intersection observer on scroll.
 async function _fetchNextPage() {
   if (!db._hasMore || db._fetching) return;
   db._fetching = true;
 
   try {
-    const pageSize = config.media_page_size || 500;
-    const r = await fetch(
-      `${API_BASE}/api/media?offset=${db._offset}&limit=${pageSize}&sort=${db._sort}`
-    );
+    const url  = _buildMediaUrl('/api/media', db._offset);
+    const r    = await fetch(url);
     if (!r.ok) { db._fetching = false; return; }
     const data     = await r.json();
     const newItems = data.items || [];
@@ -1902,47 +1944,13 @@ async function _fetchNextPage() {
     db._hasMore = data.has_more;
     db._offset  = db.media.length;
 
-    // Apply current client-side filters to new items only
-    const q          = document.getElementById('search-input').value.toLowerCase();
-    const fmt        = document.getElementById('filter-format').value;
-    const cam        = document.getElementById('filter-camera').value;
-    const loc        = document.getElementById('filter-location').value;
-    const fmtAliases = { 'HEIF': 'HEIC', 'JPG': 'JPEG' };
-
+    // All server-side filters already applied — handle album view client-side only
     let filtered = newItems;
-
-    if (currentView === 'hidden') {
-      filtered = filtered.filter(m => m.isHidden);
-    } else if (currentView !== 'all') {
+    if (currentView !== 'all' && currentView !== 'hidden') {
       const album = db.albums.find(a => a.id === currentView);
       if (album) filtered = filtered.filter(m => album.media.includes(m.uniqueName));
-    } else {
-      if (!showHidden) filtered = filtered.filter(m => !m.isHidden);
-    }
-    if (q) filtered = filtered.filter(m =>
-      m.name.toLowerCase().includes(q) ||
-      ((m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '')).toLowerCase().includes(q) ||
-      (m.metadata?.date?.created || '').includes(q)
-    );
-    if (fmt) filtered = filtered.filter(m => {
-      let mfmt = (m.metadata?.file?.format || '').toUpperCase().trim();
-      mfmt = fmtAliases[mfmt] || mfmt;
-      return mfmt === fmt;
-    });
-    if (cam) filtered = filtered.filter(m =>
-      (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '') === cam
-    );
-    if (loc) {
-      const locNorm = loc.replace(/\/+$/, '');
-      filtered = filtered.filter(m => {
-        const root = m.metadata?.file?.source_root;
-        if (root) return root.replace(/\/+$/, '') === locNorm;
-        const fp = (m.metadata?.file?.path || '') + (m.name || '');
-        return fp.startsWith(locNorm + '/') || fp.startsWith(locNorm);
-      });
     }
 
-    // Append matched items to filteredMedia and render directly into grid
     if (filtered.length > 0) {
       const startIdx = filteredMedia.length;
       filteredMedia.push(...filtered);
@@ -1951,7 +1959,7 @@ async function _fetchNextPage() {
       renderedCount = filteredMedia.length;
       softRefresh();
     }
-  } catch { /* network error — stop silently, observer will retry on next scroll */ }
+  } catch { /* network error — observer retries on next scroll */ }
 
   db._fetching = false;
 }
@@ -2007,79 +2015,56 @@ function renderAlbumNav() {
 }
 
 function applyFilters() {
-  const q = document.getElementById('search-input').value.toLowerCase();
-  const fmt = document.getElementById('filter-format').value;
-  const cam = document.getElementById('filter-camera').value;
-  const loc = document.getElementById('filter-location').value;
+  // Reset pagination state and reload from server with current filters applied.
+  // The server handles format/camera/location/search/hidden — we only do
+  // album-membership filtering client-side (albums are small, already in memory).
+  db.media     = [];
+  db._offset   = 0;
+  db._hasMore  = false;
+  db._fetching = false;
+  db._sort     = _serverSort();
 
-  let pool = db.media.slice();
-
-  // View filter
-  if (currentView === 'hidden') {
-    pool = pool.filter(m => m.isHidden);
-  } else if (currentView !== 'all') {
-    const album = db.albums.find(a => a.id === currentView);
-    if (album) pool = pool.filter(m => album.media.includes(m.uniqueName));
-  } else {
-    if (!showHidden) pool = pool.filter(m => !m.isHidden);
-  }
-
-  // Search
-  if (q) {
-    pool = pool.filter(m => {
-      const name = m.name.toLowerCase();
-      const camera = (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '');
-      const date = m.metadata?.date?.created || '';
-      return name.includes(q) || camera.toLowerCase().includes(q) || date.includes(q);
-    });
-  }
-
-  // Format — normalise with same aliases used when populating the dropdown
-  if (fmt) {
-    const fmtAliases = { 'HEIF': 'HEIC', 'JPG': 'JPEG' };
-    pool = pool.filter(m => {
-      let mfmt = (m.metadata?.file?.format || '').toUpperCase().trim();
-      mfmt = fmtAliases[mfmt] || mfmt;
-      return mfmt === fmt;
-    });
-  }
-
-  // Camera
-  if (cam) pool = pool.filter(m => (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '') === cam);
-
-  // Location — match by source_root, or fall back to checking file path prefix
-  if (loc) {
-    const locNorm = loc.replace(/\/+$/, '');
-    pool = pool.filter(m => {
-      const root = m.metadata?.file?.source_root;
-      if (root) return root.replace(/\/+$/, '') === locNorm;
-      // Fallback for older entries without source_root
-      const filePath = (m.metadata?.file?.path || '') + (m.name || '');
-      return filePath.startsWith(locNorm + '/') || filePath.startsWith(locNorm);
-    });
-  }
-
-  // Sort
-  pool = sortMedia(pool);
-
-  filteredMedia = pool;
+  filteredMedia = [];
   renderedCount = 0;
   document.getElementById('gallery-grid').innerHTML = '';
-  renderBatch();
-  updateStats();
+  document.getElementById('empty-state').style.display = 'none';
 
-  const empty = document.getElementById('empty-state');
-  empty.style.display = (pool.length === 0) ? 'flex' : 'none';
-}
-
-function sortMedia(arr) {
-  return arr.slice().sort((a, b) => {
-    if (currentSort === 'name') return a.name.localeCompare(b.name);
-    const da  = new Date(a.metadata?.date?.modified || a.metadata?.date?.created || 0);
-    const db2 = new Date(b.metadata?.date?.modified || b.metadata?.date?.created || 0);
-    return currentSort === 'date-asc' ? da - db2 : db2 - da;
+  const p = new URLSearchParams({
+    offset: 0,
+    limit:  config.media_page_size || 500,
+    sort:   db._sort,
+    ..._serverFilters(),
   });
+
+  fetch(`${API_BASE}/api/media?${p.toString()}`)
+    .then(r => r.json())
+    .then(data => {
+      const newItems = data.items || [];
+      db.media.push(...newItems);
+      db._total   = data.total;
+      db._hasMore = data.has_more;
+      db._offset  = db.media.length;
+
+      // Client-side album filter (albums are in memory)
+      let pool = newItems;
+      if (currentView !== 'all' && currentView !== 'hidden') {
+        const album = db.albums.find(a => a.id === currentView);
+        if (album) pool = pool.filter(m => album.media.includes(m.uniqueName));
+      }
+
+      filteredMedia = pool;
+      renderedCount = 0;
+      renderBatch();
+      updateStats();
+      updateFooter();
+      document.getElementById('empty-state').style.display =
+        (pool.length === 0 && !db._hasMore) ? 'flex' : 'none';
+    })
+    .catch(() => {
+      document.getElementById('empty-state').style.display = 'flex';
+    });
 }
+
 
 function renderBatch() {
   const BATCH = config.lazy_load_batch || 50;
@@ -2282,12 +2267,7 @@ function setSort(sort, el) {
   currentSort = sort;
   document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
   if (el) el.classList.add('active');
-  // Sort is now server-side — reload from offset 0 with new sort
-  db._sort    = _serverSort();
-  db._offset  = 0;
-  db._hasMore = false;   // will be reset by loadDB
-  db.media    = [];
-  loadDB().then(() => renderAll());
+  applyFilters();
 }
 
 function toggleHidden(el) {
