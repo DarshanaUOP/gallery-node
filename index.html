@@ -570,24 +570,32 @@
   .meta-key { color: var(--text-muted); }
   .meta-val { color: var(--text); text-align: right; max-width: 60%; word-break: break-all; }
 
-  /* ── LIGHTBOX ── */
+  /* ══ LIGHTBOX — two-column layout ══════════════════════════════════════════ */
   #lightbox {
     position: fixed; inset: 0;
-    background: rgba(0,0,0,0.92);
+    background: #0c0c0e;
     z-index: 800;
     display: none;
-    flex-direction: column;
-    align-items: center;
-    justify-content: flex-start;
-    padding: 52px 40px 0;
-    box-sizing: border-box;
+    flex-direction: row;
+    align-items: stretch;
   }
   #lightbox.open { display: flex; }
 
-  #lb-content {
+  /* ── LEFT: media area — takes all remaining space ─────────────────────────── */
+  #lb-left {
     flex: 1;
-    min-height: 0;
+    min-width: 0;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: #000;
+  }
+
+  #lb-content {
     width: 100%;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -595,32 +603,26 @@
     overflow: hidden;
     cursor: default;
   }
-  #lb-content.zoomed   { cursor: grab; }
-  #lb-content.panning  { cursor: grabbing; }
+  #lb-content.zoomed  { cursor: grab; }
+  #lb-content.panning { cursor: grabbing; }
 
-  /* The blurred thumb — fills the content area */
+  /* Blurred thumbnail placeholder */
   #lb-thumb {
     display: block;
     max-width: 100%;
     max-height: 100%;
-    width: auto;
-    height: auto;
+    width: auto; height: auto;
     object-fit: contain;
-    border-radius: 4px;
     pointer-events: none;
   }
 
-  /* Full-res image — zoom/pan transform applied here */
+  /* Full-res image — zoom/pan applied here */
   #lb-full {
     position: absolute;
-    inset: 0;
-    margin: auto;
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
+    inset: 0; margin: auto;
+    max-width: 100%; max-height: 100%;
+    width: auto; height: auto;
     object-fit: contain;
-    border-radius: 4px;
     transform-origin: center center;
     transition: transform 0.15s ease, opacity 0.35s;
     will-change: transform;
@@ -628,19 +630,113 @@
     -webkit-user-drag: none;
   }
 
-  /* Zoom controls bar — hidden until full image loads */
+  /* Video wrapper */
+  #lb-video-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%; height: 100%;
+    gap: 10px; min-height: 0;
+  }
+  #lb-video {
+    display: block;
+    max-width: 100%; max-height: 100%;
+    width: auto; height: auto;
+    background: #000; outline: none;
+    flex-shrink: 1; min-height: 0;
+  }
+
+  .lb-placeholder {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 12px;
+    color: var(--text-muted); font-size: 14px;
+    width: 100%; height: 100%;
+  }
+  .lb-placeholder .lb-icon { font-size: 48px; opacity: 0.3; }
+
+  /* ── RIGHT: controls + details panel ──────────────────────────────────────── */
+  #lb-right {
+    width: 280px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Header: filename + close button */
+  #lb-right-header {
+    padding: 16px 16px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  #lb-filename {
+    flex: 1;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text);
+    word-break: break-all;
+    line-height: 1.5;
+  }
+  #lb-close {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    cursor: pointer;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+  }
+  #lb-close:hover { border-color: var(--border-hover); color: var(--text); background: var(--surface2); }
+
+  /* Navigation row */
+  #lb-nav {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  #lb-nav button {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 5px 12px;
+    border-radius: var(--radius);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+    flex: 1;
+    transition: all 0.15s;
+  }
+  #lb-nav button:hover { border-color: var(--border-hover); color: var(--text); }
+  #lb-nav-counter {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    text-align: center;
+    flex-shrink: 0;
+  }
+
+  /* Zoom bar */
   #lb-zoom-bar {
     display: none;
     align-items: center;
-    gap: 4px;
-    background: rgba(15,15,18,0.82);
-    border: 1px solid var(--border-hover);
-    border-radius: 20px;
-    padding: 4px 10px;
-    backdrop-filter: blur(10px);
+    gap: 2px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
-    margin-top: 8px;
-    user-select: none;
   }
   #lb-zoom-bar.visible { display: flex; }
   .lb-zoom-btn {
@@ -648,102 +744,59 @@
     border: none;
     color: var(--text-dim);
     cursor: pointer;
-    font-size: 16px;
-    width: 28px; height: 28px;
-    border-radius: 50%;
+    font-size: 15px;
+    width: 26px; height: 26px;
+    border-radius: 4px;
     display: flex; align-items: center; justify-content: center;
     transition: background 0.15s, color 0.15s;
-    padding: 0;
-    line-height: 1;
+    padding: 0; line-height: 1;
   }
-  .lb-zoom-btn:hover { background: rgba(255,255,255,0.1); color: var(--text); }
+  .lb-zoom-btn:hover { background: var(--surface2); color: var(--text); }
   #lb-zoom-level {
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-muted);
-    min-width: 40px;
+    min-width: 36px;
     text-align: center;
+    flex: 1;
   }
 
-  /* Video wrapper — must be constrained so controls stay on screen */
-  #lb-video-wrap {
+  /* Scrollable details area */
+  #lb-details {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+  }
+  #lb-details::-webkit-scrollbar { width: 3px; }
+  #lb-details::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .lb-detail-section {
+    margin-bottom: 18px;
+  }
+  .lb-detail-section-title {
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid var(--border);
+  }
+  .lb-detail-row {
     display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-    gap: 10px;
-    min-height: 0;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 11px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
   }
-
-  /* Video player — never taller than the available content area */
-  #lb-video {
-    display: block;
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    border-radius: 4px;
-    background: #000;
-    outline: none;
-    flex-shrink: 1;
-    min-height: 0;
+  .lb-detail-key { color: var(--text-muted); flex-shrink: 0; }
+  .lb-detail-val {
+    color: var(--text-dim);
+    text-align: right;
+    word-break: break-all;
+    max-width: 60%;
   }
-
-  .lb-placeholder {
-    width: 600px;
-    max-width: 90vw;
-    height: 400px;
-    background: var(--surface2);
-    border-radius: 6px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    color: var(--text-muted);
-    font-size: 14px;
-  }
-  .lb-placeholder .lb-icon { font-size: 48px; opacity: 0.3; }
-  #lb-close {
-    position: absolute;
-    top: 12px; right: 24px;
-    color: white;
-    font-size: 24px;
-    cursor: pointer;
-    background: rgba(255,255,255,0.1);
-    border: none;
-    width: 40px; height: 40px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    z-index: 10;
-  }
-  #lb-close:hover { background: rgba(255,255,255,0.2); }
-  #lb-info {
-    margin-top: 10px;
-    text-align: center;
-    flex-shrink: 0;
-    padding-bottom: 10px;
-  }
-  #lb-info .lb-name { font-family: var(--font-display); font-size: 16px; color: var(--text); }
-  #lb-info .lb-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
-  #lb-nav {
-    display: flex; gap: 16px; margin-top: 8px;
-    flex-shrink: 0;
-    padding-bottom: 14px;
-  }
-  #lb-nav button {
-    background: rgba(255,255,255,0.1);
-    border: 1px solid rgba(255,255,255,0.15);
-    color: white;
-    padding: 8px 20px;
-    border-radius: var(--radius);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    cursor: pointer;
-  }
-  #lb-nav button:hover { background: rgba(255,255,255,0.2); }
 
   /* ── TOAST ── */
   #toast-container {
@@ -1409,22 +1462,41 @@
 
 <!-- LIGHTBOX -->
 <div id="lightbox">
-  <button id="lb-close" onclick="closeLightbox()">✕</button>
-  <div id="lb-content"></div>
-  <div id="lb-zoom-bar">
-    <button class="lb-zoom-btn" id="lb-zoom-out" onclick="lbZoom(-0.25)" title="Zoom out (−)">−</button>
-    <span id="lb-zoom-level">100%</span>
-    <button class="lb-zoom-btn" id="lb-zoom-in"  onclick="lbZoom(+0.25)" title="Zoom in (+)">+</button>
-    <button class="lb-zoom-btn" id="lb-zoom-fit" onclick="lbZoomReset()" title="Fit to screen">⊡</button>
-    <button class="lb-zoom-btn" id="lb-zoom-100" onclick="lbZoom100()" title="Actual size (1:1)">1:1</button>
+
+  <!-- LEFT: media fills all available space -->
+  <div id="lb-left">
+    <div id="lb-content"></div>
   </div>
-  <div id="lb-info">
-    <div class="lb-name" id="lb-name"></div>
-    <div class="lb-meta" id="lb-meta"></div>
-  </div>
-  <div id="lb-nav">
-    <button onclick="lbNav(-1)">← Prev</button>
-    <button onclick="lbNav(1)">Next →</button>
+
+  <!-- RIGHT: controls + details panel -->
+  <div id="lb-right">
+
+    <!-- Header row: filename + close -->
+    <div id="lb-right-header">
+      <div id="lb-filename"></div>
+      <button id="lb-close" onclick="closeLightbox()">✕</button>
+    </div>
+
+    <!-- Navigation -->
+    <div id="lb-nav">
+      <button onclick="lbNav(-1)">← Prev</button>
+      <span id="lb-nav-counter"></span>
+      <button onclick="lbNav(1)">Next →</button>
+    </div>
+
+    <!-- Zoom bar (images only — shown after full load) -->
+    <div id="lb-zoom-bar">
+      <span style="font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-muted)">Zoom</span>
+      <button class="lb-zoom-btn" onclick="lbZoom(-0.25)" title="Zoom out (−)">−</button>
+      <span id="lb-zoom-level">100%</span>
+      <button class="lb-zoom-btn" onclick="lbZoom(+0.25)" title="Zoom in (+)">+</button>
+      <button class="lb-zoom-btn" onclick="lbZoomReset()" title="Fit">⊡</button>
+      <button class="lb-zoom-btn" onclick="lbZoom100()" title="Actual size">1:1</button>
+    </div>
+
+    <!-- Scrollable details -->
+    <div id="lb-details"></div>
+
   </div>
 </div>
 
@@ -2428,19 +2500,106 @@ function renderLightbox() {
            ">`;
   }
 
-  document.getElementById('lb-name').textContent = item.name;
-  const parts = [];
-  if (item.type === 'video') {
-    if (item.metadata?.video?.resolution)    parts.push(item.metadata.video.resolution);
-    if (item.metadata?.video?.codec)         parts.push(item.metadata.video.codec);
-    if (item.metadata?.video?.duration_fmt)  parts.push(item.metadata.video.duration_fmt);
-  } else {
-    const cam = item.metadata?.camera;
-    if (cam?.model) parts.push(cam.model);
+  document.getElementById('lb-filename').textContent = item.name;
+  document.getElementById('lb-nav-counter').textContent =
+    `${lbIndex + 1} / ${filteredMedia.length}`;
+
+  // Build rich details panel
+  _renderLbDetails(item);
+}
+
+function _renderLbDetails(item) {
+  const m   = item.metadata || {};
+  const det = document.getElementById('lb-details');
+
+  function row(key, val) {
+    if (val === null || val === undefined || val === '') return '';
+    return `<div class="lb-detail-row">
+      <span class="lb-detail-key">${key}</span>
+      <span class="lb-detail-val">${escHtml(String(val))}</span>
+    </div>`;
   }
-  if (item.metadata?.date?.created)
-    parts.push(new Date(item.metadata.date.created).toLocaleString());
-  document.getElementById('lb-meta').textContent = parts.join(' · ');
+  function section(title, rows) {
+    const content = rows.join('');
+    if (!content) return '';
+    return `<div class="lb-detail-section">
+      <div class="lb-detail-section-title">${title}</div>
+      ${content}
+    </div>`;
+  }
+
+  const fileSize = m.file?.size
+    ? (m.file.size >= 1048576
+        ? (m.file.size / 1048576).toFixed(1) + ' MB'
+        : (m.file.size / 1024).toFixed(0) + ' KB')
+    : null;
+
+  const fmtDate = iso => {
+    if (!iso) return null;
+    try { return new Date(iso).toLocaleString(); } catch { return iso; }
+  };
+
+  let html = '';
+
+  if (item.type === 'video') {
+    html += section('Video', [
+      row('Resolution', m.video?.resolution),
+      row('Codec',      m.video?.codec),
+      row('Duration',   m.video?.duration_fmt),
+      row('FPS',        m.video?.fps),
+    ]);
+    html += section('File', [
+      row('Format',   m.file?.format),
+      row('Size',     fileSize),
+      row('Path',     m.file?.path),
+      row('Subfolder',m.file?.subfolder || null),
+    ]);
+    html += section('Date', [
+      row('Created',  fmtDate(m.date?.created)),
+      row('Modified', fmtDate(m.date?.modified)),
+    ]);
+  } else {
+    html += section('Image', [
+      row('Resolution',   m.image?.resolution),
+      row('Color Space',  m.image?.color_space),
+      row('Orientation',  m.image?.orientation),
+    ]);
+    html += section('Camera', [
+      row('Make',         m.camera?.make),
+      row('Model',        m.camera?.model),
+      row('Lens',         m.camera?.lens),
+      row('Aperture',     m.camera?.aperture),
+      row('Shutter',      m.camera?.shutter_speed),
+      row('ISO',          m.camera?.iso),
+      row('Focal Length', m.camera?.focal_length),
+    ]);
+    html += section('File', [
+      row('Format',   m.file?.format),
+      row('Size',     fileSize),
+      row('Path',     m.file?.path),
+      row('Subfolder',m.file?.subfolder || null),
+    ]);
+    html += section('Date', [
+      row('Created',  fmtDate(m.date?.created)),
+      row('Modified', fmtDate(m.date?.modified)),
+    ]);
+    if (m.location?.latitude) {
+      html += section('Location', [
+        row('Latitude',  m.location?.latitude),
+        row('Longitude', m.location?.longitude),
+        row('City',      m.location?.city),
+        row('Country',   m.location?.country),
+      ]);
+    }
+    if (m.software?.editor) {
+      html += section('Software', [
+        row('Editor',  m.software?.editor),
+        row('Version', m.software?.version),
+      ]);
+    }
+  }
+
+  det.innerHTML = html || '<p style="font-size:11px;color:var(--text-muted)">No metadata available.</p>';
 }
 
 // Guess MIME type for video src attribute
