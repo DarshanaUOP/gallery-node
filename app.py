@@ -650,6 +650,134 @@ if FLASK_AVAILABLE:
         media = load_media()
         return jsonify({"total": len(media)})
 
+    @app.route("/api/media/formats", methods=["GET"])
+    def api_media_formats():
+        """
+        Return all unique, normalised image/video formats present in db.json.
+        Aliases: HEIF→HEIC, JPG→JPEG. Sorted alphabetically.
+        """
+        media   = load_media()
+        aliases = {"HEIF": "HEIC", "JPG": "JPEG"}
+        seen    = set()
+        for m in media:
+            raw = m.get("metadata", {}).get("file", {}).get("format", "")
+            fmt = aliases.get(raw.upper().strip(), raw.upper().strip())
+            if fmt:
+                seen.add(fmt)
+        return jsonify(sorted(seen))
+
+    @app.route("/api/media/cameras", methods=["GET"])
+    def api_media_cameras():
+        """
+        Return all unique camera identifiers (make + model) present in db.json.
+        Blank-only entries are excluded. Sorted alphabetically.
+        """
+        media = load_media()
+        seen  = set()
+        for m in media:
+            cam   = m.get("metadata", {}).get("camera", {})
+            make  = (cam.get("make")  or "").strip()
+            model = (cam.get("model") or "").strip()
+            label = (make + " " + model).strip()
+            if label:
+                seen.add(label)
+        return jsonify(sorted(seen))
+
+    @app.route("/api/media/locations", methods=["GET"])
+    def api_media_locations():
+        """
+        Return all unique source_root directories present in db.json,
+        enriched with labels from media.json where available.
+        Response: [{root, label}] sorted by label.
+        """
+        media   = load_media()
+        sources = load_json(MEDIA_JSON, [])
+
+        # Build root→label map from media.json
+        label_map = {}
+        for s in sources:
+            path = (s.get("path") or "").rstrip("/\\")
+            name = (s.get("name") or "").strip()
+            if path:
+                label_map[path] = name or path
+
+        roots = {}   # root path → label
+        for m in media:
+            root = m.get("metadata", {}).get("file", {}).get("source_root", "")
+            if not root:
+                continue
+            root_clean = root.rstrip("/\\")
+            if root_clean not in roots:
+                label = label_map.get(root_clean) or root_clean.split("/")[-1] or root_clean
+                roots[root_clean] = label
+
+        result = sorted(
+            [{"root": r, "label": l} for r, l in roots.items()],
+            key=lambda x: x["label"].lower(),
+        )
+        return jsonify(result)
+
+    @app.route("/api/media/formats", methods=["GET"])
+    def api_media_formats():
+        """
+        Return all unique normalised format strings present in db.json.
+        Aliases applied: HEIF→HEIC, JPG→JPEG (case-insensitive input).
+        """
+        aliases = {"HEIF": "HEIC", "JPG": "JPEG"}
+        formats = set()
+        for m in load_media():
+            raw = (m.get("metadata", {}).get("file", {}).get("format") or "").upper().strip()
+            if raw:
+                formats.add(aliases.get(raw, raw))
+        return jsonify(sorted(formats))
+
+    @app.route("/api/media/cameras", methods=["GET"])
+    def api_media_cameras():
+        """
+        Return all unique non-empty 'Make Model' camera strings from db.json.
+        """
+        cameras = set()
+        for m in load_media():
+            cam = m.get("metadata", {}).get("camera", {})
+            make  = (cam.get("make")  or "").strip()
+            model = (cam.get("model") or "").strip()
+            label = (make + " " + model).strip()
+            if label:
+                cameras.add(label)
+        return jsonify(sorted(cameras))
+
+    @app.route("/api/media/locations", methods=["GET"])
+    def api_media_locations():
+        """
+        Return all unique source_root values from db.json, enriched with
+        human-readable labels from media.json where available.
+        Response: [ { root: str, label: str }, … ] sorted by label.
+        """
+        # Build root → label map from media.json names
+        sources    = load_json(MEDIA_JSON, [])
+        name_map   = {}
+        for src in sources:
+            raw  = (src.get("path") or "").rstrip("/\\")
+            name = (src.get("name") or "").strip()
+            if raw:
+                name_map[raw] = name or raw
+
+        roots = {}   # root → label
+        for m in load_media():
+            root = (m.get("metadata", {}).get("file", {}).get("source_root") or "").strip()
+            if not root:
+                continue
+            root_norm = root.rstrip("/")
+            if root_norm not in roots:
+                label = name_map.get(root_norm) or root_norm.split("/")[-1] or root_norm
+                roots[root_norm] = label
+
+        result = sorted(
+            [{"root": r, "label": l} for r, l in roots.items()],
+            key=lambda x: x["label"].lower()
+        )
+        return jsonify(result)
+
     @app.route("/api/media", methods=["GET"])
     def api_media():
         """

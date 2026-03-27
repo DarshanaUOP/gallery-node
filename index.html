@@ -1836,12 +1836,8 @@ let lbIndex = 0;
 async function init() {
   await loadConfig();
   await loadDB();
-  // Pre-load locations so the filter dropdown can show human-readable names
-  try {
-    const r = await fetch(`${API_BASE}/api/locations`);
-    if (r.ok) window._locationsCache = await r.json();
-  } catch { /* backend not running yet — labels fall back to path segments */ }
   renderAll();
+  populateAllFilters();   // fetches /api/media/formats, /api/media/cameras, /api/media/locations
   setupIntersectionObserver();
 }
 
@@ -1968,20 +1964,13 @@ function renderAll() {
   applyFilters();
   updateStats();
   updateFooter();
-  populateCameraFilter();
-  populateFormatFilter();
-  populateLocationFilter();
 }
 
-// Soft refresh: update sidebar/stats/dropdowns WITHOUT resetting the grid or scroll position.
-// Use this after hide/album/rename operations that don't change filter results.
+// Soft refresh: update sidebar/stats WITHOUT resetting the grid or scroll position.
 function softRefresh() {
   renderAlbumNav();
   updateStats();
   updateFooter();
-  populateCameraFilter();
-  populateFormatFilter();
-  populateLocationFilter();
   // Update visible cards in-place (hidden badge, etc.) without rebuilding the grid
   document.querySelectorAll('.media-item').forEach(card => {
     const item = db.media.find(m => m.uniqueName === card.dataset.unique);
@@ -2174,75 +2163,92 @@ function updateFooter() {
   document.getElementById('footer-albums').textContent = `${db.albums.length} albums`;
 }
 
-function populateLocationFilter() {
-  // Collect unique source_root values present in db, map to their label from media.json if known
-  const roots = new Map(); // source_root → label
-  db.media.forEach(m => {
-    const root = m.metadata?.file?.source_root;
-    if (root && !roots.has(root)) roots.set(root, root); // label defaults to path
-  });
+// ─────────────────────────────────────────────
+//  FILTER DROPDOWN POPULATION (server-driven)
+// ─────────────────────────────────────────────
 
-  // Try to enrich labels from the in-memory locations list (if loaded)
-  if (Array.isArray(window._locationsCache)) {
-    window._locationsCache.forEach(loc => {
-      const resolved = loc.path?.replace(/\/+$/, '');
-      if (resolved && roots.has(resolved)) roots.set(resolved, loc.name || resolved);
-      // Also try with trailing slash stripped from stored root
-      roots.forEach((_, key) => {
-        if (key === resolved) roots.set(key, loc.name || resolved);
-      });
-    });
-  }
+// Called once after boot — fetches all three in parallel from the server.
+// Each dropdown is populated from the full db.json, not just the loaded page.
+async function populateAllFilters() {
+  await Promise.all([
+    populateFormatFilter(),
+    populateCameraFilter(),
+    populateLocationFilter(),
+  ]);
+}
 
-  const sel  = document.getElementById('filter-location');
-  const prev = sel.value;
-  sel.innerHTML = '<option value="">All Locations</option>';
-
-  // Sort by label
-  [...roots.entries()]
-    .sort((a, b) => a[1].localeCompare(b[1]))
-    .forEach(([root, label]) => {
+async function populateFormatFilter() {
+  try {
+    const r = await fetch(`${API_BASE}/api/media/formats`);
+    if (!r.ok) return;
+    const formats = await r.json();   // already sorted, normalised array of strings
+    const sel     = document.getElementById('filter-format');
+    const prev    = sel.value;
+    sel.innerHTML = '<option value="">All Formats</option>';
+    formats.forEach(f => {
       const o = document.createElement('option');
-      o.value       = root;
-      o.textContent = label === root
-        ? root.split('/').filter(Boolean).pop() || root   // show just the last folder segment if no label
-        : label;
-      o.title = root;   // full path on hover
+      o.value = f; o.textContent = f;
       sel.appendChild(o);
     });
-
-  if (prev && [...roots.keys()].includes(prev)) sel.value = prev;
+    if (prev && formats.includes(prev)) sel.value = prev;
+  } catch { /* backend not running — leave as-is */ }
 }
 
-function populateCameraFilter() {
-  const cameras = [...new Set(db.media.map(m => (m.metadata?.camera?.make || '') + ' ' + (m.metadata?.camera?.model || '')).filter(c => c.trim()))];
-  const sel = document.getElementById('filter-camera');
-  sel.innerHTML = '<option value="">All Cameras</option>';
-  cameras.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o); });
+async function populateCameraFilter() {
+  try {
+    const r = await fetch(`${API_BASE}/api/media/cameras`);
+    if (!r.ok) return;
+    const cameras = await r.json();   // sorted array of "Make Model" strings
+    const sel     = document.getElementById('filter-camera');
+    const prev    = sel.value;
+    sel.innerHTML = '<option value="">All Cameras</option>';
+    cameras.forEach(c => {
+      const o = document.createElement('option');
+      o.value = c; o.textContent = c;
+      sel.appendChild(o);
+    });
+    if (prev && cameras.includes(prev)) sel.value = prev;
+  } catch { /* backend not running */ }
 }
 
-function populateFormatFilter() {
-  // Normalise: uppercase, collapse HEIC/HEIF → HEIC, JPG → JPEG
-  const aliases = { 'HEIF': 'HEIC', 'JPG': 'JPEG' };
-  const formats = new Set();
-  db.media.forEach(m => {
-    let fmt = (m.metadata?.file?.format || '').toUpperCase().trim();
-    if (!fmt) return;
-    fmt = aliases[fmt] || fmt;
-    formats.add(fmt);
-  });
-  const sorted = [...formats].sort();
-  const sel = document.getElementById('filter-format');
-  const prev = sel.value;
-  sel.innerHTML = '<option value="">All Formats</option>';
-  sorted.forEach(f => {
-    const o = document.createElement('option');
-    o.value = f;
-    o.textContent = f;
-    sel.appendChild(o);
-  });
-  // Restore selection if still valid
-  if (prev && formats.has(prev)) sel.value = prev;
+async function populateLocationFilter() {
+  try {
+    const r = await fetch(`${API_BASE}/api/media/locations`);
+    if (!r.ok) return;
+    const locations = await r.json();  // sorted [{root, label}]
+    const sel       = document.getElementById('filter-location');
+    const prev      = sel.value;
+    sel.innerHTML   = '<option value="">All Locations</option>';
+    locations.forEach(({ root, label }) => {
+      const o = document.createElement('option');
+      o.value       = root;
+      o.textContent = label;
+      o.title       = root;   // full path on hover
+      sel.appendChild(o);
+    });
+    const roots = locations.map(l => l.root);
+    if (prev && roots.includes(prev)) sel.value = prev;
+  } catch { /* backend not running */ }
+}
+
+// Picker location dropdown (used inside Add Photos modal)
+async function populatePickerLocationFilter() {
+  try {
+    const r = await fetch(`${API_BASE}/api/media/locations`);
+    if (!r.ok) return;
+    const locations = await r.json();
+    const sel       = document.getElementById('photo-picker-location');
+    if (!sel) return;
+    const prev    = sel.value;
+    sel.innerHTML = '<option value="">All Locations</option>';
+    locations.forEach(({ root, label }) => {
+      const o = document.createElement('option');
+      o.value = root; o.textContent = label; o.title = root;
+      sel.appendChild(o);
+    });
+    const roots = locations.map(l => l.root);
+    if (prev && roots.includes(prev)) sel.value = prev;
+  } catch { /* backend not running */ }
 }
 
 // ─────────────────────────────────────────────
@@ -2999,12 +3005,13 @@ async function triggerSync() {
     const result = await r.json();
     await loadDB();
     renderAll();
+    populateAllFilters();
     toast(`Sync complete — ${result.added || 0} new, ${result.total || db.media.length} total`, 'success');
   } catch (err) {
-    // Backend may not be running — try reloading db.json directly
     try {
       await loadDB();
       renderAll();
+      populateAllFilters();
       toast('db.json refreshed (backend offline)', 'info');
     } catch {
       toast('Sync failed — is app.py running?', 'error');
@@ -3256,7 +3263,6 @@ async function openLocationsManager() {
     const r = await fetch(`${API_BASE}/api/locations`);
     if (!r.ok) throw new Error('Backend returned ' + r.status);
     locationsData = await r.json();
-    window._locationsCache = locationsData; // share with populateLocationFilter
   } catch {
     toast('Could not load media.json — is app.py running?', 'error');
     return;
@@ -3345,6 +3351,7 @@ async function saveLocations() {
     });
     if (!r.ok) throw new Error('Backend returned ' + r.status);
     closeModal('locations-modal');
+    populateLocationFilter();  // refresh dropdown with updated labels
     toast('media.json saved — run Sync to index changes', 'success');
   } catch {
     toast('Could not save — is app.py running?', 'error');
@@ -3372,30 +3379,7 @@ function openPhotoPicker() {
   document.getElementById('picker-confirm-btn').textContent = 'Add Selected';
   document.getElementById('photo-picker-sel-count').classList.remove('visible');
 
-  // Populate location dropdown from indexed media
-  const locSel = document.getElementById('photo-picker-location');
-  locSel.innerHTML = '<option value="">All Locations</option>';
-  const roots = new Map();
-  pickerAllMedia.forEach(m => {
-    const root = m.metadata?.file?.source_root;
-    if (root && !roots.has(root)) roots.set(root, root);
-  });
-  if (Array.isArray(window._locationsCache)) {
-    window._locationsCache.forEach(loc => {
-      const r = loc.path?.replace(/\/+$/, '');
-      if (r && roots.has(r)) roots.set(r, loc.name || r);
-    });
-  }
-  [...roots.entries()]
-    .sort((a, b) => a[1].localeCompare(b[1]))
-    .forEach(([root, label]) => {
-      const o = document.createElement('option');
-      o.value = root;
-      o.textContent = label === root ? (root.split('/').filter(Boolean).pop() || root) : label;
-      o.title = root;
-      locSel.appendChild(o);
-    });
-  locSel.value = '';
+  populatePickerLocationFilter();   // fetches from /api/media/locations
 
   document.getElementById('photo-picker').classList.add('open');
 
