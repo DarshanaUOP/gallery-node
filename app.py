@@ -699,31 +699,29 @@ if FLASK_AVAILABLE:
     @app.route("/api/media/locations", methods=["GET"])
     def api_media_locations():
         """
-        Return all unique source_root values from db.json, enriched with
-        human-readable labels from media.json where available.
+        Return all known locations — union of:
+          1. Every entry in media.json (configured sources, regardless of sync state)
+          2. Every unique source_root in db.json (catches paths indexed before media.json was set)
         Response: [ { root: str, label: str }, … ] sorted by label.
         """
-        # Build root → label map from media.json names
-        sources    = load_json(MEDIA_JSON, [])
-        name_map   = {}
+        sources  = load_json(MEDIA_JSON, [])
+        name_map = {}   # normalised path → label
+
+        # 1. Add all configured sources from media.json
         for src in sources:
             raw  = (src.get("path") or "").rstrip("/\\")
             name = (src.get("name") or "").strip()
             if raw:
-                name_map[raw] = name or raw
+                name_map[raw] = name or raw.split("/")[-1] or raw
 
-        roots = {}   # root → label
+        # 2. Add any source_root values from db.json not already in media.json
         for m in load_media():
-            root = (m.get("metadata", {}).get("file", {}).get("source_root") or "").strip()
-            if not root:
-                continue
-            root_norm = root.rstrip("/")
-            if root_norm not in roots:
-                label = name_map.get(root_norm) or root_norm.split("/")[-1] or root_norm
-                roots[root_norm] = label
+            root = (m.get("metadata", {}).get("file", {}).get("source_root") or "").strip().rstrip("/\\")
+            if root and root not in name_map:
+                name_map[root] = root.split("/")[-1] or root
 
         result = sorted(
-            [{"root": r, "label": l} for r, l in roots.items()],
+            [{"root": r, "label": l} for r, l in name_map.items()],
             key=lambda x: x["label"].lower()
         )
         return jsonify(result)
