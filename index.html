@@ -3341,54 +3341,93 @@ async function saveLocations() {
 // ─────────────────────────────────────────────
 //  PHOTO PICKER
 // ─────────────────────────────────────────────
-let pickerSelected = new Set();   // uniqueNames chosen in current session
-let pickerAllMedia = [];          // full unfiltered list shown in picker
+let pickerSelected = new Set();
+let pickerAllMedia = [];          // current page of results shown in grid
+let pickerTotal    = 0;           // total matching on server
+let pickerOffset   = 0;           // current offset into server results
+let pickerHasMore  = false;
+let pickerFetching = false;
 
-function openPhotoPicker() {
+async function openPhotoPicker() {
   if (!currentAlbumId) return;
   const album = db.albums.find(a => a.id === currentAlbumId);
   if (!album) return;
 
   pickerSelected = new Set();
-  pickerAllMedia = db.media.filter(m => !m.isHidden);
+  pickerAllMedia = [];
+  pickerOffset   = 0;
+  pickerHasMore  = false;
+  pickerFetching = false;
 
   document.getElementById('photo-picker-title').textContent =
     `Add Photos to "${album.name}"`;
-  document.getElementById('photo-picker-search').value = '';
+  document.getElementById('photo-picker-search').value   = '';
+  document.getElementById('photo-picker-location').value = '';
   document.getElementById('picker-confirm-btn').disabled = true;
   document.getElementById('picker-confirm-btn').textContent = 'Add Selected';
   document.getElementById('photo-picker-sel-count').classList.remove('visible');
 
-  populatePickerLocationFilter();   // fetches from /api/media/locations
+  await populatePickerLocationFilter();
 
   document.getElementById('photo-picker').classList.add('open');
 
-  renderPickerGrid(pickerAllMedia, album);
+  await _pickerFetch(true);   // initial load
+}
+
+// Fetch a page of media for the picker, applying current picker filters.
+// replace=true clears the grid first (used on open / filter change).
+async function _pickerFetch(replace = false) {
+  if (pickerFetching) return;
+  pickerFetching = true;
+
+  const album  = db.albums.find(a => a.id === currentAlbumId);
+  const q      = document.getElementById('photo-picker-search').value.trim();
+  const loc    = document.getElementById('photo-picker-location').value;
+  const params = new URLSearchParams({
+    offset: replace ? 0 : pickerOffset,
+    limit:  200,
+    sort:   'date-desc',
+  });
+  if (q)   params.set('q', q);
+  if (loc) params.set('location', loc);
+
+  try {
+    const r    = await fetch(`${API_BASE}/api/media?${params.toString()}`);
+    const data = await r.json();
+    const items = data.items || [];
+
+    if (replace) {
+      pickerAllMedia = items;
+      pickerOffset   = items.length;
+    } else {
+      pickerAllMedia.push(...items);
+      pickerOffset += items.length;
+    }
+    pickerTotal   = data.total;
+    pickerHasMore = data.has_more;
+
+    renderPickerGrid(replace ? pickerAllMedia : items, album, !replace);
+  } catch { /* network error */ }
+
+  pickerFetching = false;
 }
 
 function closePhotoPicker() {
   document.getElementById('photo-picker').classList.remove('open');
 }
 
-function renderPickerGrid(mediaList, album) {
+function renderPickerGrid(mediaList, album, append = false) {
   const grid = document.getElementById('photo-picker-grid');
-  grid.innerHTML = '';
+  if (!append) grid.innerHTML = '';
 
-  if (mediaList.length === 0) {
+  if (!append && mediaList.length === 0) {
     grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:60px;font-size:12px">No photos found</div>';
     return;
   }
 
-  // Sort newest first (by modified date)
-  const sorted = mediaList.slice().sort((a, b) => {
-    const da  = new Date(a.metadata?.date?.modified || a.metadata?.date?.created || 0);
-    const db2 = new Date(b.metadata?.date?.modified || b.metadata?.date?.created || 0);
-    return db2 - da;
-  });
-
   const alreadyIn = new Set(album ? album.media : []);
 
-  sorted.forEach(item => {
+  mediaList.forEach(item => {
     const inAlbum    = alreadyIn.has(item.uniqueName);
     const isSelected = pickerSelected.has(item.uniqueName);
 
@@ -3411,6 +3450,38 @@ function renderPickerGrid(mediaList, album) {
 
     grid.appendChild(div);
   });
+
+  // If more pages exist, add a load-more sentinel at the bottom
+  _pickerAttachSentinel();
+}
+
+let _pickerObserver = null;
+
+function _pickerAttachSentinel() {
+  const grid = document.getElementById('photo-picker-grid');
+  // Remove existing sentinel
+  grid.querySelector('.picker-sentinel')?.remove();
+  if (!pickerHasMore) return;
+
+  const sentinel = document.createElement('div');
+  sentinel.className = 'picker-sentinel';
+  sentinel.style.cssText = 'grid-column:1/-1;height:40px';
+  grid.appendChild(sentinel);
+
+  if (_pickerObserver) _pickerObserver.disconnect();
+  _pickerObserver = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) _pickerFetch(false);
+  }, { root: grid, rootMargin: '100px' });
+  _pickerObserver.observe(sentinel);
+}
+
+async function filterPickerGrid() {
+  // Re-fetch from offset 0 with new filters
+  pickerAllMedia = [];
+  pickerOffset   = 0;
+  pickerHasMore  = false;
+  if (_pickerObserver) { _pickerObserver.disconnect(); _pickerObserver = null; }
+  await _pickerFetch(true);
 }
 
 function togglePickerItem(uniqueName, el) {
@@ -3440,45 +3511,9 @@ function updatePickerCount() {
   }
 }
 
-function filterPickerGrid() {
-  const q    = document.getElementById('photo-picker-search').value.toLowerCase().trim();
-  const loc  = document.getElementById('photo-picker-location').value;
-  const album = db.albums.find(a => a.id === currentAlbumId);
-
-  let list = pickerAllMedia;
-
-  // Location filter
-  if (loc) {
-    const locNorm = loc.replace(/\/+$/, '');
-    list = list.filter(m => {
-      const root = m.metadata?.file?.source_root;
-      if (root) return root.replace(/\/+$/, '') === locNorm;
-      const filePath = (m.metadata?.file?.path || '') + (m.name || '');
-      return filePath.startsWith(locNorm + '/') || filePath.startsWith(locNorm);
-    });
-  }
-
-  // Search filter
-  if (q) {
-    list = list.filter(m =>
-      m.name.toLowerCase().includes(q) ||
-      (m.metadata?.camera?.model || '').toLowerCase().includes(q) ||
-      (m.metadata?.camera?.make  || '').toLowerCase().includes(q) ||
-      (m.metadata?.date?.created || '').includes(q) ||
-      (m.metadata?.file?.subfolder || '').toLowerCase().includes(q)
-    );
-  }
-
-  renderPickerGrid(list, album);
-
-  // Reapply selected state after re-render
-  pickerSelected.forEach(un => {
-    const el = document.querySelector(`.picker-item[data-unique="${CSS.escape(un)}"]`);
-    if (el) el.classList.add('selected');
-  });
-}
 
 function pickerSelectAll() {
+  // Select all currently rendered non-already-in items
   document.querySelectorAll('.picker-item:not(.already-in)').forEach(el => {
     const un = el.dataset.unique;
     if (un) { pickerSelected.add(un); el.classList.add('selected'); }
