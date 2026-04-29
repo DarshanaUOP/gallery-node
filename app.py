@@ -1093,9 +1093,26 @@ if FLASK_AVAILABLE:
 
     @app.route("/api/locations", methods=["GET"])
     def api_locations_get():
-        """Return current contents of media.json."""
+        """
+        Return current contents of media.json.
+        Each entry: { name, path, visibility, root, label }
+        'root' and 'label' aliases are included so this endpoint can be used
+        directly by the location filter dropdowns without a separate /api/media/locations call.
+        """
         sources = load_json(MEDIA_JSON, [])
-        return jsonify(sources)
+        result  = []
+        for s in sources:
+            path  = (s.get("path") or "").rstrip("/\\")
+            name  = (s.get("name") or "").strip()
+            label = name or (path.split("/")[-1] if path else path)
+            result.append({
+                "name":       name,
+                "path":       s.get("path", ""),
+                "visibility": s.get("visibility", True),
+                "root":       path,
+                "label":      label,
+            })
+        return jsonify(result)
 
     @app.route("/api/locations", methods=["POST"])
     def api_locations_post():

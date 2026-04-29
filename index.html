@@ -1837,7 +1837,7 @@ async function init() {
   await loadConfig();
   await loadDB();
   renderAll();
-  populateAllFilters();   // fetches /api/media/formats, /api/media/cameras, /api/media/locations
+  populateAllFilters();   // fetches /api/media/formats, /api/media/cameras, /api/locations
   setupIntersectionObserver();
 }
 
@@ -2198,9 +2198,9 @@ async function populateCameraFilter() {
 
 async function populateLocationFilter() {
   try {
-    const r = await fetch(`${API_BASE}/api/media/locations`);
+    const r = await fetch(`${API_BASE}/api/locations`);
     if (!r.ok) return;
-    const locations = await r.json();  // sorted [{root, label}]
+    const locations = await r.json();  // [{name, path, visibility, root, label}]
     const sel       = document.getElementById('filter-location');
     const prev      = sel.value;
     sel.innerHTML   = '<option value="">All Locations</option>';
@@ -2208,7 +2208,7 @@ async function populateLocationFilter() {
       const o = document.createElement('option');
       o.value       = root;
       o.textContent = label;
-      o.title       = root;   // full path on hover
+      o.title       = root;
       sel.appendChild(o);
     });
     const roots = locations.map(l => l.root);
@@ -2219,7 +2219,7 @@ async function populateLocationFilter() {
 // Picker location dropdown (used inside Add Photos modal)
 async function populatePickerLocationFilter() {
   try {
-    const r = await fetch(`${API_BASE}/api/media/locations`);
+    const r = await fetch(`${API_BASE}/api/locations`);
     if (!r.ok) return;
     const locations = await r.json();
     const sel       = document.getElementById('photo-picker-location');
