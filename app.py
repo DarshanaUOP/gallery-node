@@ -10,6 +10,8 @@ import json
 import uuid
 import hashlib
 import logging
+import sqlite3
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -35,10 +37,9 @@ BASE_DIR       = Path(__file__).parent
 DATA_DIR       = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-MEDIA_JSON     = DATA_DIR / "media.json"
-DB_JSON        = DATA_DIR / "db.json"
-ALBUMS_JSON    = DATA_DIR / "albums.json"
-CONFIG_JSON    = DATA_DIR / "configuration.json"
+MEDIA_JSON     = DATA_DIR / "media.json"          # source directory config — stays JSON (small, human-edited)
+CONFIG_JSON    = DATA_DIR / "configuration.json"  # app settings — stays JSON (small, human-edited)
+SQLITE_DB      = DATA_DIR / "luminary.db"          # media + albums — SQLite (replaces db.json / albums.json)
 LOGS_DIR       = BASE_DIR / "logs"
 
 # ── bootstrap missing data files ───────────────────────────────────────────────
@@ -122,6 +123,7 @@ def is_video(path: str) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_json(path: Path, default=None):
+    """Still used for media.json and configuration.json (small, human-edited files)."""
     if default is None:
         default = {}
     try:
@@ -132,25 +134,413 @@ def load_json(path: Path, default=None):
         return default
 
 def save_json(path: Path, data):
+    """Still used for media.json and configuration.json."""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, default=str)
     log.info("Saved %s", path)
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SQLITE LAYER  —  replaces db.json / albums.json
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Design: media metadata is stored as a JSON blob (full fidelity, matches the
+# exact dict shape the rest of the app already expects) PLUS a handful of
+# frequently filtered/sorted fields are extracted into real indexed columns
+# (format, camera_label, source_root, date_sort, is_hidden). This gives O(log n)
+# filtering/sorting via SQL while every route keeps working with plain Python
+# list[dict] — load_media()/save_media()/load_albums()/save_albums() preserve
+# their exact original signatures so no route code needs to change.
+#
+# A thread-local connection is used since Flask's dev server may serve
+# requests from multiple threads; each thread gets its own sqlite3 connection.
+# WAL mode allows concurrent readers while a write is in progress.
+
+_local = threading.local()
+
+def get_db_conn() -> sqlite3.Connection:
+    """Return a thread-local SQLite connection, creating schema on first use."""
+    if not hasattr(_local, "conn"):
+        conn = sqlite3.connect(str(SQLITE_DB), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        _local.conn = conn
+    return _local.conn
+
+def _init_schema():
+    """Create tables and indexes if they don't already exist."""
+    conn = get_db_conn()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS media (
+            uniqueName    TEXT PRIMARY KEY,
+            name          TEXT NOT NULL,
+            hash          TEXT,
+            type          TEXT NOT NULL DEFAULT 'image',
+            isHidden      INTEGER NOT NULL DEFAULT 0,
+            format        TEXT,            -- normalised: HEIC, JPEG, MP4, etc.
+            camera_label  TEXT,            -- "Make Model", empty if none
+            source_root   TEXT,            -- resolved source directory
+            file_path     TEXT,            -- directory containing the file
+            date_sort     TEXT,            -- modified date, fallback created — used for sorting
+            date_created  TEXT,
+            metadata_json TEXT NOT NULL    -- full metadata dict as JSON (file/image/video/camera/date/location/software)
+        );
+        CREATE INDEX IF NOT EXISTS idx_media_format       ON media(format);
+        CREATE INDEX IF NOT EXISTS idx_media_camera        ON media(camera_label);
+        CREATE INDEX IF NOT EXISTS idx_media_source_root   ON media(source_root);
+        CREATE INDEX IF NOT EXISTS idx_media_hidden         ON media(isHidden);
+        CREATE INDEX IF NOT EXISTS idx_media_date_sort      ON media(date_sort);
+        CREATE INDEX IF NOT EXISTS idx_media_name           ON media(name);
+        CREATE INDEX IF NOT EXISTS idx_media_hash           ON media(hash);
+
+        CREATE TABLE IF NOT EXISTS albums (
+            id    TEXT PRIMARY KEY,
+            name  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS album_media (
+            album_id    TEXT NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+            uniqueName  TEXT NOT NULL REFERENCES media(uniqueName) ON DELETE CASCADE,
+            position    INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (album_id, uniqueName)
+        );
+        CREATE INDEX IF NOT EXISTS idx_album_media_album ON album_media(album_id);
+    """)
+    conn.commit()
+
+# Initialize SQLite schema on module load (creates tables/indexes if missing)
+_init_schema()
+
+def _migrate_legacy_json_if_present():
+    """
+    One-time migration: if old data/db.json or data/albums.json exist from a
+    previous JSON-based version and the SQLite tables are still empty, import
+    them automatically so existing libraries aren't lost on upgrade.
+    """
+    conn = get_db_conn()
+    media_count = conn.execute("SELECT COUNT(*) FROM media").fetchone()[0]
+
+    legacy_db_json     = DATA_DIR / "db.json"
+    legacy_albums_json = DATA_DIR / "albums.json"
+
+    if media_count == 0 and legacy_db_json.exists():
+        try:
+            legacy_media = load_json(legacy_db_json, [])
+            if isinstance(legacy_media, dict):  # old combined {media, albums} shape
+                legacy_albums_inline = legacy_media.get("albums", [])
+                legacy_media = legacy_media.get("media", [])
+            else:
+                legacy_albums_inline = []
+            if legacy_media:
+                save_media(legacy_media)
+                log.info("Migrated %d media records from legacy db.json into SQLite", len(legacy_media))
+                legacy_db_json.rename(legacy_db_json.with_suffix(".json.migrated"))
+            if legacy_albums_inline:
+                save_albums(legacy_albums_inline)
+        except Exception as e:
+            log.warning("Legacy db.json migration failed: %s", e)
+
+    album_count = conn.execute("SELECT COUNT(*) FROM albums").fetchone()[0]
+    if album_count == 0 and legacy_albums_json.exists():
+        try:
+            legacy_albums = load_json(legacy_albums_json, [])
+            if legacy_albums:
+                save_albums(legacy_albums)
+                log.info("Migrated %d albums from legacy albums.json into SQLite", len(legacy_albums))
+                legacy_albums_json.rename(legacy_albums_json.with_suffix(".json.migrated"))
+        except Exception as e:
+            log.warning("Legacy albums.json migration failed: %s", e)
+
+_FORMAT_ALIASES = {"HEIF": "HEIC", "JPG": "JPEG"}
+
+def _row_to_media_dict(row: sqlite3.Row) -> dict:
+    """Reconstruct the exact original media dict shape from a DB row."""
+    meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+    return {
+        "name":       row["name"],
+        "uniqueName": row["uniqueName"],
+        "hash":       row["hash"],
+        "type":       row["type"],
+        "isHidden":   bool(row["isHidden"]),
+        "metadata":   meta,
+    }
+
+def _media_dict_to_row(m: dict) -> dict:
+    """Extract indexed column values from a media dict's metadata."""
+    meta  = m.get("metadata", {}) or {}
+    file_ = meta.get("file", {}) or {}
+    cam   = meta.get("camera", {}) or {}
+    date  = meta.get("date", {}) or {}
+
+    raw_fmt = (file_.get("format") or "").upper().strip()
+    fmt     = _FORMAT_ALIASES.get(raw_fmt, raw_fmt)
+
+    make  = (cam.get("make")  or "").strip()
+    model = (cam.get("model") or "").strip()
+    camera_label = (make + " " + model).strip()
+
+    date_modified = date.get("modified") or ""
+    date_created  = date.get("created")  or ""
+    date_sort     = date_modified or date_created or ""
+
+    return {
+        "uniqueName":    m.get("uniqueName"),
+        "name":          m.get("name", ""),
+        "hash":          m.get("hash"),
+        "type":          m.get("type", "image"),
+        "isHidden":      1 if m.get("isHidden") else 0,
+        "format":        fmt,
+        "camera_label":  camera_label,
+        "source_root":   (file_.get("source_root") or "").rstrip("/\\"),
+        "file_path":     file_.get("path", ""),
+        "date_sort":     date_sort,
+        "date_created":  date_created,
+        "metadata_json": json.dumps(meta, default=str),
+    }
+
 def load_media() -> list:
-    """Return the media array from db.json."""
-    return load_json(DB_JSON, [])
+    """Return the full media list as list[dict] — same shape as the old db.json array."""
+    conn = get_db_conn()
+    rows = conn.execute("SELECT * FROM media").fetchall()
+    return [_row_to_media_dict(r) for r in rows]
 
 def save_media(media: list):
-    """Write only the media array to db.json."""
-    save_json(DB_JSON, media)
+    """
+    Replace the entire media table with the given list — same semantics as
+    the old save_media(media) which overwrote db.json wholesale.
+    """
+    conn = get_db_conn()
+    with conn:
+        conn.execute("DELETE FROM media")
+        for m in media:
+            r = _media_dict_to_row(m)
+            conn.execute("""
+                INSERT INTO media
+                    (uniqueName, name, hash, type, isHidden, format,
+                     camera_label, source_root, file_path, date_sort,
+                     date_created, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                r["uniqueName"], r["name"], r["hash"], r["type"], r["isHidden"],
+                r["format"], r["camera_label"], r["source_root"], r["file_path"],
+                r["date_sort"], r["date_created"], r["metadata_json"],
+            ))
+    log.info("Saved %d media records to SQLite", len(media))
+
+def upsert_media_rows(media_list: list):
+    """
+    Insert or update many media records in one transaction without touching
+    unrelated rows — used by sync_library for incremental indexing instead of
+    a full table replace (much faster for repeated syncs on large libraries).
+    """
+    conn = get_db_conn()
+    with conn:
+        for m in media_list:
+            r = _media_dict_to_row(m)
+            conn.execute("""
+                INSERT INTO media
+                    (uniqueName, name, hash, type, isHidden, format,
+                     camera_label, source_root, file_path, date_sort,
+                     date_created, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(uniqueName) DO UPDATE SET
+                    name=excluded.name, hash=excluded.hash, type=excluded.type,
+                    isHidden=excluded.isHidden, format=excluded.format,
+                    camera_label=excluded.camera_label, source_root=excluded.source_root,
+                    file_path=excluded.file_path, date_sort=excluded.date_sort,
+                    date_created=excluded.date_created, metadata_json=excluded.metadata_json
+            """, (
+                r["uniqueName"], r["name"], r["hash"], r["type"], r["isHidden"],
+                r["format"], r["camera_label"], r["source_root"], r["file_path"],
+                r["date_sort"], r["date_created"], r["metadata_json"],
+            ))
+
+def get_media_by_unique_name(unique_name: str):
+    """Fast indexed lookup of a single media item by primary key."""
+    conn = get_db_conn()
+    row = conn.execute("SELECT * FROM media WHERE uniqueName = ?", (unique_name,)).fetchone()
+    return _row_to_media_dict(row) if row else None
+
+def set_media_hidden(unique_name: str, hidden: bool) -> bool:
+    """Toggle isHidden for one record. Returns True if a row was updated."""
+    conn = get_db_conn()
+    with conn:
+        cur = conn.execute(
+            "UPDATE media SET isHidden = ? WHERE uniqueName = ?",
+            (1 if hidden else 0, unique_name)
+        )
+    return cur.rowcount > 0
+
+def get_existing_hashes_and_paths() -> tuple:
+    """
+    Return (set of hashes, set of resolved full paths) for dedup checks during sync.
+    Reads only the columns needed instead of full metadata blobs.
+    """
+    conn = get_db_conn()
+    rows = conn.execute("SELECT hash, file_path, name FROM media").fetchall()
+    hashes = {r["hash"] for r in rows if r["hash"]}
+    paths  = set()
+    for r in rows:
+        if r["file_path"] and r["name"]:
+            try:
+                paths.add(str(Path(os.path.join(r["file_path"], r["name"])).resolve()))
+            except Exception:
+                pass
+    return hashes, paths
+
+def query_media(filters: dict, sort: str, offset: int, limit: int) -> tuple:
+    """
+    Core filtered/sorted/paginated query — the SQL equivalent of the old
+    _filter_media() + _sort_media() + list-slicing pipeline, but done entirely
+    in SQLite with indexes instead of a full Python list scan.
+    Returns (items: list[dict], total: int).
+    """
+    conn = get_db_conn()
+
+    where = []
+    args  = []
+
+    hidden = (filters.get("hidden") or "").strip().lower()
+    if hidden == "true":
+        where.append("isHidden = 1")
+    elif hidden != "include":
+        where.append("isHidden = 0")
+
+    fmt = (filters.get("format") or "").strip().upper()
+    if fmt:
+        where.append("format = ?")
+        args.append(fmt)
+
+    cam = (filters.get("camera") or "").strip()
+    if cam:
+        where.append("camera_label = ?")
+        args.append(cam)
+
+    loc = (filters.get("location") or "").strip().rstrip("/\\")
+    if loc:
+        where.append("(source_root = ? OR file_path LIKE ?)")
+        args.append(loc)
+        args.append(loc + "%")
+
+    q = (filters.get("q") or "").strip().lower()
+    if q:
+        where.append("(LOWER(name) LIKE ? OR LOWER(camera_label) LIKE ? OR date_created LIKE ?)")
+        like = f"%{q}%"
+        args.extend([like, like, like])
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    total = conn.execute(f"SELECT COUNT(*) FROM media {where_sql}", args).fetchone()[0]
+
+    if sort == "date-asc":
+        order_sql = "ORDER BY date_sort ASC"
+    elif sort == "name":
+        order_sql = "ORDER BY name COLLATE NOCASE ASC"
+    else:
+        order_sql = "ORDER BY date_sort DESC"
+
+    rows = conn.execute(
+        f"SELECT * FROM media {where_sql} {order_sql} LIMIT ? OFFSET ?",
+        args + [limit, offset]
+    ).fetchall()
+
+    return [_row_to_media_dict(r) for r in rows], total
+
+def get_distinct_formats() -> list:
+    conn = get_db_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT format FROM media WHERE format != '' ORDER BY format"
+    ).fetchall()
+    return [r["format"] for r in rows]
+
+def get_distinct_cameras() -> list:
+    conn = get_db_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT camera_label FROM media WHERE camera_label != '' ORDER BY camera_label"
+    ).fetchall()
+    return [r["camera_label"] for r in rows]
+
+def get_distinct_source_roots() -> list:
+    conn = get_db_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT source_root FROM media WHERE source_root != '' ORDER BY source_root"
+    ).fetchall()
+    return [r["source_root"] for r in rows]
+
+def get_media_count() -> int:
+    conn = get_db_conn()
+    return conn.execute("SELECT COUNT(*) FROM media").fetchone()[0]
+
+
+# ── Albums ──────────────────────────────────────────────────────────────────
 
 def load_albums() -> list:
-    """Return the albums array from albums.json."""
-    return load_json(ALBUMS_JSON, [])
+    """Return all albums as list[dict] — same shape as the old albums.json array."""
+    conn  = get_db_conn()
+    rows  = conn.execute("SELECT id, name FROM albums").fetchall()
+    out   = []
+    for a in rows:
+        media_rows = conn.execute(
+            "SELECT uniqueName FROM album_media WHERE album_id = ? ORDER BY position",
+            (a["id"],)
+        ).fetchall()
+        out.append({
+            "id":    a["id"],
+            "name":  a["name"],
+            "media": [m["uniqueName"] for m in media_rows],
+        })
+    return out
 
 def save_albums(albums: list):
-    """Write the albums array to albums.json."""
-    save_json(ALBUMS_JSON, albums)
+    """Replace all albums + their membership — same semantics as the old save_albums()."""
+    conn = get_db_conn()
+    with conn:
+        conn.execute("DELETE FROM album_media")
+        conn.execute("DELETE FROM albums")
+        for a in albums:
+            conn.execute(
+                "INSERT INTO albums (id, name) VALUES (?, ?)",
+                (a.get("id"), a.get("name", "Untitled"))
+            )
+            for pos, un in enumerate(a.get("media", [])):
+                # Skip media references that don't exist (defensive — avoids FK errors)
+                exists = conn.execute(
+                    "SELECT 1 FROM media WHERE uniqueName = ?", (un,)
+                ).fetchone()
+                if exists:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO album_media (album_id, uniqueName, position) VALUES (?, ?, ?)",
+                        (a.get("id"), un, pos)
+                    )
+    log.info("Saved %d albums to SQLite", len(albums))
+
+def create_album(name: str) -> dict:
+    conn  = get_db_conn()
+    album = {"name": name, "id": "album_" + str(uuid.uuid4())[:8], "media": []}
+    with conn:
+        conn.execute("INSERT INTO albums (id, name) VALUES (?, ?)", (album["id"], album["name"]))
+    return album
+
+def add_media_to_album(album_id: str, unique_name: str) -> bool:
+    conn = get_db_conn()
+    album_exists = conn.execute("SELECT 1 FROM albums WHERE id = ?", (album_id,)).fetchone()
+    if not album_exists:
+        return False
+    with conn:
+        max_pos = conn.execute(
+            "SELECT COALESCE(MAX(position), -1) FROM album_media WHERE album_id = ?", (album_id,)
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT OR IGNORE INTO album_media (album_id, uniqueName, position) VALUES (?, ?, ?)",
+            (album_id, unique_name, max_pos + 1)
+        )
+    return True
+
+# Run legacy JSON → SQLite migration now that save_media/save_albums exist
+_migrate_legacy_json_if_present()
+
 
 def file_hash(filepath: str) -> str:
     """MD5 hash of first 64 KB for fast deduplication."""
@@ -514,28 +904,21 @@ def load_config() -> dict:
     return cfg
 
 def sync_library() -> dict:
-    """Scan configured directories and update db.json with new media."""
-    cfg      = load_config()
-    sources  = load_json(MEDIA_JSON, [])
-    media    = load_media()
+    """Scan configured directories and incrementally index new media into SQLite."""
+    cfg     = load_config()
+    sources = load_json(MEDIA_JSON, [])
 
     supported = (
         {f.lower() for f in cfg.get("supported_image_formats", [])} |
         {f.lower() for f in cfg.get("supported_video_formats", [])}
     )
 
-    # Build lookup sets — use resolved absolute paths for reliable dedup
-    existing_hashes = {m.get("hash") for m in media if m.get("hash")}
-    existing_paths  = set()
-    for m in media:
-        file_meta = m.get("metadata", {}).get("file", {})
-        dir_part  = file_meta.get("path", "")
-        name_part = m.get("name", "")
-        if dir_part and name_part:
-            existing_paths.add(str(Path(os.path.join(dir_part, name_part)).resolve()))
+    # Fast dedup lookup — reads only hash/path columns, not full metadata blobs
+    existing_hashes, existing_paths = get_existing_hashes_and_paths()
 
-    added   = 0
-    scanned = 0
+    added       = 0
+    scanned     = 0
+    new_entries = []   # batched and upserted once at the end of each source
 
     for source in sources:
         if not source.get("visibility", True):
@@ -556,10 +939,8 @@ def sync_library() -> dict:
         log.info("Scanning: %s → %s (recursive)", source.get("name", dir_path), source_root)
 
         for root, dirs, files in os.walk(dir_path, followlinks=follow_links):
-            # Skip hidden directories (names starting with .)
             if skip_hidden:
                 dirs[:] = [d for d in dirs if not d.startswith(".")]
-            # Enforce max scan depth
             if max_depth > 0:
                 current_depth = str(Path(root).resolve()).rstrip("/").count("/") - source_depth
                 if current_depth >= max_depth:
@@ -589,7 +970,7 @@ def sync_library() -> dict:
 
                 media_type = "video" if is_video(full_path) else "image"
                 meta       = extract_metadata(full_path)
-                meta["file"]["path"]          = str(Path(full_path).parent) + os.sep
+                meta["file"]["path"] = str(Path(full_path).parent) + os.sep
                 try:
                     rel = str(Path(full_path).relative_to(source_root))
                     meta["file"]["relative_path"] = rel
@@ -609,15 +990,23 @@ def sync_library() -> dict:
                     "isHidden":   False,
                     "metadata":   meta,
                 }
-                media.append(entry)
+                new_entries.append(entry)
                 existing_hashes.add(fhash)
                 existing_paths.add(resolved_path)
                 added += 1
                 log.info("Indexed [%s]: %s", media_type, meta["file"].get("relative_path", filename))
 
-    save_media(media)
-    log.info("Sync complete — scanned %d, added %d, total %d", scanned, added, len(media))
-    return {"added": added, "scanned": scanned, "total": len(media)}
+                # Flush in batches of 200 to keep memory bounded on very large libraries
+                if len(new_entries) >= 200:
+                    upsert_media_rows(new_entries)
+                    new_entries = []
+
+    if new_entries:
+        upsert_media_rows(new_entries)
+
+    total = get_media_count()
+    log.info("Sync complete — scanned %d, added %d, total %d", scanned, added, total)
+    return {"added": added, "scanned": scanned, "total": total}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -650,73 +1039,46 @@ if FLASK_AVAILABLE:
         log.info("configuration.json updated")
         return jsonify({"ok": True})
 
-    def _sort_media(media, sort):
-        """Sort media list server-side. sort: date-desc | date-asc | name"""
-        def _date(m):
-            d = m.get("metadata", {}).get("date", {})
-            return d.get("modified") or d.get("created") or ""
-        if sort == "date-asc":
-            return sorted(media, key=_date)
-        elif sort == "name":
-            return sorted(media, key=lambda m: m.get("name", "").lower())
-        else:  # date-desc (default)
-            return sorted(media, key=_date, reverse=True)
-
     @app.route("/api/media/count", methods=["GET"])
     def api_media_count():
-        """Return total number of indexed media items."""
-        return jsonify({"total": len(load_media())})
+        """Return total number of indexed media items — single indexed COUNT(*)."""
+        return jsonify({"total": get_media_count()})
 
     @app.route("/api/media/formats", methods=["GET"])
     def api_media_formats():
         """
-        Return all unique normalised format strings present in db.json.
-        Aliases applied: HEIF→HEIC, JPG→JPEG (case-insensitive input).
+        Return all unique normalised format strings present in the media table.
+        Aliases applied at write-time: HEIF→HEIC, JPG→JPEG.
+        Uses SELECT DISTINCT on an indexed column instead of scanning every record.
         """
-        aliases = {"HEIF": "HEIC", "JPG": "JPEG"}
-        formats = set()
-        for m in load_media():
-            raw = (m.get("metadata", {}).get("file", {}).get("format") or "").upper().strip()
-            if raw:
-                formats.add(aliases.get(raw, raw))
-        return jsonify(sorted(formats))
+        return jsonify(get_distinct_formats())
 
     @app.route("/api/media/cameras", methods=["GET"])
     def api_media_cameras():
         """
-        Return all unique non-empty 'Make Model' camera strings from db.json.
+        Return all unique non-empty 'Make Model' camera strings.
+        Uses SELECT DISTINCT on an indexed column.
         """
-        cameras = set()
-        for m in load_media():
-            cam = m.get("metadata", {}).get("camera", {})
-            make  = (cam.get("make")  or "").strip()
-            model = (cam.get("model") or "").strip()
-            label = (make + " " + model).strip()
-            if label:
-                cameras.add(label)
-        return jsonify(sorted(cameras))
+        return jsonify(get_distinct_cameras())
 
     @app.route("/api/media/locations", methods=["GET"])
     def api_media_locations():
         """
         Return all known locations — union of:
           1. Every entry in media.json (configured sources, regardless of sync state)
-          2. Every unique source_root in db.json (catches paths indexed before media.json was set)
+          2. Every unique source_root in the media table (indexed DISTINCT query)
         Response: [ { root: str, label: str }, … ] sorted by label.
         """
         sources  = load_json(MEDIA_JSON, [])
         name_map = {}   # normalised path → label
 
-        # 1. Add all configured sources from media.json
         for src in sources:
             raw  = (src.get("path") or "").rstrip("/\\")
             name = (src.get("name") or "").strip()
             if raw:
                 name_map[raw] = name or raw.split("/")[-1] or raw
 
-        # 2. Add any source_root values from db.json not already in media.json
-        for m in load_media():
-            root = (m.get("metadata", {}).get("file", {}).get("source_root") or "").strip().rstrip("/\\")
+        for root in get_distinct_source_roots():
             if root and root not in name_map:
                 name_map[root] = root.split("/")[-1] or root
 
@@ -726,75 +1088,16 @@ if FLASK_AVAILABLE:
         )
         return jsonify(result)
 
-    def _filter_media(media, params):
-        """
-        Apply server-side filters to a media list.
-        Supported params (all optional, empty string = no filter):
-          format   — normalised format string e.g. "HEIC", "JPEG"
-          camera   — "Make Model" string
-          location — source_root path
-          q        — search string (matches filename, camera, date)
-          hidden   — "true" | "false" | "" (default: exclude hidden)
-        """
-        fmt      = (params.get("format")   or "").strip().upper()
-        cam      = (params.get("camera")   or "").strip()
-        loc      = (params.get("location") or "").strip().rstrip("/")
-        q        = (params.get("q")        or "").strip().lower()
-        hidden   = (params.get("hidden")   or "").strip().lower()
-        aliases  = {"HEIF": "HEIC", "JPG": "JPEG"}
-
-        result = []
-        for m in media:
-            meta = m.get("metadata", {})
-
-            # Hidden filter
-            is_hidden = m.get("isHidden", False)
-            if hidden == "true":
-                if not is_hidden: continue
-            elif hidden != "include":
-                if is_hidden: continue   # default: exclude hidden
-
-            # Format filter
-            if fmt:
-                raw  = (meta.get("file", {}).get("format") or "").upper().strip()
-                norm = aliases.get(raw, raw)
-                if norm != fmt:
-                    continue
-
-            # Camera filter
-            if cam:
-                c     = meta.get("camera", {})
-                label = ((c.get("make") or "") + " " + (c.get("model") or "")).strip()
-                if label != cam:
-                    continue
-
-            # Location filter
-            if loc:
-                src  = (meta.get("file", {}).get("source_root") or "").rstrip("/")
-                path = (meta.get("file", {}).get("path") or "") + m.get("name", "")
-                if src:
-                    if src != loc: continue
-                else:
-                    if not (path.startswith(loc + "/") or path.startswith(loc)): continue
-
-            # Search filter
-            if q:
-                name   = m.get("name", "").lower()
-                c      = meta.get("camera", {})
-                camera = ((c.get("make") or "") + " " + (c.get("model") or "")).lower()
-                date   = (meta.get("date", {}).get("created") or "")
-                if not (q in name or q in camera or q in date):
-                    continue
-
-            result.append(m)
-        return result
-
     @app.route("/api/media", methods=["GET"])
     def api_media():
         """
-        Return a filtered, sorted, paginated slice of the media array.
+        Return a filtered, sorted, paginated slice of the media table.
+        Entirely SQL-backed — filtering, sorting, and pagination all happen
+        inside SQLite using indexed columns (format, camera_label, source_root,
+        isHidden, date_sort), avoiding a full Python scan of the dataset.
+
         Query params:
-          offset   (int,    default 0)         — start index
+          offset   (int,    default 0)          — start index
           limit    (int,    default 500)        — max items to return
           sort     (str,    default date-desc)  — date-desc | date-asc | name
           format   (str,    optional)           — filter by format e.g. HEIC
@@ -805,16 +1108,12 @@ if FLASK_AVAILABLE:
         Response:
           { items, offset, limit, total, has_more }
         """
-        media  = load_media()
-        media  = _filter_media(media, request.args)
         sort   = request.args.get("sort", "date-desc")
-        media  = _sort_media(media, sort)
-        total  = len(media)
         offset = max(0, int(request.args.get("offset", 0)))
         limit  = min(2000, max(1, int(request.args.get("limit", 500))))
-        slice_ = media[offset: offset + limit]
+        items, total = query_media(request.args, sort, offset, limit)
         return jsonify({
-            "items":    slice_,
+            "items":    items,
             "offset":   offset,
             "limit":    limit,
             "total":    total,
@@ -824,10 +1123,9 @@ if FLASK_AVAILABLE:
     # ── shared image helpers ──────────────────────────────────────────────────
 
     def _resolve_path(unique_name):
-        """Return (full_path, item) or raise 404."""
+        """Return (full_path, item) or raise 404. Uses indexed SQLite primary key lookup."""
         from flask import abort
-        media = load_media()
-        item  = next((m for m in media if m["uniqueName"] == unique_name), None)
+        item = get_media_by_unique_name(unique_name)
         if not item:
             abort(404)
         file_dir  = item.get("metadata", {}).get("file", {}).get("path", "")
@@ -1143,18 +1441,15 @@ if FLASK_AVAILABLE:
         """
         Return albums in full + first filtered/sorted page of media.
         Accepts all the same filter params as /api/media.
+        Uses the same SQL-backed query_media() as /api/media for performance.
         """
-        media  = load_media()
-        albums = load_albums()
-        media  = _filter_media(media, request.args)
         sort   = request.args.get("sort", "date-desc")
-        media  = _sort_media(media, sort)
-        total  = len(media)
         offset = max(0, int(request.args.get("offset", 0)))
         limit  = min(2000, max(1, int(request.args.get("limit", 500))))
-        slice_ = media[offset: offset + limit]
+        items, total = query_media(request.args, sort, offset, limit)
+        albums = load_albums()
         return jsonify({
-            "media":    slice_,
+            "media":    items,
             "albums":   albums,
             "total":    total,
             "offset":   offset,
@@ -1163,21 +1458,28 @@ if FLASK_AVAILABLE:
 
     @app.route("/api/db", methods=["POST"])
     def api_db_post():
-        """Accept {media, albums} from frontend and save to separate files."""
+        """
+        Accept {media, albums} from frontend and save to SQLite.
+        Note: this does a full-table replace for whichever of media/albums is
+        provided — same semantics as the original JSON-based endpoint.
+        """
         data = request.get_json(force=True)
         if not data:
             return jsonify({"error": "No data"}), 400
 
-        # Save media — preserve hashes
         if "media" in data:
-            existing = load_media()
-            hash_map = {m["uniqueName"]: m.get("hash") for m in existing}
+            # Preserve hashes for any record that doesn't include one
+            existing_hashes, _ = get_existing_hashes_and_paths()
+            conn = get_db_conn()
+            hash_lookup = {
+                r["uniqueName"]: r["hash"]
+                for r in conn.execute("SELECT uniqueName, hash FROM media").fetchall()
+            }
             for m in data["media"]:
-                if m.get("uniqueName") in hash_map:
-                    m.setdefault("hash", hash_map[m["uniqueName"]])
+                if not m.get("hash") and m.get("uniqueName") in hash_lookup:
+                    m["hash"] = hash_lookup[m["uniqueName"]]
             save_media(data["media"])
 
-        # Save albums separately
         if "albums" in data:
             save_albums(data["albums"])
 
@@ -1185,12 +1487,9 @@ if FLASK_AVAILABLE:
 
     @app.route("/api/album/create", methods=["POST"])
     def api_album_create():
-        body   = request.get_json(force=True) or {}
-        name   = body.get("name", "Untitled")
-        albums = load_albums()
-        album  = {"name": name, "id": "album_" + str(uuid.uuid4())[:8], "media": []}
-        albums.append(album)
-        save_albums(albums)
+        body  = request.get_json(force=True) or {}
+        name  = body.get("name", "Untitled")
+        album = create_album(name)
         return jsonify(album)
 
     @app.route("/api/album/add", methods=["POST"])
@@ -1198,13 +1497,9 @@ if FLASK_AVAILABLE:
         body        = request.get_json(force=True) or {}
         album_id    = body.get("albumId")
         unique_name = body.get("uniqueName")
-        albums      = load_albums()
-        for a in albums:
-            if a["id"] == album_id:
-                if unique_name not in a["media"]:
-                    a["media"].append(unique_name)
-                save_albums(albums)
-                return jsonify({"ok": True})
+        ok = add_media_to_album(album_id, unique_name)
+        if ok:
+            return jsonify({"ok": True})
         return jsonify({"error": "Album not found"}), 404
 
     @app.route("/api/media/hide", methods=["POST"])
@@ -1212,12 +1507,9 @@ if FLASK_AVAILABLE:
         body        = request.get_json(force=True) or {}
         unique_name = body.get("uniqueName")
         hidden      = body.get("hidden", True)
-        media       = load_media()
-        for m in media:
-            if m["uniqueName"] == unique_name:
-                m["isHidden"] = hidden
-                save_media(media)
-                return jsonify({"ok": True})
+        ok = set_media_hidden(unique_name, hidden)
+        if ok:
+            return jsonify({"ok": True})
         return jsonify({"error": "Not found"}), 404
 
     def run_server(port: int = 5000):
