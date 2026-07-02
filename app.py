@@ -35,12 +35,15 @@ except ImportError:
 # ── config ─────────────────────────────────────────────────────────────────────
 BASE_DIR       = Path(__file__).parent
 DATA_DIR       = BASE_DIR / "data"
+THUMB_DIR      = BASE_DIR / "thumb"
+LOGS_DIR       = BASE_DIR / "logs"
 DATA_DIR.mkdir(exist_ok=True)
+THUMB_DIR.mkdir(exist_ok=True)
+LOGS_DIR.mkdir(exist_ok=True)
 
 MEDIA_JSON     = DATA_DIR / "media.json"          # source directory config — stays JSON (small, human-edited)
 CONFIG_JSON    = DATA_DIR / "configuration.json"  # app settings — stays JSON (small, human-edited)
 SQLITE_DB      = DATA_DIR / "luminary.db"          # media + albums — SQLite (replaces db.json / albums.json)
-LOGS_DIR       = BASE_DIR / "logs"
 
 # ── bootstrap missing data files ───────────────────────────────────────────────
 def _bootstrap():
@@ -61,7 +64,7 @@ def _bootstrap():
         CONFIG_JSON.write_text(_json.dumps({
             "thumbnail_size": 400,
             "thumbnail_quality": 60,
-            "thumbnail_cache_path": "",
+            "thumbnail_cache_path": "thumb",
             "lazy_load_batch": 50,
             "supported_image_formats": [
                 "jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "bmp", "gif"
@@ -78,7 +81,6 @@ def _bootstrap():
 _bootstrap()
 
 # ── logging setup ──────────────────────────────────────────────────────────────
-LOGS_DIR.mkdir(exist_ok=True)
 
 _log_formatter = logging.Formatter(
     "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
@@ -879,7 +881,7 @@ def load_config() -> dict:
         "media_page_size":          500,
         "thumbnail_size":           400,
         "thumbnail_quality":        60,
-        "thumbnail_cache_path":     "",
+        "thumbnail_cache_path":     "thumb",
         # Media Types
         "supported_image_formats":  list(IMAGE_FORMATS),
         "supported_video_formats":  list(VIDEO_FORMATS),
@@ -1153,18 +1155,25 @@ if FLASK_AVAILABLE:
                         headers={"Cache-Control": "max-age=86400"})
 
     def _get_thumb_cache_dir() -> Path:
-        """Read thumbnail_cache_path from configuration.json. Falls back to .thumb_cache/ next to app.py."""
+        """
+        Resolve thumbnail_cache_path from configuration.json.
+        - Relative paths (e.g. "thumb") are resolved relative to BASE_DIR
+        - Absolute paths are used as-is (supports custom mounts like /mnt/ssd/cache)
+        - Falls back to BASE_DIR / "thumb" if the configured path can't be created
+        """
         cfg = load_config()
-        raw = cfg.get("thumbnail_cache_path", "")
-        if raw:
-            p = Path(raw).expanduser()
-        else:
-            p = BASE_DIR / ".thumb_cache"
+        raw = cfg.get("thumbnail_cache_path", "thumb").strip()
+        if not raw:
+            raw = "thumb"
+        p = Path(raw)
+        if not p.is_absolute():
+            p = BASE_DIR / p       # resolve relative to project root
+        p = p.expanduser()
         try:
             p.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            log.warning("Cannot create thumbnail cache dir %s: %s — falling back", p, e)
-            p = BASE_DIR / ".thumb_cache"
+            log.warning("Cannot create thumbnail cache dir %s: %s — falling back to thumb/", p, e)
+            p = THUMB_DIR
             p.mkdir(parents=True, exist_ok=True)
         return p
 

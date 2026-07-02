@@ -63,6 +63,7 @@ luminary/
 │   ├── luminary.db         # Media + albums — SQLite database (generated)
 │   ├── luminary.db-wal     # SQLite write-ahead log (transient)
 │   └── luminary.db-shm     # SQLite shared memory file (transient)
+├── thumb/                  # Thumbnail cache (auto-created, git-ignored)
 └── logs/                   # Daily rotating log files (git-ignored)
     └── log-YYYY-MM-DD.log
 ```
@@ -129,7 +130,7 @@ You can also manage this file through the UI via **⊞ Locations** in the top ba
 |---|---|---|
 | `thumbnail_size` | 400 | Max dimension of cached thumbnails in pixels |
 | `thumbnail_quality` | 60 | JPEG quality for thumbnails (1–95) |
-| `thumbnail_cache_path` | *(next to app.py)* | Absolute path to store thumbnail cache. Leave empty to use `.thumb_cache/` |
+| `thumbnail_cache_path` | `thumb` | Path to store thumbnail cache. Relative paths resolve from the project root (e.g. `thumb` → `luminary/thumb/`). Absolute paths are used as-is (e.g. `/mnt/ssd/thumbs`). |
 | `lazy_load_batch` | 50 | Number of images to render per scroll batch |
 | `supported_image_formats` | see above | Image file extensions to index |
 | `supported_video_formats` | see above | Video file extensions to index |
