@@ -1689,8 +1689,8 @@
         <input class="settings-input" id="s-thumbnail-quality" type="number" min="1" max="95" step="5">
       </div>
       <div class="settings-row">
-        <div class="settings-label">Thumbnail cache path <span class="settings-hint">leave empty for default</span></div>
-        <input class="settings-input settings-input-wide" id="s-thumbnail-cache-path" type="text" placeholder="e.g. /tmp/luminary_cache">
+        <div class="settings-label">Thumbnail cache path <span class="settings-hint">relative to project root, or absolute</span></div>
+        <input class="settings-input settings-input-wide" id="s-thumbnail-cache-path" type="text" placeholder="e.g. thumb  or  /mnt/ssd/thumbs">
       </div>
     </div>
 
@@ -3075,7 +3075,7 @@ function _settingsPopulate(c) {
   num('s-media-page-size',      c.media_page_size      ?? 500);
   num('s-thumbnail-size',       c.thumbnail_size       ?? 400);
   num('s-thumbnail-quality',    c.thumbnail_quality    ?? 60);
-  txt('s-thumbnail-cache-path', c.thumbnail_cache_path ?? '');
+  txt('s-thumbnail-cache-path', c.thumbnail_cache_path ?? 'thumb');
   // Media types — chips
   _buildFormatChips('s-image-formats', ALL_IMAGE_FORMATS, c.supported_image_formats ?? ALL_IMAGE_FORMATS);
   _buildFormatChips('s-video-formats', ALL_VIDEO_FORMATS, c.supported_video_formats ?? ALL_VIDEO_FORMATS);
