@@ -50,9 +50,9 @@ luminary/
 ├── app.py                  # Flask backend — API, scanner, metadata extractor
 ├── index.html              # Frontend single-page app
 ├── run.sh                  # Startup script
-├── configuration.json      # Default configuration template (copy to data/)
-├── data/                   # All runtime data — auto-created, git-ignored
-│   ├── configuration.json  # Active app settings
+├── config/                 # App settings — tracked in git
+│   └── configuration.json  # All configurable settings (edit this)
+├── data/                   # Runtime data — auto-created, git-ignored
 │   ├── media.json          # Source directory list
 │   ├── luminary.db         # Media + albums — SQLite database
 │   ├── luminary.db-wal     # SQLite write-ahead log (transient)
@@ -62,7 +62,7 @@ luminary/
     └── log-YYYY-MM-DD.log
 ```
 
-On first run `app.py` automatically creates `data/configuration.json` and `data/media.json` with defaults if they do not exist.
+On first run `app.py` automatically creates `data/media.json` with a default entry pointing at `~/Pictures`. `config/configuration.json` is shipped with the project and tracked in git — edit it directly to change settings.
 
 ### Why SQLite
 
@@ -106,7 +106,7 @@ Defines which directories Luminary scans. Luminary recurses into all subdirector
 
 Manage this file through the UI via **⊞ Locations** in the top bar.
 
-### `data/configuration.json` — App settings
+### `config/configuration.json` — App settings
 
 All fields with their defaults:
 
@@ -210,7 +210,7 @@ All fields with their defaults:
 | `log_level` | `INFO` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` |
 | `log_retention_days` | `30` | Days of log files to keep |
 
-All settings can be changed through **⚙ Settings** in the sidebar without editing the file directly.
+All settings can be changed through **⚙ Settings** in the sidebar without editing the file directly. Changes are written back to `config/configuration.json`.
 
 ---
 
@@ -345,7 +345,7 @@ All media endpoints support server-side filtering via query parameters.
 
 | File / Directory | Git | Description |
 |---|---|---|
-| `data/configuration.json` | ✗ | Active settings — auto-created from defaults on first run |
+| `config/configuration.json` | ✓ | App settings — shipped with the project, tracked in git, edit directly |
 | `data/media.json` | ✗ | Source directory list — auto-created with `~/Pictures` entry on first run |
 | `data/luminary.db` | ✗ | SQLite database — media records + albums |
 | `data/luminary.db-wal` / `-shm` | ✗ | SQLite WAL files — transient, safe to delete when server is stopped |
@@ -383,4 +383,5 @@ All media endpoints support server-side filtering via query parameters.
 - Change port in `data/configuration.json` → `"api_port"` and restart
 
 **Settings not saving**
-- Confirm `app.py` is running — Settings are saved via `POST /api/config` to the backend
+- Confirm `app.py` is running — Settings are saved via `POST /api/config` which writes to `config/configuration.json`
+- Check file permissions: `ls -l config/configuration.json`
