@@ -6,8 +6,9 @@ data/
 # Daily log files
 logs/*.log
 
-# Thumbnail cache
-.thumb_cache/
+# Thumbnail cache — directory tracked, contents ignored
+thumb/*
+!thumb/.gitkeep
 
 # Python
 __pycache__/

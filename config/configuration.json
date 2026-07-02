@@ -1,0 +1,35 @@
+{
+  "theme": "dark",
+  "grid_columns": 4,
+  "card_size": "medium",
+  "show_filename_on_card": true,
+  "show_date_on_card": true,
+  "show_subfolder_on_card": true,
+
+  "default_sort": "date-desc",
+  "default_date_field": "modified",
+  "show_hidden_default": false,
+
+  "lazy_load_batch": 50,
+  "media_page_size": 500,
+  "thumbnail_size": 400,
+  "thumbnail_quality": 60,
+  "thumbnail_cache_path": "thumb",
+
+  "supported_image_formats": ["jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "bmp", "gif"],
+  "supported_video_formats": ["mp4", "mov", "avi", "mkv", "webm", "m4v", "3gp", "wmv", "flv", "ts", "mts"],
+  "video_autoplay": false,
+  "video_preload": "metadata",
+
+  "follow_symlinks": true,
+  "skip_hidden_dirs": true,
+  "max_scan_depth": 0,
+  "dedup_method": "both",
+
+  "show_gps_in_metadata": true,
+  "extract_video_metadata": true,
+
+  "api_port": 5000,
+  "log_level": "INFO",
+  "log_retention_days": 30
+}

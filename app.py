@@ -35,12 +35,17 @@ except ImportError:
 # ── config ─────────────────────────────────────────────────────────────────────
 BASE_DIR       = Path(__file__).parent
 DATA_DIR       = BASE_DIR / "data"
+CONFIG_DIR     = BASE_DIR / "config"
+THUMB_DIR      = BASE_DIR / "thumb"
+LOGS_DIR       = BASE_DIR / "logs"
 DATA_DIR.mkdir(exist_ok=True)
+CONFIG_DIR.mkdir(exist_ok=True)
+THUMB_DIR.mkdir(exist_ok=True)
+LOGS_DIR.mkdir(exist_ok=True)
 
 MEDIA_JSON     = DATA_DIR / "media.json"          # source directory config — stays JSON (small, human-edited)
-CONFIG_JSON    = DATA_DIR / "configuration.json"  # app settings — stays JSON (small, human-edited)
+CONFIG_JSON    = CONFIG_DIR / "configuration.json" # app settings — tracked in git, not gitignored
 SQLITE_DB      = DATA_DIR / "luminary.db"          # media + albums — SQLite (replaces db.json / albums.json)
-LOGS_DIR       = BASE_DIR / "logs"
 
 # ── bootstrap missing data files ───────────────────────────────────────────────
 def _bootstrap():
@@ -59,26 +64,39 @@ def _bootstrap():
     if not CONFIG_JSON.exists():
         import json as _json
         CONFIG_JSON.write_text(_json.dumps({
-            "thumbnail_size": 400,
-            "thumbnail_quality": 60,
-            "thumbnail_cache_path": "",
-            "lazy_load_batch": 50,
-            "supported_image_formats": [
-                "jpg", "jpeg", "png", "heic", "heif", "webp", "tiff", "bmp", "gif"
-            ],
-            "supported_video_formats": [
-                "mp4", "mov", "avi", "mkv", "webm", "m4v", "3gp", "wmv", "flv", "ts", "mts"
-            ],
-            "show_hidden_default": False,
-            "api_port": 5000,
-            "log_level": "INFO"
+            "theme":                    "dark",
+            "grid_columns":             4,
+            "card_size":                "medium",
+            "show_filename_on_card":    True,
+            "show_date_on_card":        True,
+            "show_subfolder_on_card":   True,
+            "default_sort":             "date-desc",
+            "default_date_field":       "modified",
+            "show_hidden_default":      False,
+            "lazy_load_batch":          50,
+            "media_page_size":          500,
+            "thumbnail_size":           400,
+            "thumbnail_quality":        60,
+            "thumbnail_cache_path":     "thumb",
+            "supported_image_formats":  ["jpg","jpeg","png","heic","heif","webp","tiff","bmp","gif"],
+            "supported_video_formats":  ["mp4","mov","avi","mkv","webm","m4v","3gp","wmv","flv","ts","mts"],
+            "video_autoplay":           False,
+            "video_preload":            "metadata",
+            "follow_symlinks":          True,
+            "skip_hidden_dirs":         True,
+            "max_scan_depth":           0,
+            "dedup_method":             "both",
+            "show_gps_in_metadata":     True,
+            "extract_video_metadata":   True,
+            "api_port":                 5000,
+            "log_level":                "INFO",
+            "log_retention_days":       30
         }, indent=2), encoding="utf-8")
         print(f"[INFO] Created default {CONFIG_JSON}.")
 
 _bootstrap()
 
 # ── logging setup ──────────────────────────────────────────────────────────────
-LOGS_DIR.mkdir(exist_ok=True)
 
 _log_formatter = logging.Formatter(
     "%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
@@ -879,7 +897,7 @@ def load_config() -> dict:
         "media_page_size":          500,
         "thumbnail_size":           400,
         "thumbnail_quality":        60,
-        "thumbnail_cache_path":     "",
+        "thumbnail_cache_path":     "thumb",
         # Media Types
         "supported_image_formats":  list(IMAGE_FORMATS),
         "supported_video_formats":  list(VIDEO_FORMATS),
@@ -1028,7 +1046,7 @@ if FLASK_AVAILABLE:
 
     @app.route("/api/config", methods=["POST"])
     def api_config_post():
-        """Save updated configuration to data/configuration.json."""
+        """Save updated configuration to config/configuration.json."""
         data = request.get_json(force=True)
         if not isinstance(data, dict):
             return jsonify({"error": "Expected a JSON object"}), 400
@@ -1153,18 +1171,25 @@ if FLASK_AVAILABLE:
                         headers={"Cache-Control": "max-age=86400"})
 
     def _get_thumb_cache_dir() -> Path:
-        """Read thumbnail_cache_path from configuration.json. Falls back to .thumb_cache/ next to app.py."""
+        """
+        Resolve thumbnail_cache_path from configuration.json.
+        - Relative paths (e.g. "thumb") are resolved relative to BASE_DIR
+        - Absolute paths are used as-is (supports custom mounts like /mnt/ssd/cache)
+        - Falls back to BASE_DIR / "thumb" if the configured path can't be created
+        """
         cfg = load_config()
-        raw = cfg.get("thumbnail_cache_path", "")
-        if raw:
-            p = Path(raw).expanduser()
-        else:
-            p = BASE_DIR / ".thumb_cache"
+        raw = cfg.get("thumbnail_cache_path", "thumb").strip()
+        if not raw:
+            raw = "thumb"
+        p = Path(raw)
+        if not p.is_absolute():
+            p = BASE_DIR / p       # resolve relative to project root
+        p = p.expanduser()
         try:
             p.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            log.warning("Cannot create thumbnail cache dir %s: %s — falling back", p, e)
-            p = BASE_DIR / ".thumb_cache"
+            log.warning("Cannot create thumbnail cache dir %s: %s — falling back to thumb/", p, e)
+            p = THUMB_DIR
             p.mkdir(parents=True, exist_ok=True)
         return p
 
