@@ -14,6 +14,7 @@ import sqlite3
 import threading
 from pathlib import Path
 from datetime import datetime
+from collections import deque
 
 # ── optional deps (graceful degradation) ──────────────────────────────────────
 try:
@@ -572,6 +573,50 @@ def file_hash(filepath: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  SYNC STATE  —  shared between the sync background thread and the API
+# ══════════════════════════════════════════════════════════════════════════════
+
+_sync_lock  = threading.Lock()
+_sync_state = {
+    "running":        False,
+    "scanned":        0,
+    "added":          0,
+    "total_at_start": 0,
+    "current_file":   "",
+    "current_source": "",
+    "log":            deque(maxlen=200),  # last 200 log lines
+    "done":           False,
+    "result":         None,    # {added, scanned, total} on completion
+    "error":          None,
+}
+
+def _sync_update(**kwargs):
+    """Thread-safe update of sync state fields."""
+    with _sync_lock:
+        for k, v in kwargs.items():
+            if k == "log":
+                _sync_state["log"].append(v)
+            else:
+                _sync_state[k] = v
+
+def _sync_snapshot() -> dict:
+    """Return a JSON-serialisable snapshot of the current sync state."""
+    with _sync_lock:
+        return {
+            "running":        _sync_state["running"],
+            "scanned":        _sync_state["scanned"],
+            "added":          _sync_state["added"],
+            "total_at_start": _sync_state["total_at_start"],
+            "current_file":   _sync_state["current_file"],
+            "current_source": _sync_state["current_source"],
+            "log":            list(_sync_state["log"]),
+            "done":           _sync_state["done"],
+            "result":         _sync_state["result"],
+            "error":          _sync_state["error"],
+        }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  METADATA EXTRACTION
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -921,8 +966,83 @@ def load_config() -> dict:
         cfg.setdefault(k, v)
     return cfg
 
-def sync_library() -> dict:
-    """Scan configured directories and incrementally index new media into SQLite."""
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SYNC STATE  — thread-safe progress tracking for background sync
+# ══════════════════════════════════════════════════════════════════════════════
+
+class SyncState:
+    """Thread-safe container for sync progress, readable from any Flask request."""
+    def __init__(self):
+        self._lock    = threading.Lock()
+        self._reset()
+
+    def _reset(self):
+        self.running  = False
+        self.done     = False
+        self.error    = None
+        self.scanned  = 0
+        self.added    = 0
+        self.total    = 0
+        self.source   = ""     # currently scanning source name
+        self.file     = ""     # current file being indexed
+        self.log      = []     # recent log lines (capped at 200)
+        self.started  = None
+        self.finished = None
+
+    def start(self):
+        with self._lock:
+            self._reset()
+            self.running = True
+            self.started = datetime.now().isoformat()
+
+    def finish(self, total, error=None):
+        with self._lock:
+            self.running  = False
+            self.done     = True
+            self.total    = total
+            self.error    = error
+            self.finished = datetime.now().isoformat()
+
+    def update(self, *, scanned=None, added=None, source=None, file=None, msg=None):
+        with self._lock:
+            if scanned is not None: self.scanned = scanned
+            if added   is not None: self.added   = added
+            if source  is not None: self.source  = source
+            if file    is not None: self.file    = file
+            if msg:
+                self.log.append(msg)
+                if len(self.log) > 200:
+                    self.log = self.log[-200:]
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "running":  self.running,
+                "done":     self.done,
+                "error":    self.error,
+                "scanned":  self.scanned,
+                "added":    self.added,
+                "total":    self.total,
+                "source":   self.source,
+                "file":     self.file,
+                "log":      list(self.log),
+                "started":  self.started,
+                "finished": self.finished,
+            }
+
+_sync_state = SyncState()
+
+
+def sync_library(progress=None) -> dict:
+    """
+    Scan configured directories and incrementally index new media into SQLite.
+    progress: optional callable(event, **kwargs) for real-time status updates.
+    """
+    def emit(event, **kw):
+        if progress:
+            progress(event, **kw)
+
     cfg     = load_config()
     sources = load_json(MEDIA_JSON, [])
 
@@ -931,37 +1051,42 @@ def sync_library() -> dict:
         {f.lower() for f in cfg.get("supported_video_formats", [])}
     )
 
-    # Fast dedup lookup — reads only hash/path columns, not full metadata blobs
     existing_hashes, existing_paths = get_existing_hashes_and_paths()
 
     added       = 0
     scanned     = 0
-    new_entries = []   # batched and upserted once at the end of each source
+    new_entries = []
 
     for source in sources:
         if not source.get("visibility", True):
+            emit("log", msg=f"Skipped (hidden): {source.get('name', source.get('path'))}")
             log.info("Skipping hidden source: %s", source.get("name"))
             continue
 
         dir_path = source.get("path", "").rstrip("/\\")
+        src_name = source.get("name", dir_path)
+
         if not os.path.isdir(dir_path):
+            emit("log", msg=f"Not found: {dir_path}")
             log.warning("Directory not found: %s", dir_path)
             continue
 
-        source_root     = str(Path(dir_path).resolve())
-        follow_links    = cfg.get("follow_symlinks", True)
-        skip_hidden     = cfg.get("skip_hidden_dirs", True)
-        max_depth       = int(cfg.get("max_scan_depth", 0))   # 0 = unlimited
-        dedup_method    = cfg.get("dedup_method", "both")
-        source_depth    = source_root.rstrip("/").count("/")
-        log.info("Scanning: %s → %s (recursive)", source.get("name", dir_path), source_root)
+        source_root  = str(Path(dir_path).resolve())
+        follow_links = cfg.get("follow_symlinks", True)
+        skip_hidden  = cfg.get("skip_hidden_dirs", True)
+        max_depth    = int(cfg.get("max_scan_depth", 0))
+        dedup_method = cfg.get("dedup_method", "both")
+        source_depth = source_root.rstrip("/").count("/")
+
+        emit("source", source=src_name, msg=f"Scanning: {src_name}")
+        log.info("Scanning: %s → %s", src_name, source_root)
 
         for root, dirs, files in os.walk(dir_path, followlinks=follow_links):
             if skip_hidden:
                 dirs[:] = [d for d in dirs if not d.startswith(".")]
             if max_depth > 0:
-                current_depth = str(Path(root).resolve()).rstrip("/").count("/") - source_depth
-                if current_depth >= max_depth:
+                cur = str(Path(root).resolve()).rstrip("/").count("/") - source_depth
+                if cur >= max_depth:
                     dirs.clear()
             dirs.sort()
             for filename in sorted(files):
@@ -975,19 +1100,22 @@ def sync_library() -> dict:
 
                 if dedup_method in ("path", "both"):
                     if resolved_path in existing_paths:
-                        log.debug("Already indexed (path): %s", resolved_path)
                         continue
 
                 if dedup_method in ("hash", "both"):
                     fhash = file_hash(full_path)
                     if fhash in existing_hashes:
-                        log.debug("Duplicate (hash): %s", filename)
                         continue
                 else:
                     fhash = file_hash(full_path)
 
                 media_type = "video" if is_video(full_path) else "image"
-                meta       = extract_metadata(full_path)
+                try:
+                    meta = extract_metadata(full_path)
+                except Exception as e:
+                    log.warning("Metadata failed for %s: %s", full_path, e)
+                    meta = {"file": {}, "date": {}}
+
                 meta["file"]["path"] = str(Path(full_path).parent) + os.sep
                 try:
                     rel = str(Path(full_path).relative_to(source_root))
@@ -1012,18 +1140,23 @@ def sync_library() -> dict:
                 existing_hashes.add(fhash)
                 existing_paths.add(resolved_path)
                 added += 1
+                emit("progress", scanned=scanned, added=added, file=filename,
+                     msg=f"[{media_type}] {meta['file'].get('relative_path', filename)}")
                 log.info("Indexed [%s]: %s", media_type, meta["file"].get("relative_path", filename))
 
-                # Flush in batches of 200 to keep memory bounded on very large libraries
                 if len(new_entries) >= 200:
                     upsert_media_rows(new_entries)
                     new_entries = []
+                    emit("progress", scanned=scanned, added=added)
+
+        emit("log", msg=f"Done: {src_name}")
 
     if new_entries:
         upsert_media_rows(new_entries)
 
     total = get_media_count()
     log.info("Sync complete — scanned %d, added %d, total %d", scanned, added, total)
+    emit("log", msg=f"Sync complete — {added} new, {total} total")
     return {"added": added, "scanned": scanned, "total": total}
 
 
@@ -1458,8 +1591,130 @@ if FLASK_AVAILABLE:
 
     @app.route("/api/sync", methods=["POST"])
     def api_sync():
-        result = sync_library()
-        return jsonify(result)
+        """
+        Start a background sync. Returns 202 immediately.
+        Returns 409 if a sync is already running.
+        Poll GET /api/sync/status for live progress,
+        or open GET /api/sync/stream for Server-Sent Events.
+        """
+        with _sync_lock:
+            if _sync_state["running"]:
+                return jsonify({"error": "Sync already in progress"}), 409
+            # Reset state for new run
+            _sync_state["running"]        = True
+            _sync_state["done"]           = False
+            _sync_state["error"]          = None
+            _sync_state["result"]         = None
+            _sync_state["scanned"]        = 0
+            _sync_state["added"]          = 0
+            _sync_state["current_file"]   = ""
+            _sync_state["current_source"] = ""
+            _sync_state["total_at_start"] = get_media_count()
+            _sync_state["log"]            = deque(maxlen=200)
+
+        def _progress(event, **kw):
+            if event == "source":
+                _sync_update(current_source=kw.get("source", ""),
+                             log=kw.get("msg", ""))
+            elif event == "progress":
+                updates = {}
+                if kw.get("scanned") is not None: updates["scanned"] = kw["scanned"]
+                if kw.get("added")   is not None: updates["added"]   = kw["added"]
+                if kw.get("file"):                updates["current_file"] = kw["file"]
+                if kw.get("msg"):                 updates["log"] = kw["msg"]
+                if updates:
+                    _sync_update(**updates)
+            elif event == "log":
+                _sync_update(log=kw.get("msg", ""))
+
+        def _run():
+            try:
+                result = sync_library(progress=_progress)
+                _sync_update(
+                    running=False, done=True,
+                    result=result,
+                    current_file="", current_source="",
+                    log=f"✓ Complete — {result['added']} new, {result['total']} total",
+                )
+            except Exception as e:
+                log.exception("Background sync failed")
+                _sync_update(
+                    running=False, done=True,
+                    error=str(e),
+                    log=f"✗ Sync error: {e}",
+                )
+
+        threading.Thread(target=_run, daemon=True, name="luminary-sync").start()
+        return jsonify({"status": "started"}), 202
+
+    @app.route("/api/sync/status", methods=["GET"])
+    def api_sync_status():
+        """
+        Return the current sync state as JSON (for polling).
+        {running, done, scanned, added, total_at_start,
+         current_file, current_source, log[last 50], result, error}
+        """
+        snap = _sync_snapshot()
+        snap["log"] = snap["log"][-50:]   # send only last 50 lines to keep response small
+        return jsonify(snap)
+
+    @app.route("/api/sync/stream", methods=["GET"])
+    def api_sync_stream():
+        """
+        Server-Sent Events stream — pushes sync progress to the browser in real time.
+        Events: connected | progress | log | complete | heartbeat
+        Stream closes automatically when sync finishes.
+        """
+        from flask import Response
+        import time
+
+        def generate():
+            yield "event: connected\ndata: {}\n\n"
+            prev_log_len = 0
+            prev_added   = -1
+            prev_scanned = -1
+
+            while True:
+                snap = _sync_snapshot()
+
+                if snap["added"] != prev_added or snap["scanned"] != prev_scanned:
+                    prev_added   = snap["added"]
+                    prev_scanned = snap["scanned"]
+                    payload = json.dumps({
+                        "scanned":        snap["scanned"],
+                        "added":          snap["added"],
+                        "total_at_start": snap["total_at_start"],
+                        "current_source": snap["current_source"],
+                        "current_file":   snap["current_file"],
+                    })
+                    yield f"event: progress\ndata: {payload}\n\n"
+
+                new_lines = list(snap["log"])[prev_log_len:]
+                for line in new_lines:
+                    yield f"event: log\ndata: {json.dumps(line)}\n\n"
+                prev_log_len = len(snap["log"])
+
+                if snap["done"]:
+                    payload = json.dumps({
+                        "added":   snap["added"],
+                        "scanned": snap["scanned"],
+                        "result":  snap["result"],
+                        "error":   snap["error"],
+                    })
+                    yield f"event: complete\ndata: {payload}\n\n"
+                    return
+
+                yield "event: heartbeat\ndata: {}\n\n"
+                time.sleep(1.5)
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control":     "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.route("/api/db", methods=["GET"])
     def api_db_get():
