@@ -971,67 +971,6 @@ def load_config() -> dict:
 #  SYNC STATE  — thread-safe progress tracking for background sync
 # ══════════════════════════════════════════════════════════════════════════════
 
-class SyncState:
-    """Thread-safe container for sync progress, readable from any Flask request."""
-    def __init__(self):
-        self._lock    = threading.Lock()
-        self._reset()
-
-    def _reset(self):
-        self.running  = False
-        self.done     = False
-        self.error    = None
-        self.scanned  = 0
-        self.added    = 0
-        self.total    = 0
-        self.source   = ""     # currently scanning source name
-        self.file     = ""     # current file being indexed
-        self.log      = []     # recent log lines (capped at 200)
-        self.started  = None
-        self.finished = None
-
-    def start(self):
-        with self._lock:
-            self._reset()
-            self.running = True
-            self.started = datetime.now().isoformat()
-
-    def finish(self, total, error=None):
-        with self._lock:
-            self.running  = False
-            self.done     = True
-            self.total    = total
-            self.error    = error
-            self.finished = datetime.now().isoformat()
-
-    def update(self, *, scanned=None, added=None, source=None, file=None, msg=None):
-        with self._lock:
-            if scanned is not None: self.scanned = scanned
-            if added   is not None: self.added   = added
-            if source  is not None: self.source  = source
-            if file    is not None: self.file    = file
-            if msg:
-                self.log.append(msg)
-                if len(self.log) > 200:
-                    self.log = self.log[-200:]
-
-    def snapshot(self) -> dict:
-        with self._lock:
-            return {
-                "running":  self.running,
-                "done":     self.done,
-                "error":    self.error,
-                "scanned":  self.scanned,
-                "added":    self.added,
-                "total":    self.total,
-                "source":   self.source,
-                "file":     self.file,
-                "log":      list(self.log),
-                "started":  self.started,
-                "finished": self.finished,
-            }
-
-_sync_state = SyncState()
 
 
 def sync_library(progress=None) -> dict:
