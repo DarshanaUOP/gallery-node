@@ -832,6 +832,7 @@
   #sync-overlay {
     position: fixed; inset: 0;
     background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
     z-index: 600;
     display: none;
     align-items: center;
@@ -841,20 +842,85 @@
   .sync-card {
     background: var(--surface);
     border: 1px solid var(--border-hover);
-    border-radius: 8px;
-    padding: 32px 40px;
-    text-align: center;
+    border-radius: 10px;
+    padding: 28px 32px;
+    width: 480px;
+    max-width: 94vw;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .sync-card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
   .sync-spinner {
-    width: 40px; height: 40px;
+    width: 22px; height: 22px;
     border: 2px solid var(--border);
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
-    margin: 0 auto 16px;
+    flex-shrink: 0;
+  }
+  .sync-spinner.done {
+    border-color: var(--accent);
+    border-top-color: var(--accent);
+    animation: none;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .sync-card p { font-family: var(--font-display); font-size: 16px; color: var(--text-dim); }
+  #sync-title {
+    font-family: var(--font-display);
+    font-size: 16px;
+    font-weight: 300;
+    color: var(--text);
+    flex: 1;
+  }
+  #sync-source {
+    font-size: 11px;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #sync-counters {
+    display: flex;
+    gap: 20px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+  }
+  .sync-counter { display: flex; flex-direction: column; gap: 2px; }
+  .sync-counter-val { font-size: 22px; color: var(--text); line-height: 1; }
+  .sync-counter-label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  #sync-file {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-height: 14px;
+  }
+  #sync-log {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    padding: 8px 10px;
+    height: 100px;
+    overflow-y: auto;
+    line-height: 1.7;
+  }
+  #sync-log::-webkit-scrollbar { width: 3px; }
+  #sync-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  #sync-close-btn {
+    align-self: flex-end;
+    display: none;
+  }
+  #sync-close-btn.visible { display: block; }
 
   /* ── EMPTY STATE ── */
   #empty-state {
@@ -1794,8 +1860,24 @@
 <!-- SYNC OVERLAY -->
 <div id="sync-overlay">
   <div class="sync-card">
-    <div class="sync-spinner"></div>
-    <p>Synchronising media library…</p>
+    <div class="sync-card-header">
+      <div class="sync-spinner" id="sync-spinner"></div>
+      <span id="sync-title">Synchronising media library…</span>
+    </div>
+    <div id="sync-source"></div>
+    <div id="sync-counters">
+      <div class="sync-counter">
+        <span class="sync-counter-val" id="sync-added">0</span>
+        <span class="sync-counter-label">Added</span>
+      </div>
+      <div class="sync-counter">
+        <span class="sync-counter-val" id="sync-scanned">0</span>
+        <span class="sync-counter-label">Scanned</span>
+      </div>
+    </div>
+    <div id="sync-file"></div>
+    <div id="sync-log"></div>
+    <button class="btn btn-ghost" id="sync-close-btn" onclick="closeSyncOverlay()">✓ Done</button>
   </div>
 </div>
 
@@ -2978,26 +3060,142 @@ document.querySelectorAll('.modal-overlay').forEach(m => {
 //  SYNC
 // ─────────────────────────────────────────────
 async function triggerSync() {
-  document.getElementById('sync-overlay').classList.add('show');
+  // Check if already running
+  try {
+    const check = await fetch(`${API_BASE}/api/sync/status`);
+    if (check.ok) {
+      const st = await check.json();
+      if (st.running) { openSyncOverlay(); _syncPoll(); return; }
+    }
+  } catch { /* backend not running */ }
+
+  // Start sync
+  let started = false;
   try {
     const r = await fetch(`${API_BASE}/api/sync`, { method: 'POST' });
+    if (r.status === 409) { openSyncOverlay(); _syncPoll(); return; } // already running
     if (!r.ok) throw new Error('Backend returned ' + r.status);
-    const result = await r.json();
-    await loadDB();
-    renderAll();
-    populateAllFilters();
-    toast(`Sync complete — ${result.added || 0} new, ${result.total || db.media.length} total`, 'success');
+    started = true;
   } catch (err) {
-    try {
-      await loadDB();
-      renderAll();
-      populateAllFilters();
-      toast('db.json refreshed (backend offline)', 'info');
-    } catch {
-      toast('Sync failed — is app.py running?', 'error');
-    }
+    toast('Sync failed — is app.py running?', 'error');
+    return;
   }
+
+  if (!started) return;
+  openSyncOverlay();
+
+  // Prefer SSE stream; fall back to polling if EventSource unavailable
+  if (typeof EventSource !== 'undefined') {
+    _syncStream();
+  } else {
+    _syncPoll();
+  }
+}
+
+function openSyncOverlay() {
+  document.getElementById('sync-overlay').classList.add('show');
+  document.getElementById('sync-title').textContent   = 'Synchronising media library…';
+  document.getElementById('sync-spinner').classList.remove('done');
+  document.getElementById('sync-close-btn').classList.remove('visible');
+  document.getElementById('sync-added').textContent   = '0';
+  document.getElementById('sync-scanned').textContent = '0';
+  document.getElementById('sync-source').textContent  = '';
+  document.getElementById('sync-file').textContent    = '';
+  document.getElementById('sync-log').innerHTML       = '';
+}
+
+function closeSyncOverlay() {
   document.getElementById('sync-overlay').classList.remove('show');
+}
+
+function _syncApplyProgress(data) {
+  if (data.scanned    !== undefined) document.getElementById('sync-scanned').textContent   = data.scanned;
+  if (data.added      !== undefined) document.getElementById('sync-added').textContent     = data.added;
+  if (data.current_source)           document.getElementById('sync-source').textContent    = data.current_source;
+  if (data.current_file)             document.getElementById('sync-file').textContent      = '↳ ' + data.current_file;
+}
+
+function _syncAppendLog(line) {
+  const el  = document.getElementById('sync-log');
+  const div = document.createElement('div');
+  div.textContent = line;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function _syncOnComplete(data) {
+  document.getElementById('sync-spinner').classList.add('done');
+  if (data.error) {
+    document.getElementById('sync-title').textContent = '✗ Sync failed';
+    _syncAppendLog('Error: ' + data.error);
+    toast('Sync failed: ' + data.error, 'error');
+  } else {
+    const added = data.result?.added ?? data.added ?? 0;
+    const total = data.result?.total ?? 0;
+    document.getElementById('sync-title').textContent = `✓ Sync complete — ${added} new`;
+    toast(`Sync complete — ${added} new, ${total} total`, 'success');
+  }
+  document.getElementById('sync-close-btn').classList.add('visible');
+  // Reload gallery with fresh data
+  await loadDB();
+  renderAll();
+  populateAllFilters();
+}
+
+// ── SSE stream (preferred) ────────────────────────────────────────────────────
+function _syncStream() {
+  const es = new EventSource(`${API_BASE}/api/sync/stream`);
+
+  es.addEventListener('progress', e => {
+    try { _syncApplyProgress(JSON.parse(e.data)); } catch {}
+  });
+  es.addEventListener('log', e => {
+    try { _syncAppendLog(JSON.parse(e.data)); } catch {}
+  });
+  es.addEventListener('complete', e => {
+    es.close();
+    try { _syncOnComplete(JSON.parse(e.data)); } catch { _syncOnComplete({}); }
+  });
+  es.addEventListener('heartbeat', () => { /* keep-alive, nothing to do */ });
+  es.onerror = () => {
+    es.close();
+    // SSE connection dropped mid-sync — fall back to polling
+    _syncPoll();
+  };
+}
+
+// ── Polling fallback (when SSE unavailable or connection drops) ──────────────
+let _syncPollTimer = null;
+function _syncPoll() {
+  if (_syncPollTimer) return;
+  _syncPollTimer = setInterval(async () => {
+    try {
+      const r    = await fetch(`${API_BASE}/api/sync/status`);
+      const data = await r.json();
+      _syncApplyProgress(data);
+      // Append any new log lines
+      (data.log || []).forEach(line => {
+        const logEl = document.getElementById('sync-log');
+        if (!logEl.querySelector(`[data-line="${CSS.escape(line)}"]`)) {
+          const d = document.createElement('div');
+          d.textContent      = line;
+          d.dataset.line     = line;
+          logEl.appendChild(d);
+          logEl.scrollTop    = logEl.scrollHeight;
+        }
+      });
+      if (data.done) {
+        clearInterval(_syncPollTimer);
+        _syncPollTimer = null;
+        _syncOnComplete(data);
+      }
+    } catch {
+      clearInterval(_syncPollTimer);
+      _syncPollTimer = null;
+      toast('Lost connection to backend during sync', 'error');
+      document.getElementById('sync-close-btn').classList.add('visible');
+    }
+  }, 1500);
 }
 
 // ─────────────────────────────────────────────
