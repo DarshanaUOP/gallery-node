@@ -1611,9 +1611,10 @@
       </div>
       <div id="photo-picker-actions">
         <input type="text" id="photo-picker-search" placeholder="Search…" oninput="filterPickerGrid()">
-        <select id="photo-picker-location" class="filter-select" onchange="filterPickerGrid()" style="max-width:180px">
+        <select id="photo-picker-location" class="filter-select" onchange="_pickerLocationChanged()" style="max-width:200px">
           <option value="">All Locations</option>
         </select>
+        <button class="btn btn-ghost" id="picker-add-all-btn" onclick="addAllFromLocation()" title="Add all photos from the selected location to the album" style="display:none">⊕ Add All</button>
         <button class="btn btn-ghost" onclick="pickerSelectAll()">Select All</button>
         <button class="btn btn-ghost" onclick="pickerClearAll()">Clear</button>
         <button class="btn btn-accent" id="picker-confirm-btn" onclick="confirmPhotoPicker()">Add Selected</button>
@@ -2300,22 +2301,127 @@ async function populateLocationFilter() {
 
 // Picker location dropdown (used inside Add Photos modal)
 async function populatePickerLocationFilter() {
+  const sel = document.getElementById('photo-picker-location');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">All Locations</option>';
+
   try {
-    const r = await fetch(`${API_BASE}/api/locations`);
+    // Fetch full directory tree (source roots + all subdirectories with files)
+    const r = await fetch(`${API_BASE}/api/media/subdirs`);
     if (!r.ok) return;
-    const locations = await r.json();
-    const sel       = document.getElementById('photo-picker-location');
-    if (!sel) return;
-    const prev    = sel.value;
-    sel.innerHTML = '<option value="">All Locations</option>';
-    locations.forEach(({ root, label }) => {
-      const o = document.createElement('option');
-      o.value = root; o.textContent = label; o.title = root;
-      sel.appendChild(o);
+    const dirs = await r.json(); // [{path, source_root, label, depth}]
+
+    if (dirs.length === 0) return;
+
+    // Group by source_root to render as optgroup sections
+    const groups = {};
+    const rootLabels = {};
+
+    // Also fetch configured location names for optgroup labels
+    try {
+      const lr = await fetch(`${API_BASE}/api/locations`);
+      if (lr.ok) {
+        const locs = await lr.json();
+        locs.forEach(l => { rootLabels[l.root] = l.label; });
+      }
+    } catch { /* fall back to path segment */ }
+
+    dirs.forEach(d => {
+      const g = d.source_root || d.path;
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(d);
     });
-    const roots = locations.map(l => l.root);
-    if (prev && roots.includes(prev)) sel.value = prev;
+
+    Object.entries(groups).forEach(([srcRoot, items]) => {
+      const groupLabel = rootLabels[srcRoot] || srcRoot.split('/').filter(Boolean).pop() || srcRoot;
+      const group = document.createElement('optgroup');
+      group.label = groupLabel;
+
+      items.forEach(d => {
+        const opt   = document.createElement('option');
+        opt.value   = d.path;
+        opt.title   = d.path;
+        // Indent sub-directory labels by depth
+        const indent = '\u00A0\u00A0'.repeat(d.depth);   // non-breaking spaces
+        opt.textContent = indent + (d.depth === 0 ? '⊞ ' : '↳ ') + d.label;
+        group.appendChild(opt);
+      });
+
+      sel.appendChild(group);
+    });
   } catch { /* backend not running */ }
+}
+
+// Show/hide "Add All" button depending on whether a location is selected
+function _pickerLocationChanged() {
+  const loc = document.getElementById('photo-picker-location').value;
+  const btn = document.getElementById('picker-add-all-btn');
+  if (btn) btn.style.display = loc ? 'inline-flex' : 'none';
+  filterPickerGrid();
+}
+
+// Add ALL indexed media from the selected location directly to the album,
+// fetching every page from the server — no pagination cap.
+async function addAllFromLocation() {
+  const loc = document.getElementById('photo-picker-location').value;
+  if (!loc || !currentAlbumId) return;
+
+  const album = db.albums.find(a => a.id === currentAlbumId);
+  if (!album) return;
+
+  const btn  = document.getElementById('picker-add-all-btn');
+  const orig = btn.textContent;
+  btn.disabled    = true;
+  btn.textContent = 'Loading…';
+
+  try {
+    const PAGE   = 500;
+    let offset   = 0;
+    let hasMore  = true;
+    let added    = 0;
+    let fetched  = 0;
+
+    while (hasMore) {
+      const params = new URLSearchParams({
+        location: loc,
+        limit:    PAGE,
+        offset,
+        sort:     'date-desc',
+      });
+      const r = await fetch(`${API_BASE}/api/media?${params.toString()}`);
+      if (!r.ok) throw new Error('Fetch failed');
+      const data  = await r.json();
+      const items = data.items || [];
+
+      items.forEach(m => {
+        if (!album.media.includes(m.uniqueName)) {
+          album.media.push(m.uniqueName);
+          added++;
+        }
+        // Keep db.media in sync for already-loaded items
+        if (!db.media.find(x => x.uniqueName === m.uniqueName)) {
+          db.media.push(m);
+        }
+      });
+
+      fetched  += items.length;
+      hasMore   = data.has_more;
+      offset   += items.length;
+
+      // Update button label during multi-page fetch
+      btn.textContent = `Loading… ${fetched}`;
+    }
+
+    saveDB();
+    softRefresh();
+    closePhotoPicker();
+    const dirName = loc.split('/').filter(Boolean).pop() || loc;
+    toast(`Added ${added} photo${added !== 1 ? 's' : ''} from "${dirName}" to "${album.name}"`, 'success');
+  } catch {
+    toast('Failed to fetch media from server', 'error');
+    btn.disabled    = false;
+    btn.textContent = orig;
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -3568,6 +3674,8 @@ async function openPhotoPicker() {
   document.getElementById('picker-confirm-btn').disabled = true;
   document.getElementById('picker-confirm-btn').textContent = 'Add Selected';
   document.getElementById('photo-picker-sel-count').classList.remove('visible');
+  const addAllBtn = document.getElementById('picker-add-all-btn');
+  if (addAllBtn) addAllBtn.style.display = 'none';
 
   await populatePickerLocationFilter();
 

@@ -439,9 +439,10 @@ def query_media(filters: dict, sort: str, offset: int, limit: int) -> tuple:
 
     loc = (filters.get("location") or "").strip().rstrip("/\\")
     if loc:
-        where.append("(source_root = ? OR file_path LIKE ?)")
-        args.append(loc)
-        args.append(loc + "%")
+        # Match files whose source_root equals the path (root selection)
+        # OR whose file_path starts with the path (subdir selection)
+        where.append("(source_root = ? OR source_root LIKE ? OR file_path = ? OR file_path LIKE ?)")
+        args.extend([loc, loc + "/%", loc, loc + "/%"])
 
     q = (filters.get("q") or "").strip().lower()
     if q:
@@ -487,6 +488,62 @@ def get_distinct_source_roots() -> list:
         "SELECT DISTINCT source_root FROM media WHERE source_root != '' ORDER BY source_root"
     ).fetchall()
     return [r["source_root"] for r in rows]
+
+def get_distinct_subdirs() -> list:
+    """
+    Return all unique directory paths including source roots and every
+    subdirectory that contains at least one indexed file.
+    Returns [{path, source_root, label, depth, is_root}] sorted by path.
+    - depth 0 entries are source roots (path == source_root)
+    - depth > 0 entries are subdirectories (path == file_path stripped of trailing slash)
+    """
+    conn = get_db_conn()
+
+    # Get all unique (source_root, file_path) pairs
+    rows = conn.execute(
+        """SELECT DISTINCT source_root, file_path
+           FROM media
+           WHERE file_path != ''
+           ORDER BY source_root, file_path"""
+    ).fetchall()
+
+    seen_paths  = set()
+    seen_roots  = set()
+    result      = []
+
+    for r in rows:
+        src  = (r["source_root"] or "").rstrip("/\\")
+        path = (r["file_path"]   or "").rstrip("/\\")
+
+        # Always emit the source root once as a depth-0 selectable entry
+        if src and src not in seen_roots:
+            seen_roots.add(src)
+            seen_paths.add(src)
+            result.append({
+                "path":        src,
+                "source_root": src,
+                "label":       os.path.basename(src) or src,
+                "depth":       0,
+                "is_root":     True,
+            })
+
+        # Emit the subdirectory (file_path) if it differs from source root
+        if path and path not in seen_paths and path != src:
+            seen_paths.add(path)
+            if src and path.startswith(src):
+                rel = path[len(src):].lstrip("/\\")
+            else:
+                rel = os.path.basename(path) or path
+            depth = path.replace("\\", "/").count("/") - src.replace("\\", "/").count("/")
+            result.append({
+                "path":        path,
+                "source_root": src,
+                "label":       rel if rel else os.path.basename(path),
+                "depth":       max(1, depth),
+                "is_root":     False,
+            })
+
+    return sorted(result, key=lambda x: x["path"].lower())
 
 def get_media_count() -> int:
     conn = get_db_conn()
@@ -1177,6 +1234,17 @@ if FLASK_AVAILABLE:
             key=lambda x: x["label"].lower()
         )
         return jsonify(result)
+
+    @app.route("/api/media/subdirs", methods=["GET"])
+    def api_media_subdirs():
+        """
+        Return all distinct directories (source roots + every subdirectory
+        that contains at least one indexed file) as a tree-friendly list.
+        Response: [{path, source_root, label, depth}] sorted by path.
+        'depth' is 0 for source root, 1 for first-level subdir, etc.
+        Used to populate the location/subfolder dropdown in the photo picker.
+        """
+        return jsonify(get_distinct_subdirs())
 
     @app.route("/api/media", methods=["GET"])
     def api_media():
