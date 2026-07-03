@@ -488,6 +488,43 @@ def get_distinct_source_roots() -> list:
     ).fetchall()
     return [r["source_root"] for r in rows]
 
+def get_distinct_subdirs() -> list:
+    """
+    Return all unique directory paths in the media table, including source
+    roots and every subdirectory that contains at least one file.
+    Returns list of {path, source_root, label, depth} sorted by path.
+    """
+    conn = get_db_conn()
+    rows = conn.execute(
+        """SELECT DISTINCT source_root, file_path
+           FROM media
+           WHERE file_path != ''
+           ORDER BY source_root, file_path"""
+    ).fetchall()
+
+    seen = set()
+    result = []
+    for r in rows:
+        src  = (r["source_root"] or "").rstrip("/\\")
+        path = (r["file_path"]   or "").rstrip("/\\")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        # Compute label: path relative to source_root, or just the last segment
+        if src and path.startswith(src):
+            rel = path[len(src):].lstrip("/\\")
+            label = rel if rel else os.path.basename(src)
+        else:
+            label = os.path.basename(path) or path
+        depth = path.replace("\\", "/").count("/") - src.replace("\\", "/").count("/")
+        result.append({
+            "path":        path,
+            "source_root": src,
+            "label":       label,
+            "depth":       max(0, depth),
+        })
+    return sorted(result, key=lambda x: x["path"].lower())
+
 def get_media_count() -> int:
     conn = get_db_conn()
     return conn.execute("SELECT COUNT(*) FROM media").fetchone()[0]
@@ -1177,6 +1214,17 @@ if FLASK_AVAILABLE:
             key=lambda x: x["label"].lower()
         )
         return jsonify(result)
+
+    @app.route("/api/media/subdirs", methods=["GET"])
+    def api_media_subdirs():
+        """
+        Return all distinct directories (source roots + every subdirectory
+        that contains at least one indexed file) as a tree-friendly list.
+        Response: [{path, source_root, label, depth}] sorted by path.
+        'depth' is 0 for source root, 1 for first-level subdir, etc.
+        Used to populate the location/subfolder dropdown in the photo picker.
+        """
+        return jsonify(get_distinct_subdirs())
 
     @app.route("/api/media", methods=["GET"])
     def api_media():
