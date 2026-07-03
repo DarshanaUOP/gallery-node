@@ -3235,6 +3235,10 @@ let _settingsCurrent = {};   // live copy while panel is open
 const ALL_IMAGE_FORMATS = ['jpg','jpeg','png','heic','heif','webp','tiff','bmp','gif'];
 const ALL_VIDEO_FORMATS = ['mp4','mov','avi','mkv','webm','m4v','3gp','wmv','flv','ts','mts'];
 
+function settingsToggle(el) {
+  el.classList.toggle('on');
+}
+
 async function openSettings() {
   try {
     const r = await fetch(`${API_BASE}/api/config`);
