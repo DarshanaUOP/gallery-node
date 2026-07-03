@@ -2361,7 +2361,7 @@ function _pickerLocationChanged() {
 }
 
 // Add ALL indexed media from the selected location directly to the album,
-// without requiring individual selection or waiting for thumbnails to load.
+// fetching every page from the server — no pagination cap.
 async function addAllFromLocation() {
   const loc = document.getElementById('photo-picker-location').value;
   if (!loc || !currentAlbumId) return;
@@ -2369,35 +2369,54 @@ async function addAllFromLocation() {
   const album = db.albums.find(a => a.id === currentAlbumId);
   if (!album) return;
 
-  const btn = document.getElementById('picker-add-all-btn');
+  const btn  = document.getElementById('picker-add-all-btn');
   const orig = btn.textContent;
   btn.disabled    = true;
-  btn.textContent = '…';
+  btn.textContent = 'Loading…';
 
   try {
-    // Fetch ALL matching items from the server (no pagination limit for this operation)
-    const params = new URLSearchParams({ location: loc, limit: 5000, offset: 0, sort: 'date-desc' });
-    const r      = await fetch(`${API_BASE}/api/media?${params.toString()}`);
-    if (!r.ok) throw new Error('Fetch failed');
-    const data  = await r.json();
-    const items = data.items || [];
+    const PAGE   = 500;
+    let offset   = 0;
+    let hasMore  = true;
+    let added    = 0;
+    let fetched  = 0;
 
-    let added = 0;
-    items.forEach(m => {
-      if (!album.media.includes(m.uniqueName)) {
-        album.media.push(m.uniqueName);
-        // Keep db.media in sync for items already in memory
+    while (hasMore) {
+      const params = new URLSearchParams({
+        location: loc,
+        limit:    PAGE,
+        offset,
+        sort:     'date-desc',
+      });
+      const r = await fetch(`${API_BASE}/api/media?${params.toString()}`);
+      if (!r.ok) throw new Error('Fetch failed');
+      const data  = await r.json();
+      const items = data.items || [];
+
+      items.forEach(m => {
+        if (!album.media.includes(m.uniqueName)) {
+          album.media.push(m.uniqueName);
+          added++;
+        }
+        // Keep db.media in sync for already-loaded items
         if (!db.media.find(x => x.uniqueName === m.uniqueName)) {
           db.media.push(m);
         }
-        added++;
-      }
-    });
+      });
+
+      fetched  += items.length;
+      hasMore   = data.has_more;
+      offset   += items.length;
+
+      // Update button label during multi-page fetch
+      btn.textContent = `Loading… ${fetched}`;
+    }
 
     saveDB();
     softRefresh();
     closePhotoPicker();
-    toast(`Added ${added} photo${added !== 1 ? 's' : ''} from "${loc.split('/').pop()}" to "${album.name}"`, 'success');
+    const dirName = loc.split('/').filter(Boolean).pop() || loc;
+    toast(`Added ${added} photo${added !== 1 ? 's' : ''} from "${dirName}" to "${album.name}"`, 'success');
   } catch {
     toast('Failed to fetch media from server', 'error');
     btn.disabled    = false;
