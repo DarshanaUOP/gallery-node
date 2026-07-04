@@ -601,14 +601,10 @@ def save_albums(albums: list):
                     (a.get("id"), a.get("name", "Untitled"))
                 )
                 for pos, un in enumerate(a.get("media", [])):
-                    exists = conn.execute(
-                        "SELECT 1 FROM media WHERE uniqueName = ?", (un,)
-                    ).fetchone()
-                    if exists:
-                        conn.execute(
-                            "INSERT OR IGNORE INTO album_media (album_id, uniqueName, position) VALUES (?, ?, ?)",
-                            (a.get("id"), un, pos)
-                        )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO album_media (album_id, uniqueName, position) VALUES (?, ?, ?)",
+                        (a.get("id"), un, pos)
+                    )
     log.info("Saved %d albums to SQLite", len(albums))
 
 def create_album(name: str) -> dict:
@@ -1799,6 +1795,37 @@ if FLASK_AVAILABLE:
         if ok:
             return jsonify({"ok": True})
         return jsonify({"error": "Album not found"}), 404
+
+    @app.route("/api/album/add-bulk", methods=["POST"])
+    def api_album_add_bulk():
+        """
+        Add a list of uniqueNames to an album in a single transaction.
+        Body: { albumId: str, uniqueNames: [str, ...] }
+        Returns { ok: true, added: N } where N is how many were newly inserted.
+        """
+        body         = request.get_json(force=True) or {}
+        album_id     = body.get("albumId")
+        unique_names = body.get("uniqueNames", [])
+        if not album_id:
+            return jsonify({"error": "albumId required"}), 400
+        conn = get_db_conn()
+        album_exists = conn.execute("SELECT 1 FROM albums WHERE id = ?", (album_id,)).fetchone()
+        if not album_exists:
+            return jsonify({"error": "Album not found"}), 404
+        with _db_lock:
+            with conn:
+                max_pos = conn.execute(
+                    "SELECT COALESCE(MAX(position), -1) FROM album_media WHERE album_id = ?",
+                    (album_id,)
+                ).fetchone()[0]
+                added = 0
+                for un in unique_names:
+                    cur = conn.execute(
+                        "INSERT OR IGNORE INTO album_media (album_id, uniqueName, position) VALUES (?, ?, ?)",
+                        (album_id, un, max_pos + 1 + added)
+                    )
+                    added += cur.rowcount
+        return jsonify({"ok": True, "added": added})
 
     @app.route("/api/media/hide", methods=["POST"])
     def api_media_hide():

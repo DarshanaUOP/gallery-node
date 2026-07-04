@@ -2370,57 +2370,70 @@ async function addAllFromLocation() {
   if (!album) return;
 
   const btn  = document.getElementById('picker-add-all-btn');
-  const orig = btn.textContent;
   btn.disabled    = true;
   btn.textContent = 'Loading…';
 
   try {
-    const PAGE   = 500;
-    let offset   = 0;
-    let hasMore  = true;
-    let added    = 0;
-    let fetched  = 0;
+    const PAGE      = 500;
+    let offset      = 0;
+    let fetched     = 0;
+    const alreadyIn = new Set(album.media);
+    const toAdd     = [];
 
-    while (hasMore) {
+    // Fetch all pages from server
+    while (true) {
       const params = new URLSearchParams({
-        location: loc,
-        limit:    PAGE,
-        offset,
-        sort:     'date-desc',
+        location: loc, limit: PAGE, offset, sort: 'date-desc',
       });
       const r = await fetch(`${API_BASE}/api/media?${params.toString()}`);
-      if (!r.ok) throw new Error('Fetch failed');
+      if (!r.ok) throw new Error('Server error ' + r.status);
       const data  = await r.json();
       const items = data.items || [];
+      if (items.length === 0) break;
 
       items.forEach(m => {
-        if (!album.media.includes(m.uniqueName)) {
-          album.media.push(m.uniqueName);
-          added++;
-        }
-        // Keep db.media in sync for already-loaded items
-        if (!db.media.find(x => x.uniqueName === m.uniqueName)) {
-          db.media.push(m);
+        if (!alreadyIn.has(m.uniqueName)) {
+          alreadyIn.add(m.uniqueName);
+          toAdd.push(m.uniqueName);
         }
       });
 
-      fetched  += items.length;
-      hasMore   = data.has_more;
-      offset   += items.length;
-
-      // Update button label during multi-page fetch
+      fetched += items.length;
+      offset  += items.length;
       btn.textContent = `Loading… ${fetched}`;
+
+      if (!data.has_more || items.length < PAGE) break;
     }
 
-    saveDB();
+    if (toAdd.length === 0) {
+      closePhotoPicker();
+      const dirName = loc.split('/').filter(Boolean).pop() || loc;
+      toast(`No new photos to add from "${dirName}"`, 'info');
+      return;
+    }
+
+    btn.textContent = `Adding ${toAdd.length}…`;
+
+    // Persist directly via bulk endpoint — bypasses saveDB() / save_albums() path
+    const r2 = await fetch(`${API_BASE}/api/album/add-bulk`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ albumId: currentAlbumId, uniqueNames: toAdd }),
+    });
+    if (!r2.ok) throw new Error('Bulk add failed: ' + r2.status);
+    const result = await r2.json();
+
+    // Update in-memory album so the UI reflects the change
+    toAdd.forEach(un => { if (!album.media.includes(un)) album.media.push(un); });
     softRefresh();
     closePhotoPicker();
     const dirName = loc.split('/').filter(Boolean).pop() || loc;
-    toast(`Added ${added} photo${added !== 1 ? 's' : ''} from "${dirName}" to "${album.name}"`, 'success');
-  } catch {
-    toast('Failed to fetch media from server', 'error');
+    toast(`Added ${result.added} photo${result.added !== 1 ? 's' : ''} from "${dirName}" to "${album.name}"`, 'success');
+
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
     btn.disabled    = false;
-    btn.textContent = orig;
+    btn.textContent = '⊕ Add All';
   }
 }
 
