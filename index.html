@@ -2590,11 +2590,18 @@ function ctxRemoveFromAlbum() {
 function ctxToggleHide() {
   if (!ctxTarget) return;
   ctxTarget.isHidden = !ctxTarget.isHidden;
-  saveDB();
-  // If showing hidden is off, hiding a card means it should disappear from the grid
-  if (!showHidden) {
+
+  // Persist via dedicated endpoint — never touches rest of the media table
+  fetch(`${API_BASE}/api/media/hide`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uniqueName: ctxTarget.uniqueName, hidden: ctxTarget.isHidden })
+  }).catch(() => {});
+
+  // Remove card from grid if hiding and show-hidden is off
+  if (!showHidden && ctxTarget.isHidden) {
     const card = document.querySelector(`.media-item[data-unique="${ctxTarget.uniqueName}"]`);
-    if (card && ctxTarget.isHidden) card.remove();
+    if (card) card.remove();
   }
   softRefresh();
   toast(ctxTarget.isHidden ? 'Image hidden' : 'Image unhidden', 'info');
@@ -3308,13 +3315,13 @@ function _syncPoll() {
 //  PERSIST (saves to localStorage as fallback)
 // ─────────────────────────────────────────────
 function saveDB() {
-  // POST the full in-memory state back to the server
-  // db.media is always complete in memory after _loadRemainingMedia finishes;
-  // for in-flight saves, the server merges hashes so partial saves are safe.
+  // Only save albums via POST /api/db — albums are always fully loaded in memory.
+  // Media mutations (hide/unhide) use /api/media/hide directly.
+  // Never send db.media here — it's a partial page and would overwrite the full DB.
   fetch(`${API_BASE}/api/db`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ media: db.media, albums: db.albums })
+    body: JSON.stringify({ albums: db.albums })
   }).catch(() => {});
   updateFooter();
   renderAlbumNav();
