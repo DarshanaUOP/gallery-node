@@ -2419,6 +2419,11 @@ async function addAllFromLocation() {
     // Update in-memory album so the UI reflects the change
     toAdd.forEach(un => { if (!album.media.includes(un)) album.media.push(un); });
     softRefresh();
+
+    // Reset button before closing
+    btn.disabled    = false;
+    btn.textContent = '⊕ Add All';
+
     closePhotoPicker();
     const dirName = loc.split('/').filter(Boolean).pop() || loc;
     toast(`Added ${result.added} photo${result.added !== 1 ? 's' : ''} from "${dirName}" to "${album.name}"`, 'success');
@@ -3688,7 +3693,11 @@ async function openPhotoPicker() {
   document.getElementById('picker-confirm-btn').textContent = 'Add Selected';
   document.getElementById('photo-picker-sel-count').classList.remove('visible');
   const addAllBtn = document.getElementById('picker-add-all-btn');
-  if (addAllBtn) addAllBtn.style.display = 'none';
+  if (addAllBtn) {
+    addAllBtn.style.display = 'none';
+    addAllBtn.disabled      = false;
+    addAllBtn.textContent   = '⊕ Add All';
+  }
 
   await populatePickerLocationFilter();
 
