@@ -430,60 +430,75 @@ def get_existing_hashes_and_paths() -> tuple:
 
 def query_media(filters: dict, sort: str, offset: int, limit: int) -> tuple:
     """
-    Core filtered/sorted/paginated query — the SQL equivalent of the old
-    _filter_media() + _sort_media() + list-slicing pipeline, but done entirely
-    in SQLite with indexes instead of a full Python list scan.
+    Core filtered/sorted/paginated query — done entirely in SQLite with indexes.
+    Supports an optional 'album' filter which JOINs album_media so only members
+    of that album are returned, in album membership order (position) by default.
     Returns (items: list[dict], total: int).
     """
     conn = get_db_conn()
+
+    album_id = (filters.get("album") or "").strip()
 
     where = []
     args  = []
 
     hidden = (filters.get("hidden") or "").strip().lower()
     if hidden == "true":
-        where.append("isHidden = 1")
+        where.append("m.isHidden = 1")
     elif hidden != "include":
-        where.append("isHidden = 0")
+        where.append("m.isHidden = 0")
 
     fmt = (filters.get("format") or "").strip().upper()
     if fmt:
-        where.append("format = ?")
+        where.append("m.format = ?")
         args.append(fmt)
 
     cam = (filters.get("camera") or "").strip()
     if cam:
-        where.append("camera_label = ?")
+        where.append("m.camera_label = ?")
         args.append(cam)
 
     loc = (filters.get("location") or "").strip().rstrip("/\\")
     if loc:
-        # Match files whose source_root equals the path (root selection)
-        # OR whose file_path starts with the path (subdir selection)
-        where.append("(source_root = ? OR source_root LIKE ? OR file_path = ? OR file_path LIKE ?)")
+        where.append("(m.source_root = ? OR m.source_root LIKE ? OR m.file_path = ? OR m.file_path LIKE ?)")
         args.extend([loc, loc + "/%", loc, loc + "/%"])
 
     q = (filters.get("q") or "").strip().lower()
     if q:
-        where.append("(LOWER(name) LIKE ? OR LOWER(camera_label) LIKE ? OR date_created LIKE ?)")
+        where.append("(LOWER(m.name) LIKE ? OR LOWER(m.camera_label) LIKE ? OR m.date_created LIKE ?)")
         like = f"%{q}%"
         args.extend([like, like, like])
 
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    if album_id:
+        # JOIN restricts results to album members only
+        from_sql  = "FROM media m INNER JOIN album_media am ON m.uniqueName = am.uniqueName AND am.album_id = ?"
+        join_args = [album_id]
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        if sort == "date-asc":
+            order_sql = "ORDER BY m.date_sort ASC"
+        elif sort == "name":
+            order_sql = "ORDER BY m.name COLLATE NOCASE ASC"
+        else:
+            order_sql = "ORDER BY am.position ASC, m.date_sort DESC"
+        count_sql = f"SELECT COUNT(*) {from_sql} {where_sql}"
+        rows_sql  = f"SELECT m.* {from_sql} {where_sql} {order_sql} LIMIT ? OFFSET ?"
+        all_args  = join_args + args
+    else:
+        from_sql  = "FROM media m"
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        if sort == "date-asc":
+            order_sql = "ORDER BY m.date_sort ASC"
+        elif sort == "name":
+            order_sql = "ORDER BY m.name COLLATE NOCASE ASC"
+        else:
+            order_sql = "ORDER BY m.date_sort DESC"
+        count_sql = f"SELECT COUNT(*) {from_sql} {where_sql}"
+        rows_sql  = f"SELECT m.* {from_sql} {where_sql} {order_sql} LIMIT ? OFFSET ?"
+        all_args  = args
 
     with _db_lock:
-        total = conn.execute(f"SELECT COUNT(*) FROM media {where_sql}", args).fetchone()[0]
-        if sort == "date-asc":
-            order_sql = "ORDER BY date_sort ASC"
-        elif sort == "name":
-            order_sql = "ORDER BY name COLLATE NOCASE ASC"
-        else:
-            order_sql = "ORDER BY date_sort DESC"
-
-        rows = conn.execute(
-            f"SELECT * FROM media {where_sql} {order_sql} LIMIT ? OFFSET ?",
-            args + [limit, offset]
-        ).fetchall()
+        total = conn.execute(count_sql, all_args).fetchone()[0]
+        rows  = conn.execute(rows_sql, all_args + [limit, offset]).fetchall()
 
     return [_row_to_media_dict(r) for r in rows], total
 
@@ -601,14 +616,10 @@ def save_albums(albums: list):
                     (a.get("id"), a.get("name", "Untitled"))
                 )
                 for pos, un in enumerate(a.get("media", [])):
-                    exists = conn.execute(
-                        "SELECT 1 FROM media WHERE uniqueName = ?", (un,)
-                    ).fetchone()
-                    if exists:
-                        conn.execute(
-                            "INSERT OR IGNORE INTO album_media (album_id, uniqueName, position) VALUES (?, ?, ?)",
-                            (a.get("id"), un, pos)
-                        )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO album_media (album_id, uniqueName, position) VALUES (?, ?, ?)",
+                        (a.get("id"), un, pos)
+                    )
     log.info("Saved %d albums to SQLite", len(albums))
 
 def create_album(name: str) -> dict:
@@ -1799,6 +1810,37 @@ if FLASK_AVAILABLE:
         if ok:
             return jsonify({"ok": True})
         return jsonify({"error": "Album not found"}), 404
+
+    @app.route("/api/album/add-bulk", methods=["POST"])
+    def api_album_add_bulk():
+        """
+        Add a list of uniqueNames to an album in a single transaction.
+        Body: { albumId: str, uniqueNames: [str, ...] }
+        Returns { ok: true, added: N } where N is how many were newly inserted.
+        """
+        body         = request.get_json(force=True) or {}
+        album_id     = body.get("albumId")
+        unique_names = body.get("uniqueNames", [])
+        if not album_id:
+            return jsonify({"error": "albumId required"}), 400
+        conn = get_db_conn()
+        album_exists = conn.execute("SELECT 1 FROM albums WHERE id = ?", (album_id,)).fetchone()
+        if not album_exists:
+            return jsonify({"error": "Album not found"}), 404
+        with _db_lock:
+            with conn:
+                max_pos = conn.execute(
+                    "SELECT COALESCE(MAX(position), -1) FROM album_media WHERE album_id = ?",
+                    (album_id,)
+                ).fetchone()[0]
+                added = 0
+                for un in unique_names:
+                    cur = conn.execute(
+                        "INSERT OR IGNORE INTO album_media (album_id, uniqueName, position) VALUES (?, ?, ?)",
+                        (album_id, un, max_pos + 1 + added)
+                    )
+                    added += cur.rowcount
+        return jsonify({"ok": True, "added": added})
 
     @app.route("/api/media/hide", methods=["POST"])
     def api_media_hide():

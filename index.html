@@ -1986,6 +1986,11 @@ function _serverFilters() {
   if (loc) params.location = loc;
   if (q)   params.q        = q;
 
+  // Album view — let server filter by album membership via JOIN
+  if (currentView !== 'all' && currentView !== 'hidden') {
+    params.album = currentView;
+  }
+
   // Hidden handling
   if (currentView === 'hidden') {
     params.hidden = 'true';
@@ -2027,18 +2032,12 @@ async function _fetchNextPage() {
     db._hasMore = data.has_more;
     db._offset  = db.media.length;
 
-    // All server-side filters already applied — handle album view client-side only
-    let filtered = newItems;
-    if (currentView !== 'all' && currentView !== 'hidden') {
-      const album = db.albums.find(a => a.id === currentView);
-      if (album) filtered = filtered.filter(m => album.media.includes(m.uniqueName));
-    }
-
-    if (filtered.length > 0) {
+    // Server applies all filters including album membership — render directly
+    if (newItems.length > 0) {
       const startIdx = filteredMedia.length;
-      filteredMedia.push(...filtered);
+      filteredMedia.push(...newItems);
       const grid = document.getElementById('gallery-grid');
-      filtered.forEach((item, i) => grid.appendChild(createCard(item, startIdx + i)));
+      newItems.forEach((item, i) => grid.appendChild(createCard(item, startIdx + i)));
       renderedCount = filteredMedia.length;
       softRefresh();
     }
@@ -2128,20 +2127,14 @@ function applyFilters() {
       db._hasMore = data.has_more;
       db._offset  = db.media.length;
 
-      // Client-side album filter (albums are in memory)
-      let pool = newItems;
-      if (currentView !== 'all' && currentView !== 'hidden') {
-        const album = db.albums.find(a => a.id === currentView);
-        if (album) pool = pool.filter(m => album.media.includes(m.uniqueName));
-      }
-
-      filteredMedia = pool;
+      // Server applies all filters (including album JOIN) — render directly
+      filteredMedia = newItems;
       renderedCount = 0;
       renderBatch();
       updateStats();
       updateFooter();
       document.getElementById('empty-state').style.display =
-        (pool.length === 0 && !db._hasMore) ? 'flex' : 'none';
+        (newItems.length === 0 && !db._hasMore) ? 'flex' : 'none';
     })
     .catch(() => {
       document.getElementById('empty-state').style.display = 'flex';
@@ -2370,57 +2363,78 @@ async function addAllFromLocation() {
   if (!album) return;
 
   const btn  = document.getElementById('picker-add-all-btn');
-  const orig = btn.textContent;
   btn.disabled    = true;
   btn.textContent = 'Loading…';
 
   try {
-    const PAGE   = 500;
-    let offset   = 0;
-    let hasMore  = true;
-    let added    = 0;
-    let fetched  = 0;
+    const PAGE      = 500;
+    let offset      = 0;
+    let fetched     = 0;
+    const alreadyIn = new Set(album.media);
+    const toAdd     = [];
 
-    while (hasMore) {
+    // Fetch all pages from server
+    while (true) {
       const params = new URLSearchParams({
-        location: loc,
-        limit:    PAGE,
-        offset,
-        sort:     'date-desc',
+        location: loc, limit: PAGE, offset, sort: 'date-desc',
       });
       const r = await fetch(`${API_BASE}/api/media?${params.toString()}`);
-      if (!r.ok) throw new Error('Fetch failed');
+      if (!r.ok) throw new Error('Server error ' + r.status);
       const data  = await r.json();
       const items = data.items || [];
+      if (items.length === 0) break;
 
       items.forEach(m => {
-        if (!album.media.includes(m.uniqueName)) {
-          album.media.push(m.uniqueName);
-          added++;
-        }
-        // Keep db.media in sync for already-loaded items
-        if (!db.media.find(x => x.uniqueName === m.uniqueName)) {
-          db.media.push(m);
+        if (!alreadyIn.has(m.uniqueName)) {
+          alreadyIn.add(m.uniqueName);
+          toAdd.push(m.uniqueName);
         }
       });
 
-      fetched  += items.length;
-      hasMore   = data.has_more;
-      offset   += items.length;
-
-      // Update button label during multi-page fetch
+      fetched += items.length;
+      offset  += items.length;
       btn.textContent = `Loading… ${fetched}`;
+
+      if (!data.has_more || items.length < PAGE) break;
     }
 
-    saveDB();
-    softRefresh();
-    closePhotoPicker();
-    const dirName = loc.split('/').filter(Boolean).pop() || loc;
-    toast(`Added ${added} photo${added !== 1 ? 's' : ''} from "${dirName}" to "${album.name}"`, 'success');
-  } catch {
-    toast('Failed to fetch media from server', 'error');
+    if (toAdd.length === 0) {
+      closePhotoPicker();
+      const dirName = loc.split('/').filter(Boolean).pop() || loc;
+      toast(`No new photos to add from "${dirName}"`, 'info');
+      return;
+    }
+
+    btn.textContent = `Adding ${toAdd.length}…`;
+
+    // Persist directly via bulk endpoint — bypasses saveDB() / save_albums() path
+    const r2 = await fetch(`${API_BASE}/api/album/add-bulk`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ albumId: currentAlbumId, uniqueNames: toAdd }),
+    });
+    if (!r2.ok) throw new Error('Bulk add failed: ' + r2.status);
+    const result = await r2.json();
+
+    // Update in-memory album so the UI reflects the change
+    toAdd.forEach(un => { if (!album.media.includes(un)) album.media.push(un); });
+
+    // Reset button before closing
     btn.disabled    = false;
-    btn.textContent = orig;
+    btn.textContent = '⊕ Add All';
+
+    closePhotoPicker();
+
+    // Re-fetch and render the album gallery from the server
+    applyFilters();
+
+    const dirName = loc.split('/').filter(Boolean).pop() || loc;
+    toast(`Added ${result.added} photo${result.added !== 1 ? 's' : ''} from "${dirName}" to "${album.name}"`, 'success');
+
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
+    btn.disabled    = false;
+    btn.textContent = '⊕ Add All';
   }
 }
 
@@ -3682,7 +3696,11 @@ async function openPhotoPicker() {
   document.getElementById('picker-confirm-btn').textContent = 'Add Selected';
   document.getElementById('photo-picker-sel-count').classList.remove('visible');
   const addAllBtn = document.getElementById('picker-add-all-btn');
-  if (addAllBtn) addAllBtn.style.display = 'none';
+  if (addAllBtn) {
+    addAllBtn.style.display = 'none';
+    addAllBtn.disabled      = false;
+    addAllBtn.textContent   = '⊕ Add All';
+  }
 
   await populatePickerLocationFilter();
 
@@ -3856,8 +3874,8 @@ function confirmPhotoPicker() {
   });
 
   saveDB();
-  softRefresh();
   closePhotoPicker();
+  applyFilters();
   toast(`Added ${added} photo${added !== 1 ? 's' : ''} to "${album.name}"`, 'success');
 }
 
