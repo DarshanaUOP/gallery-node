@@ -175,16 +175,23 @@ def save_json(path: Path, data):
 # requests from multiple threads; each thread gets its own sqlite3 connection.
 # WAL mode allows concurrent readers while a write is in progress.
 
-_local = threading.local()
+_db_lock = threading.Lock()   # serialises all WRITE operations
+_local   = threading.local()  # each thread gets its own connection (WAL allows concurrent reads)
 
 def get_db_conn() -> sqlite3.Connection:
-    """Return a thread-local SQLite connection, creating schema on first use."""
-    if not hasattr(_local, "conn"):
+    """
+    Return a thread-local SQLite connection.
+    WAL mode allows concurrent readers; _db_lock serialises writers.
+    Each thread (Flask request thread + sync thread) gets its own connection
+    so there are no cross-thread sharing issues.
+    """
+    if not hasattr(_local, "conn") or _local.conn is None:
         conn = sqlite3.connect(str(SQLITE_DB), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")   # wait up to 5s if DB is locked
         _local.conn = conn
     return _local.conn
 
@@ -320,61 +327,72 @@ def _media_dict_to_row(m: dict) -> dict:
     }
 
 def load_media() -> list:
-    """Return the full media list as list[dict] — same shape as the old db.json array."""
+    """Return the full media list as list[dict]. Reads are safe without lock in WAL mode."""
     conn = get_db_conn()
     rows = conn.execute("SELECT * FROM media").fetchall()
     return [_row_to_media_dict(r) for r in rows]
 
 def save_media(media: list):
     """
-    Replace the entire media table with the given list — same semantics as
-    the old save_media(media) which overwrote db.json wholesale.
+    Replace the entire media table atomically.
+    NOTE: this wipes all existing records — only use for migration/reset.
+    For incremental updates, use upsert_media_rows().
     """
     conn = get_db_conn()
-    with conn:
-        conn.execute("DELETE FROM media")
-        for m in media:
-            r = _media_dict_to_row(m)
-            conn.execute("""
-                INSERT INTO media
-                    (uniqueName, name, hash, type, isHidden, format,
-                     camera_label, source_root, file_path, date_sort,
-                     date_created, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                r["uniqueName"], r["name"], r["hash"], r["type"], r["isHidden"],
-                r["format"], r["camera_label"], r["source_root"], r["file_path"],
-                r["date_sort"], r["date_created"], r["metadata_json"],
-            ))
+    with _db_lock:
+        with conn:
+            conn.execute("DELETE FROM media")
+            for m in media:
+                r = _media_dict_to_row(m)
+                conn.execute("""
+                    INSERT INTO media
+                        (uniqueName, name, hash, type, isHidden, format,
+                         camera_label, source_root, file_path, date_sort,
+                         date_created, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    r["uniqueName"], r["name"], r["hash"], r["type"], r["isHidden"],
+                    r["format"], r["camera_label"], r["source_root"], r["file_path"],
+                    r["date_sort"], r["date_created"], r["metadata_json"],
+                ))
     log.info("Saved %d media records to SQLite", len(media))
 
 def upsert_media_rows(media_list: list):
     """
-    Insert or update many media records in one transaction without touching
-    unrelated rows — used by sync_library for incremental indexing instead of
-    a full table replace (much faster for repeated syncs on large libraries).
+    Insert or update media records without touching unrelated rows.
+    Uses sqlite3 connection context manager (with conn:) which handles
+    BEGIN/COMMIT/ROLLBACK automatically and is safe from nested transaction issues.
     """
+    if not media_list:
+        return
     conn = get_db_conn()
-    with conn:
-        for m in media_list:
-            r = _media_dict_to_row(m)
-            conn.execute("""
-                INSERT INTO media
-                    (uniqueName, name, hash, type, isHidden, format,
-                     camera_label, source_root, file_path, date_sort,
-                     date_created, metadata_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(uniqueName) DO UPDATE SET
-                    name=excluded.name, hash=excluded.hash, type=excluded.type,
-                    isHidden=excluded.isHidden, format=excluded.format,
-                    camera_label=excluded.camera_label, source_root=excluded.source_root,
-                    file_path=excluded.file_path, date_sort=excluded.date_sort,
-                    date_created=excluded.date_created, metadata_json=excluded.metadata_json
-            """, (
-                r["uniqueName"], r["name"], r["hash"], r["type"], r["isHidden"],
-                r["format"], r["camera_label"], r["source_root"], r["file_path"],
-                r["date_sort"], r["date_created"], r["metadata_json"],
-            ))
+    with _db_lock:
+        with conn:
+            for m in media_list:
+                r = _media_dict_to_row(m)
+                conn.execute("""
+                    INSERT INTO media
+                        (uniqueName, name, hash, type, isHidden, format,
+                         camera_label, source_root, file_path, date_sort,
+                         date_created, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(uniqueName) DO UPDATE SET
+                        name          = excluded.name,
+                        hash          = excluded.hash,
+                        type          = excluded.type,
+                        isHidden      = excluded.isHidden,
+                        format        = excluded.format,
+                        camera_label  = excluded.camera_label,
+                        source_root   = excluded.source_root,
+                        file_path     = excluded.file_path,
+                        date_sort     = excluded.date_sort,
+                        date_created  = excluded.date_created,
+                        metadata_json = excluded.metadata_json
+                """, (
+                    r["uniqueName"], r["name"], r["hash"], r["type"], r["isHidden"],
+                    r["format"], r["camera_label"], r["source_root"], r["file_path"],
+                    r["date_sort"], r["date_created"], r["metadata_json"],
+                ))
 
 def get_media_by_unique_name(unique_name: str):
     """Fast indexed lookup of a single media item by primary key."""
@@ -394,11 +412,12 @@ def set_media_hidden(unique_name: str, hidden: bool) -> bool:
 
 def get_existing_hashes_and_paths() -> tuple:
     """
-    Return (set of hashes, set of resolved full paths) for dedup checks during sync.
-    Reads only the columns needed instead of full metadata blobs.
+    Return (set of hashes, set of resolved full paths) for dedup checks.
+    Holds _db_lock for a consistent snapshot — sync reads this once at start.
     """
     conn = get_db_conn()
-    rows = conn.execute("SELECT hash, file_path, name FROM media").fetchall()
+    with _db_lock:
+        rows = conn.execute("SELECT hash, file_path, name FROM media").fetchall()
     hashes = {r["hash"] for r in rows if r["hash"]}
     paths  = set()
     for r in rows:
@@ -411,59 +430,75 @@ def get_existing_hashes_and_paths() -> tuple:
 
 def query_media(filters: dict, sort: str, offset: int, limit: int) -> tuple:
     """
-    Core filtered/sorted/paginated query — the SQL equivalent of the old
-    _filter_media() + _sort_media() + list-slicing pipeline, but done entirely
-    in SQLite with indexes instead of a full Python list scan.
+    Core filtered/sorted/paginated query — done entirely in SQLite with indexes.
+    Supports an optional 'album' filter which JOINs album_media so only members
+    of that album are returned, in album membership order (position) by default.
     Returns (items: list[dict], total: int).
     """
     conn = get_db_conn()
+
+    album_id = (filters.get("album") or "").strip()
 
     where = []
     args  = []
 
     hidden = (filters.get("hidden") or "").strip().lower()
     if hidden == "true":
-        where.append("isHidden = 1")
+        where.append("m.isHidden = 1")
     elif hidden != "include":
-        where.append("isHidden = 0")
+        where.append("m.isHidden = 0")
 
     fmt = (filters.get("format") or "").strip().upper()
     if fmt:
-        where.append("format = ?")
+        where.append("m.format = ?")
         args.append(fmt)
 
     cam = (filters.get("camera") or "").strip()
     if cam:
-        where.append("camera_label = ?")
+        where.append("m.camera_label = ?")
         args.append(cam)
 
     loc = (filters.get("location") or "").strip().rstrip("/\\")
     if loc:
-        where.append("(source_root = ? OR file_path LIKE ?)")
-        args.append(loc)
-        args.append(loc + "%")
+        where.append("(m.source_root = ? OR m.source_root LIKE ? OR m.file_path = ? OR m.file_path LIKE ?)")
+        args.extend([loc, loc + "/%", loc, loc + "/%"])
 
     q = (filters.get("q") or "").strip().lower()
     if q:
-        where.append("(LOWER(name) LIKE ? OR LOWER(camera_label) LIKE ? OR date_created LIKE ?)")
+        where.append("(LOWER(m.name) LIKE ? OR LOWER(m.camera_label) LIKE ? OR m.date_created LIKE ?)")
         like = f"%{q}%"
         args.extend([like, like, like])
 
-    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
-
-    total = conn.execute(f"SELECT COUNT(*) FROM media {where_sql}", args).fetchone()[0]
-
-    if sort == "date-asc":
-        order_sql = "ORDER BY date_sort ASC"
-    elif sort == "name":
-        order_sql = "ORDER BY name COLLATE NOCASE ASC"
+    if album_id:
+        # JOIN restricts results to album members only
+        from_sql  = "FROM media m INNER JOIN album_media am ON m.uniqueName = am.uniqueName AND am.album_id = ?"
+        join_args = [album_id]
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        if sort == "date-asc":
+            order_sql = "ORDER BY m.date_sort ASC"
+        elif sort == "name":
+            order_sql = "ORDER BY m.name COLLATE NOCASE ASC"
+        else:
+            order_sql = "ORDER BY am.position ASC, m.date_sort DESC"
+        count_sql = f"SELECT COUNT(*) {from_sql} {where_sql}"
+        rows_sql  = f"SELECT m.* {from_sql} {where_sql} {order_sql} LIMIT ? OFFSET ?"
+        all_args  = join_args + args
     else:
-        order_sql = "ORDER BY date_sort DESC"
+        from_sql  = "FROM media m"
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        if sort == "date-asc":
+            order_sql = "ORDER BY m.date_sort ASC"
+        elif sort == "name":
+            order_sql = "ORDER BY m.name COLLATE NOCASE ASC"
+        else:
+            order_sql = "ORDER BY m.date_sort DESC"
+        count_sql = f"SELECT COUNT(*) {from_sql} {where_sql}"
+        rows_sql  = f"SELECT m.* {from_sql} {where_sql} {order_sql} LIMIT ? OFFSET ?"
+        all_args  = args
 
-    rows = conn.execute(
-        f"SELECT * FROM media {where_sql} {order_sql} LIMIT ? OFFSET ?",
-        args + [limit, offset]
-    ).fetchall()
+    with _db_lock:
+        total = conn.execute(count_sql, all_args).fetchone()[0]
+        rows  = conn.execute(rows_sql, all_args + [limit, offset]).fetchall()
 
     return [_row_to_media_dict(r) for r in rows], total
 
@@ -487,6 +522,62 @@ def get_distinct_source_roots() -> list:
         "SELECT DISTINCT source_root FROM media WHERE source_root != '' ORDER BY source_root"
     ).fetchall()
     return [r["source_root"] for r in rows]
+
+def get_distinct_subdirs() -> list:
+    """
+    Return all unique directory paths including source roots and every
+    subdirectory that contains at least one indexed file.
+    Returns [{path, source_root, label, depth, is_root}] sorted by path.
+    - depth 0 entries are source roots (path == source_root)
+    - depth > 0 entries are subdirectories (path == file_path stripped of trailing slash)
+    """
+    conn = get_db_conn()
+
+    # Get all unique (source_root, file_path) pairs
+    rows = conn.execute(
+        """SELECT DISTINCT source_root, file_path
+           FROM media
+           WHERE file_path != ''
+           ORDER BY source_root, file_path"""
+    ).fetchall()
+
+    seen_paths  = set()
+    seen_roots  = set()
+    result      = []
+
+    for r in rows:
+        src  = (r["source_root"] or "").rstrip("/\\")
+        path = (r["file_path"]   or "").rstrip("/\\")
+
+        # Always emit the source root once as a depth-0 selectable entry
+        if src and src not in seen_roots:
+            seen_roots.add(src)
+            seen_paths.add(src)
+            result.append({
+                "path":        src,
+                "source_root": src,
+                "label":       os.path.basename(src) or src,
+                "depth":       0,
+                "is_root":     True,
+            })
+
+        # Emit the subdirectory (file_path) if it differs from source root
+        if path and path not in seen_paths and path != src:
+            seen_paths.add(path)
+            if src and path.startswith(src):
+                rel = path[len(src):].lstrip("/\\")
+            else:
+                rel = os.path.basename(path) or path
+            depth = path.replace("\\", "/").count("/") - src.replace("\\", "/").count("/")
+            result.append({
+                "path":        path,
+                "source_root": src,
+                "label":       rel if rel else os.path.basename(path),
+                "depth":       max(1, depth),
+                "is_root":     False,
+            })
+
+    return sorted(result, key=lambda x: x["path"].lower())
 
 def get_media_count() -> int:
     conn = get_db_conn()
@@ -513,22 +604,18 @@ def load_albums() -> list:
     return out
 
 def save_albums(albums: list):
-    """Replace all albums + their membership — same semantics as the old save_albums()."""
+    """Replace all albums + their membership atomically under _db_lock."""
     conn = get_db_conn()
-    with conn:
-        conn.execute("DELETE FROM album_media")
-        conn.execute("DELETE FROM albums")
-        for a in albums:
-            conn.execute(
-                "INSERT INTO albums (id, name) VALUES (?, ?)",
-                (a.get("id"), a.get("name", "Untitled"))
-            )
-            for pos, un in enumerate(a.get("media", [])):
-                # Skip media references that don't exist (defensive — avoids FK errors)
-                exists = conn.execute(
-                    "SELECT 1 FROM media WHERE uniqueName = ?", (un,)
-                ).fetchone()
-                if exists:
+    with _db_lock:
+        with conn:
+            conn.execute("DELETE FROM album_media")
+            conn.execute("DELETE FROM albums")
+            for a in albums:
+                conn.execute(
+                    "INSERT INTO albums (id, name) VALUES (?, ?)",
+                    (a.get("id"), a.get("name", "Untitled"))
+                )
+                for pos, un in enumerate(a.get("media", [])):
                     conn.execute(
                         "INSERT OR IGNORE INTO album_media (album_id, uniqueName, position) VALUES (?, ?, ?)",
                         (a.get("id"), un, pos)
@@ -1178,6 +1265,17 @@ if FLASK_AVAILABLE:
         )
         return jsonify(result)
 
+    @app.route("/api/media/subdirs", methods=["GET"])
+    def api_media_subdirs():
+        """
+        Return all distinct directories (source roots + every subdirectory
+        that contains at least one indexed file) as a tree-friendly list.
+        Response: [{path, source_root, label, depth}] sorted by path.
+        'depth' is 0 for source root, 1 for first-level subdir, etc.
+        Used to populate the location/subfolder dropdown in the photo picker.
+        """
+        return jsonify(get_distinct_subdirs())
+
     @app.route("/api/media", methods=["GET"])
     def api_media():
         """
@@ -1678,26 +1776,18 @@ if FLASK_AVAILABLE:
     @app.route("/api/db", methods=["POST"])
     def api_db_post():
         """
-        Accept {media, albums} from frontend and save to SQLite.
-        Note: this does a full-table replace for whichever of media/albums is
-        provided — same semantics as the original JSON-based endpoint.
+        Save updated albums and/or individual media record changes from the frontend.
+        Media records are UPSERTED (never full-table replaced) to prevent data loss
+        when the frontend only has a partial page of records loaded.
+        Albums are always replaced in full (they're small and always fully loaded).
         """
         data = request.get_json(force=True)
         if not data:
             return jsonify({"error": "No data"}), 400
 
-        if "media" in data:
-            # Preserve hashes for any record that doesn't include one
-            existing_hashes, _ = get_existing_hashes_and_paths()
-            conn = get_db_conn()
-            hash_lookup = {
-                r["uniqueName"]: r["hash"]
-                for r in conn.execute("SELECT uniqueName, hash FROM media").fetchall()
-            }
-            for m in data["media"]:
-                if not m.get("hash") and m.get("uniqueName") in hash_lookup:
-                    m["hash"] = hash_lookup[m["uniqueName"]]
-            save_media(data["media"])
+        if "media" in data and data["media"]:
+            # Upsert — update only the records sent, leave all others untouched
+            upsert_media_rows(data["media"])
 
         if "albums" in data:
             save_albums(data["albums"])
@@ -1721,6 +1811,37 @@ if FLASK_AVAILABLE:
             return jsonify({"ok": True})
         return jsonify({"error": "Album not found"}), 404
 
+    @app.route("/api/album/add-bulk", methods=["POST"])
+    def api_album_add_bulk():
+        """
+        Add a list of uniqueNames to an album in a single transaction.
+        Body: { albumId: str, uniqueNames: [str, ...] }
+        Returns { ok: true, added: N } where N is how many were newly inserted.
+        """
+        body         = request.get_json(force=True) or {}
+        album_id     = body.get("albumId")
+        unique_names = body.get("uniqueNames", [])
+        if not album_id:
+            return jsonify({"error": "albumId required"}), 400
+        conn = get_db_conn()
+        album_exists = conn.execute("SELECT 1 FROM albums WHERE id = ?", (album_id,)).fetchone()
+        if not album_exists:
+            return jsonify({"error": "Album not found"}), 404
+        with _db_lock:
+            with conn:
+                max_pos = conn.execute(
+                    "SELECT COALESCE(MAX(position), -1) FROM album_media WHERE album_id = ?",
+                    (album_id,)
+                ).fetchone()[0]
+                added = 0
+                for un in unique_names:
+                    cur = conn.execute(
+                        "INSERT OR IGNORE INTO album_media (album_id, uniqueName, position) VALUES (?, ?, ?)",
+                        (album_id, un, max_pos + 1 + added)
+                    )
+                    added += cur.rowcount
+        return jsonify({"ok": True, "added": added})
+
     @app.route("/api/media/hide", methods=["POST"])
     def api_media_hide():
         body        = request.get_json(force=True) or {}
@@ -1733,7 +1854,12 @@ if FLASK_AVAILABLE:
 
     def run_server(port: int = 5000):
         log.info("Starting Luminary backend on http://0.0.0.0:%d", port)
-        app.run(host="0.0.0.0", port=port, debug=False)
+        # threaded=False: serialises all requests through one thread so the single
+        # shared SQLite connection is never accessed concurrently. The sync runs in
+        # its own daemon thread but only writes between request cycles. WAL mode
+        # means reads (most requests) never block on the sync write thread.
+        app.run(host="0.0.0.0", port=port, debug=False, threaded=True,
+                use_reloader=False)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

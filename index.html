@@ -1611,9 +1611,10 @@
       </div>
       <div id="photo-picker-actions">
         <input type="text" id="photo-picker-search" placeholder="Search…" oninput="filterPickerGrid()">
-        <select id="photo-picker-location" class="filter-select" onchange="filterPickerGrid()" style="max-width:180px">
+        <select id="photo-picker-location" class="filter-select" onchange="_pickerLocationChanged()" style="max-width:200px">
           <option value="">All Locations</option>
         </select>
+        <button class="btn btn-ghost" id="picker-add-all-btn" onclick="addAllFromLocation()" title="Add all photos from the selected location to the album" style="display:none">⊕ Add All</button>
         <button class="btn btn-ghost" onclick="pickerSelectAll()">Select All</button>
         <button class="btn btn-ghost" onclick="pickerClearAll()">Clear</button>
         <button class="btn btn-accent" id="picker-confirm-btn" onclick="confirmPhotoPicker()">Add Selected</button>
@@ -1985,6 +1986,11 @@ function _serverFilters() {
   if (loc) params.location = loc;
   if (q)   params.q        = q;
 
+  // Album view — let server filter by album membership via JOIN
+  if (currentView !== 'all' && currentView !== 'hidden') {
+    params.album = currentView;
+  }
+
   // Hidden handling
   if (currentView === 'hidden') {
     params.hidden = 'true';
@@ -2026,18 +2032,12 @@ async function _fetchNextPage() {
     db._hasMore = data.has_more;
     db._offset  = db.media.length;
 
-    // All server-side filters already applied — handle album view client-side only
-    let filtered = newItems;
-    if (currentView !== 'all' && currentView !== 'hidden') {
-      const album = db.albums.find(a => a.id === currentView);
-      if (album) filtered = filtered.filter(m => album.media.includes(m.uniqueName));
-    }
-
-    if (filtered.length > 0) {
+    // Server applies all filters including album membership — render directly
+    if (newItems.length > 0) {
       const startIdx = filteredMedia.length;
-      filteredMedia.push(...filtered);
+      filteredMedia.push(...newItems);
       const grid = document.getElementById('gallery-grid');
-      filtered.forEach((item, i) => grid.appendChild(createCard(item, startIdx + i)));
+      newItems.forEach((item, i) => grid.appendChild(createCard(item, startIdx + i)));
       renderedCount = filteredMedia.length;
       softRefresh();
     }
@@ -2127,20 +2127,14 @@ function applyFilters() {
       db._hasMore = data.has_more;
       db._offset  = db.media.length;
 
-      // Client-side album filter (albums are in memory)
-      let pool = newItems;
-      if (currentView !== 'all' && currentView !== 'hidden') {
-        const album = db.albums.find(a => a.id === currentView);
-        if (album) pool = pool.filter(m => album.media.includes(m.uniqueName));
-      }
-
-      filteredMedia = pool;
+      // Server applies all filters (including album JOIN) — render directly
+      filteredMedia = newItems;
       renderedCount = 0;
       renderBatch();
       updateStats();
       updateFooter();
       document.getElementById('empty-state').style.display =
-        (pool.length === 0 && !db._hasMore) ? 'flex' : 'none';
+        (newItems.length === 0 && !db._hasMore) ? 'flex' : 'none';
     })
     .catch(() => {
       document.getElementById('empty-state').style.display = 'flex';
@@ -2300,22 +2294,148 @@ async function populateLocationFilter() {
 
 // Picker location dropdown (used inside Add Photos modal)
 async function populatePickerLocationFilter() {
+  const sel = document.getElementById('photo-picker-location');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">All Locations</option>';
+
   try {
-    const r = await fetch(`${API_BASE}/api/locations`);
+    // Fetch full directory tree (source roots + all subdirectories with files)
+    const r = await fetch(`${API_BASE}/api/media/subdirs`);
     if (!r.ok) return;
-    const locations = await r.json();
-    const sel       = document.getElementById('photo-picker-location');
-    if (!sel) return;
-    const prev    = sel.value;
-    sel.innerHTML = '<option value="">All Locations</option>';
-    locations.forEach(({ root, label }) => {
-      const o = document.createElement('option');
-      o.value = root; o.textContent = label; o.title = root;
-      sel.appendChild(o);
+    const dirs = await r.json(); // [{path, source_root, label, depth}]
+
+    if (dirs.length === 0) return;
+
+    // Group by source_root to render as optgroup sections
+    const groups = {};
+    const rootLabels = {};
+
+    // Also fetch configured location names for optgroup labels
+    try {
+      const lr = await fetch(`${API_BASE}/api/locations`);
+      if (lr.ok) {
+        const locs = await lr.json();
+        locs.forEach(l => { rootLabels[l.root] = l.label; });
+      }
+    } catch { /* fall back to path segment */ }
+
+    dirs.forEach(d => {
+      const g = d.source_root || d.path;
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(d);
     });
-    const roots = locations.map(l => l.root);
-    if (prev && roots.includes(prev)) sel.value = prev;
+
+    Object.entries(groups).forEach(([srcRoot, items]) => {
+      const groupLabel = rootLabels[srcRoot] || srcRoot.split('/').filter(Boolean).pop() || srcRoot;
+      const group = document.createElement('optgroup');
+      group.label = groupLabel;
+
+      items.forEach(d => {
+        const opt   = document.createElement('option');
+        opt.value   = d.path;
+        opt.title   = d.path;
+        // Indent sub-directory labels by depth
+        const indent = '\u00A0\u00A0'.repeat(d.depth);   // non-breaking spaces
+        opt.textContent = indent + (d.depth === 0 ? '⊞ ' : '↳ ') + d.label;
+        group.appendChild(opt);
+      });
+
+      sel.appendChild(group);
+    });
   } catch { /* backend not running */ }
+}
+
+// Show/hide "Add All" button depending on whether a location is selected
+function _pickerLocationChanged() {
+  const loc = document.getElementById('photo-picker-location').value;
+  const btn = document.getElementById('picker-add-all-btn');
+  if (btn) btn.style.display = loc ? 'inline-flex' : 'none';
+  filterPickerGrid();
+}
+
+// Add ALL indexed media from the selected location directly to the album,
+// fetching every page from the server — no pagination cap.
+async function addAllFromLocation() {
+  const loc = document.getElementById('photo-picker-location').value;
+  if (!loc || !currentAlbumId) return;
+
+  const album = db.albums.find(a => a.id === currentAlbumId);
+  if (!album) return;
+
+  const btn  = document.getElementById('picker-add-all-btn');
+  btn.disabled    = true;
+  btn.textContent = 'Loading…';
+
+  try {
+    const PAGE      = 500;
+    let offset      = 0;
+    let fetched     = 0;
+    const alreadyIn = new Set(album.media);
+    const toAdd     = [];
+
+    // Fetch all pages from server
+    while (true) {
+      const params = new URLSearchParams({
+        location: loc, limit: PAGE, offset, sort: 'date-desc',
+      });
+      const r = await fetch(`${API_BASE}/api/media?${params.toString()}`);
+      if (!r.ok) throw new Error('Server error ' + r.status);
+      const data  = await r.json();
+      const items = data.items || [];
+      if (items.length === 0) break;
+
+      items.forEach(m => {
+        if (!alreadyIn.has(m.uniqueName)) {
+          alreadyIn.add(m.uniqueName);
+          toAdd.push(m.uniqueName);
+        }
+      });
+
+      fetched += items.length;
+      offset  += items.length;
+      btn.textContent = `Loading… ${fetched}`;
+
+      if (!data.has_more || items.length < PAGE) break;
+    }
+
+    if (toAdd.length === 0) {
+      closePhotoPicker();
+      const dirName = loc.split('/').filter(Boolean).pop() || loc;
+      toast(`No new photos to add from "${dirName}"`, 'info');
+      return;
+    }
+
+    btn.textContent = `Adding ${toAdd.length}…`;
+
+    // Persist directly via bulk endpoint — bypasses saveDB() / save_albums() path
+    const r2 = await fetch(`${API_BASE}/api/album/add-bulk`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ albumId: currentAlbumId, uniqueNames: toAdd }),
+    });
+    if (!r2.ok) throw new Error('Bulk add failed: ' + r2.status);
+    const result = await r2.json();
+
+    // Update in-memory album so the UI reflects the change
+    toAdd.forEach(un => { if (!album.media.includes(un)) album.media.push(un); });
+
+    // Reset button before closing
+    btn.disabled    = false;
+    btn.textContent = '⊕ Add All';
+
+    closePhotoPicker();
+
+    // Re-fetch and render the album gallery from the server
+    applyFilters();
+
+    const dirName = loc.split('/').filter(Boolean).pop() || loc;
+    toast(`Added ${result.added} photo${result.added !== 1 ? 's' : ''} from "${dirName}" to "${album.name}"`, 'success');
+
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
+    btn.disabled    = false;
+    btn.textContent = '⊕ Add All';
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -2484,11 +2604,18 @@ function ctxRemoveFromAlbum() {
 function ctxToggleHide() {
   if (!ctxTarget) return;
   ctxTarget.isHidden = !ctxTarget.isHidden;
-  saveDB();
-  // If showing hidden is off, hiding a card means it should disappear from the grid
-  if (!showHidden) {
+
+  // Persist via dedicated endpoint — never touches rest of the media table
+  fetch(`${API_BASE}/api/media/hide`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uniqueName: ctxTarget.uniqueName, hidden: ctxTarget.isHidden })
+  }).catch(() => {});
+
+  // Remove card from grid if hiding and show-hidden is off
+  if (!showHidden && ctxTarget.isHidden) {
     const card = document.querySelector(`.media-item[data-unique="${ctxTarget.uniqueName}"]`);
-    if (card && ctxTarget.isHidden) card.remove();
+    if (card) card.remove();
   }
   softRefresh();
   toast(ctxTarget.isHidden ? 'Image hidden' : 'Image unhidden', 'info');
@@ -3202,13 +3329,13 @@ function _syncPoll() {
 //  PERSIST (saves to localStorage as fallback)
 // ─────────────────────────────────────────────
 function saveDB() {
-  // POST the full in-memory state back to the server
-  // db.media is always complete in memory after _loadRemainingMedia finishes;
-  // for in-flight saves, the server merges hashes so partial saves are safe.
+  // Only save albums via POST /api/db — albums are always fully loaded in memory.
+  // Media mutations (hide/unhide) use /api/media/hide directly.
+  // Never send db.media here — it's a partial page and would overwrite the full DB.
   fetch(`${API_BASE}/api/db`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ media: db.media, albums: db.albums })
+    body: JSON.stringify({ albums: db.albums })
   }).catch(() => {});
   updateFooter();
   renderAlbumNav();
@@ -3568,6 +3695,12 @@ async function openPhotoPicker() {
   document.getElementById('picker-confirm-btn').disabled = true;
   document.getElementById('picker-confirm-btn').textContent = 'Add Selected';
   document.getElementById('photo-picker-sel-count').classList.remove('visible');
+  const addAllBtn = document.getElementById('picker-add-all-btn');
+  if (addAllBtn) {
+    addAllBtn.style.display = 'none';
+    addAllBtn.disabled      = false;
+    addAllBtn.textContent   = '⊕ Add All';
+  }
 
   await populatePickerLocationFilter();
 
@@ -3741,8 +3874,8 @@ function confirmPhotoPicker() {
   });
 
   saveDB();
-  softRefresh();
   closePhotoPicker();
+  applyFilters();
   toast(`Added ${added} photo${added !== 1 ? 's' : ''} to "${album.name}"`, 'success');
 }
 
