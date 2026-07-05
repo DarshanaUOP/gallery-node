@@ -1986,6 +1986,11 @@ function _serverFilters() {
   if (loc) params.location = loc;
   if (q)   params.q        = q;
 
+  // Album view — let server filter by album membership via JOIN
+  if (currentView !== 'all' && currentView !== 'hidden') {
+    params.album = currentView;
+  }
+
   // Hidden handling
   if (currentView === 'hidden') {
     params.hidden = 'true';
@@ -2027,18 +2032,12 @@ async function _fetchNextPage() {
     db._hasMore = data.has_more;
     db._offset  = db.media.length;
 
-    // All server-side filters already applied — handle album view client-side only
-    let filtered = newItems;
-    if (currentView !== 'all' && currentView !== 'hidden') {
-      const album = db.albums.find(a => a.id === currentView);
-      if (album) filtered = filtered.filter(m => album.media.includes(m.uniqueName));
-    }
-
-    if (filtered.length > 0) {
+    // Server applies all filters including album membership — render directly
+    if (newItems.length > 0) {
       const startIdx = filteredMedia.length;
-      filteredMedia.push(...filtered);
+      filteredMedia.push(...newItems);
       const grid = document.getElementById('gallery-grid');
-      filtered.forEach((item, i) => grid.appendChild(createCard(item, startIdx + i)));
+      newItems.forEach((item, i) => grid.appendChild(createCard(item, startIdx + i)));
       renderedCount = filteredMedia.length;
       softRefresh();
     }
@@ -2128,20 +2127,14 @@ function applyFilters() {
       db._hasMore = data.has_more;
       db._offset  = db.media.length;
 
-      // Client-side album filter (albums are in memory)
-      let pool = newItems;
-      if (currentView !== 'all' && currentView !== 'hidden') {
-        const album = db.albums.find(a => a.id === currentView);
-        if (album) pool = pool.filter(m => album.media.includes(m.uniqueName));
-      }
-
-      filteredMedia = pool;
+      // Server applies all filters (including album JOIN) — render directly
+      filteredMedia = newItems;
       renderedCount = 0;
       renderBatch();
       updateStats();
       updateFooter();
       document.getElementById('empty-state').style.display =
-        (pool.length === 0 && !db._hasMore) ? 'flex' : 'none';
+        (newItems.length === 0 && !db._hasMore) ? 'flex' : 'none';
     })
     .catch(() => {
       document.getElementById('empty-state').style.display = 'flex';
