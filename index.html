@@ -4044,7 +4044,8 @@ async function openMapView() {
   try {
     const r    = await fetch(`${API_BASE}/api/media/gps`);
     const data = await r.json();
-    _renderMapMarkers(data.items || [], data.gps_count, data.total);
+    const total = data.total ?? data.total_count ?? 0;
+    _renderMapMarkers(data.items || [], data.gps_count ?? 0, total);
   } catch {
     document.getElementById('map-gps-banner').classList.add('visible');
     document.getElementById('map-gps-text').textContent = 'Could not load GPS data — is app.py running?';
