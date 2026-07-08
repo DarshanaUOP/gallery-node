@@ -1216,6 +1216,14 @@ if FLASK_AVAILABLE:
         log.info("configuration.json updated")
         return jsonify({"ok": True})
 
+    @app.route("/api/media/by-id/<unique_name>", methods=["GET"])
+    def api_media_by_id(unique_name):
+        """Return a single full media record by uniqueName. Used by the map panel."""
+        item = get_media_by_unique_name(unique_name)
+        if not item:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify(item)
+
     @app.route("/api/media/count", methods=["GET"])
     def api_media_count():
         """Return total number of indexed media items — single indexed COUNT(*)."""
