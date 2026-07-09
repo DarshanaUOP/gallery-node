@@ -27,4 +27,4 @@ venv*/
 # Build related files and directories
 dist/
 build/
-app.spec
+*.spec

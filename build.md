@@ -24,12 +24,14 @@ We will use `pyinstaller` to create executable application for this app.
 
 - [optional] delete dist directory
 
-    `rmdir /s /q dist\`
+    `rmdir /s /q dist\windows\portable\`
 
 
 - build aplication using pyinstaller
 
-    `pyinstaller --clean --onedir --add-data "index.html;." app.py`
+    ```
+    pyinstaller --clean --onedir --add-data "index.html;." --distpath "dist\windows\portable" --name "Luminary" app.py
+    ```
 
 ### Linux
 
