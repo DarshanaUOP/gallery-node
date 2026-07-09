@@ -35,4 +35,4 @@ We will use `pyinstaller` to create executable application for this app.
 
 ### Linux
 
-[try to run `run.sh`]
+[try to run `run.sh`] - no need, we package all neccassary things to the executable
