@@ -1464,6 +1464,10 @@
     object-fit: cover;
     display: block;
   }
+  /* Placeholder state before lazy thumbnail loads */
+  .map-thumb-placeholder { background: var(--surface2); }
+  .map-thumb-placeholder img { opacity: 0; transition: opacity 0.25s; }
+  .map-thumb-marker:not(.map-thumb-placeholder) img { opacity: 1; }
 
   /* ── Cluster: one thumbnail + count badge ── */
   .map-cluster-wrap {
@@ -4180,20 +4184,31 @@ function _renderMapMarkers(items, gpsCount, total) {
 
   if (_clusterGroup) _leafletMap.removeLayer(_clusterGroup);
 
+  // Track which marker icons have had their thumbnail loaded
+  // so we don't re-request on every map move
+  const _thumbLoaded = new Set();
+
   _clusterGroup = L.markerClusterGroup({
-    maxClusterRadius:        80,
-    disableClusteringAtZoom: 17,
+    maxClusterRadius(zoom) {
+      // Tight clustering at every zoom level — never let markers spread into
+      // individual thumbnails automatically; panel handles individual viewing
+      if (zoom >= 16) return 30;
+      if (zoom >= 13) return 50;
+      return 70;
+    },
+    disableClusteringAtZoom: 99,  // effectively never — prevents auto-expand
     spiderfyOnMaxZoom:       false,
     showCoverageOnHover:     false,
-    zoomToBoundsOnClick:     false,  // we handle click ourselves
+    zoomToBoundsOnClick:     false,  // we handle all clicks ourselves
 
     iconCreateFunction(cluster) {
-      // Single most-recent thumbnail + compact count badge
       const children = cluster.getAllChildMarkers();
+      const count    = cluster.getChildCount();
+
+      // Pick the most-recent child's thumbnail for the cluster face
       const newest   = children.reduce((best, m) =>
         (!best || (m.options._date || '') > (best.options._date || '')) ? m : best, null);
       const thumbUrl = newest?.options._thumbUrl || '';
-      const count    = cluster.getChildCount();
       const badge    = count > 9999 ? '9999+' : String(count);
 
       const html = `
@@ -4215,23 +4230,24 @@ function _renderMapMarkers(items, gpsCount, total) {
     },
   });
 
-  // Cluster click → open side panel, sorted newest first
+  // Cluster click → open side panel
   _clusterGroup.on('clusterclick', e => {
     e.originalEvent?.stopPropagation();
-    const markers     = e.layer.getAllChildMarkers();
+    const markers      = e.layer.getAllChildMarkers();
     markers.sort((a, b) => (b.options._date || '').localeCompare(a.options._date || ''));
     const clusterItems = markers.map(m => m.options._item);
-    const title = markers.length === 1 ? clusterItems[0].name : `${markers.length} Photos`;
+    const title        = `${markers.length} Photos`;
     openMapClusterPanel(clusterItems, title);
   });
 
-  // Build individual markers — small thumbnail, single item
+  // Build individual markers with a placeholder icon — no thumbnail loaded yet.
+  // Thumbnails are loaded lazily only when the marker becomes visible on screen.
   items.forEach(item => {
-    // Use a small thumbnail (80px) to keep network load minimal
     const thumbUrl = `${API_BASE}/api/thumb/${encodeURIComponent(item.uniqueName)}?size=80&quality=65`;
 
+    // Start with a placeholder (no img src) — just a coloured square
     const icon = L.divIcon({
-      html:      `<div class="map-thumb-marker"><img src="${thumbUrl}" loading="lazy" alt=""></div>`,
+      html:      `<div class="map-thumb-marker map-thumb-placeholder" data-src="${thumbUrl}"><img src="" alt=""></div>`,
       className: '',
       iconSize:  [44, 44],
       iconAnchor:[22, 22],
@@ -4245,11 +4261,10 @@ function _renderMapMarkers(items, gpsCount, total) {
       _item:     item,
     });
 
-    // Single marker click → fetch full record then open lightbox directly
+    // Single visible marker click → open panel with just this item
     marker.on('click', e => {
       e.originalEvent?.stopPropagation();
-      closeMapClusterPanel();
-      _openMapItem(item, 0, [item]);
+      openMapClusterPanel([item], item.name);
     });
 
     _clusterGroup.addLayer(marker);
@@ -4257,9 +4272,36 @@ function _renderMapMarkers(items, gpsCount, total) {
 
   _leafletMap.addLayer(_clusterGroup);
 
-  // Fit to all markers on first load
+  // Lazy-load thumbnails for individual markers that are currently on screen.
+  // Fires on move/zoom so thumbnails load only when their marker is visible.
+  const _lazyLoadVisibleMarkers = () => {
+    const mapBounds = _leafletMap.getBounds();
+    _clusterGroup.getLayers().forEach(marker => {
+      if (!marker.getLatLng) return;  // skip cluster objects
+      const un = marker.options._item?.uniqueName;
+      if (!un || _thumbLoaded.has(un)) return;
+      if (!mapBounds.contains(marker.getLatLng())) return;
+
+      // Marker is in viewport — swap placeholder src
+      const el = marker.getElement?.();
+      if (!el) return;
+      const wrapper = el.querySelector('.map-thumb-placeholder');
+      const img     = wrapper?.querySelector('img');
+      const src     = wrapper?.dataset?.src;
+      if (img && src && !img.src.includes('api/thumb')) {
+        img.src     = src;
+        img.onload  = () => { wrapper.classList.remove('map-thumb-placeholder'); };
+        img.onerror = () => { wrapper.classList.remove('map-thumb-placeholder'); };
+        _thumbLoaded.add(un);
+      }
+    });
+  };
+
+  _leafletMap.on('moveend zoomend', _lazyLoadVisibleMarkers);
+
+  // Fit to all markers on first load — cap at zoom 12 to keep clusters intact
   const bounds = L.latLngBounds(items.map(i => [i.lat, i.lng]));
-  _leafletMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+  _leafletMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
 }
 
 // ── Cluster side panel ────────────────────────────────────────────────────────
