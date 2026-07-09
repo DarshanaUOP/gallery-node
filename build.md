@@ -32,7 +32,35 @@ We will use `pyinstaller` to create executable application for this app.
     ```
     pyinstaller --clean --onedir --add-data "index.html;." --distpath "dist\windows\portable" --name "Luminary" app.py
     ```
+- deactivate `venv-win`
+
+    `deactivate`
 
 ### Linux
 
-[try to run `run.sh`] - no need, we package all neccassary things to the executable
+- create python vertual environment
+
+    `python3 -m venv venv-linux`
+
+- activate python vertual environment
+
+    `source venv-linux/bin/activate`
+
+- install pyinstaller
+
+    `pip install pyinstaller`
+
+- [optional] delete dist directory
+
+    `rmdir /s /q dist/linux/portable/`
+
+
+- build aplication using pyinstaller
+
+    ```
+    pyinstaller --clean --onedir --add-data "index.html:." --distpath "dist/linux/portable" --name "Luminary" app.py
+    ```
+
+- deactivate `venv-linux`
+
+    `deactivate`
