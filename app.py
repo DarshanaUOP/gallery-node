@@ -211,6 +211,8 @@ def _init_schema():
             file_path     TEXT,            -- directory containing the file
             date_sort     TEXT,            -- modified date, fallback created — used for sorting
             date_created  TEXT,
+            lat           REAL,           -- GPS latitude,  NULL if none — see _init_schema/_migrate_schema
+            lng           REAL,           -- GPS longitude, NULL if none
             metadata_json TEXT NOT NULL    -- full metadata dict as JSON (file/image/video/camera/date/location/software)
         );
         CREATE INDEX IF NOT EXISTS idx_media_format       ON media(format);
@@ -220,6 +222,7 @@ def _init_schema():
         CREATE INDEX IF NOT EXISTS idx_media_date_sort      ON media(date_sort);
         CREATE INDEX IF NOT EXISTS idx_media_name           ON media(name);
         CREATE INDEX IF NOT EXISTS idx_media_hash           ON media(hash);
+        CREATE INDEX IF NOT EXISTS idx_media_latlng         ON media(lat, lng) WHERE lat IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS albums (
             id    TEXT PRIMARY KEY,
@@ -236,8 +239,66 @@ def _init_schema():
     """)
     conn.commit()
 
+def _migrate_schema():
+    """
+    Add columns that didn't exist in older databases. SQLite's ALTER TABLE
+    ADD COLUMN is safe to run repeatedly since each addition is guarded by
+    a check against PRAGMA table_info first.
+    """
+    conn = get_db_conn()
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(media)").fetchall()}
+    needs_backfill = False
+    with _db_lock:
+        with conn:
+            if "lat" not in cols:
+                conn.execute("ALTER TABLE media ADD COLUMN lat REAL")
+                needs_backfill = True
+            if "lng" not in cols:
+                conn.execute("ALTER TABLE media ADD COLUMN lng REAL")
+                needs_backfill = True
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_media_latlng ON media(lat, lng) WHERE lat IS NOT NULL"
+            )
+    if needs_backfill:
+        _backfill_lat_lng()
+
+def _backfill_lat_lng():
+    """
+    One-time migration for existing libraries: populate the new lat/lng
+    columns from each row's metadata_json so /api/media/gps can query them
+    directly with an index instead of parsing JSON on every request.
+    """
+    conn = get_db_conn()
+    rows = conn.execute(
+        "SELECT uniqueName, metadata_json FROM media WHERE lat IS NULL"
+    ).fetchall()
+    updates = []
+    for r in rows:
+        try:
+            meta = json.loads(r["metadata_json"]) if r["metadata_json"] else {}
+            loc  = meta.get("location", {}) or {}
+            lat  = loc.get("latitude")
+            lng  = loc.get("longitude")
+            if lat is None or lng is None:
+                continue
+            lat = float(lat)
+            lng = float(lng)
+            if lat == 0.0 and lng == 0.0:
+                continue
+            updates.append((lat, lng, r["uniqueName"]))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+    if updates:
+        with _db_lock:
+            with conn:
+                conn.executemany(
+                    "UPDATE media SET lat = ?, lng = ? WHERE uniqueName = ?", updates
+                )
+    log.info("Backfilled GPS lat/lng columns for %d media record(s)", len(updates))
+
 # Initialize SQLite schema on module load (creates tables/indexes if missing)
 _init_schema()
+_migrate_schema()
 
 def _migrate_legacy_json_if_present():
     """
@@ -311,6 +372,17 @@ def _media_dict_to_row(m: dict) -> dict:
     date_created  = date.get("created")  or ""
     date_sort     = date_modified or date_created or ""
 
+    loc = meta.get("location", {}) or {}
+    lat = lng = None
+    try:
+        _lat, _lng = loc.get("latitude"), loc.get("longitude")
+        if _lat is not None and _lng is not None:
+            _lat, _lng = float(_lat), float(_lng)
+            if not (_lat == 0.0 and _lng == 0.0):
+                lat, lng = _lat, _lng
+    except (ValueError, TypeError):
+        pass
+
     return {
         "uniqueName":    m.get("uniqueName"),
         "name":          m.get("name", ""),
@@ -323,6 +395,8 @@ def _media_dict_to_row(m: dict) -> dict:
         "file_path":     file_.get("path", ""),
         "date_sort":     date_sort,
         "date_created":  date_created,
+        "lat":           lat,
+        "lng":           lng,
         "metadata_json": json.dumps(meta, default=str),
     }
 
@@ -348,12 +422,12 @@ def save_media(media: list):
                     INSERT INTO media
                         (uniqueName, name, hash, type, isHidden, format,
                          camera_label, source_root, file_path, date_sort,
-                         date_created, metadata_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         date_created, lat, lng, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     r["uniqueName"], r["name"], r["hash"], r["type"], r["isHidden"],
                     r["format"], r["camera_label"], r["source_root"], r["file_path"],
-                    r["date_sort"], r["date_created"], r["metadata_json"],
+                    r["date_sort"], r["date_created"], r["lat"], r["lng"], r["metadata_json"],
                 ))
     log.info("Saved %d media records to SQLite", len(media))
 
@@ -374,8 +448,8 @@ def upsert_media_rows(media_list: list):
                     INSERT INTO media
                         (uniqueName, name, hash, type, isHidden, format,
                          camera_label, source_root, file_path, date_sort,
-                         date_created, metadata_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         date_created, lat, lng, metadata_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(uniqueName) DO UPDATE SET
                         name          = excluded.name,
                         hash          = excluded.hash,
@@ -387,11 +461,13 @@ def upsert_media_rows(media_list: list):
                         file_path     = excluded.file_path,
                         date_sort     = excluded.date_sort,
                         date_created  = excluded.date_created,
+                        lat           = excluded.lat,
+                        lng           = excluded.lng,
                         metadata_json = excluded.metadata_json
                 """, (
                     r["uniqueName"], r["name"], r["hash"], r["type"], r["isHidden"],
                     r["format"], r["camera_label"], r["source_root"], r["file_path"],
-                    r["date_sort"], r["date_created"], r["metadata_json"],
+                    r["date_sort"], r["date_created"], r["lat"], r["lng"], r["metadata_json"],
                 ))
 
 def get_media_by_unique_name(unique_name: str):
@@ -1287,49 +1363,62 @@ if FLASK_AVAILABLE:
     @app.route("/api/media/gps", methods=["GET"])
     def api_media_gps():
         """
-        Return a lightweight list of all non-hidden media that has GPS coordinates.
-        Each item contains only what the map needs — no full metadata blob.
+        Return a paginated, lightweight list of non-hidden media that has GPS
+        coordinates. Backed entirely by the indexed lat/lng columns — no
+        per-row JSON parsing — so it stays fast regardless of library size.
+
+        Query params: offset (default 0), limit (default 2000, max 5000)
+
         Response: {
           items: [{uniqueName, name, type, lat, lng, date}],
-          total: N,          -- total media in db (including those without GPS)
-          gps_count: N       -- number that have GPS coords
+          total: N,          -- total non-hidden media in db (incl. those without GPS)
+          gps_count: N,      -- total number that have GPS coordinates
+          offset: N,
+          limit: N,
+          has_more: bool
         }
         """
+        offset = max(0, int(request.args.get("offset", 0)))
+        limit  = min(5000, max(1, int(request.args.get("limit", 2000))))
+
         conn = get_db_conn()
         with _db_lock:
-            total = conn.execute("SELECT COUNT(*) FROM media WHERE isHidden = 0").fetchone()[0]
-            rows  = conn.execute(
-                "SELECT uniqueName, name, type, date_sort, metadata_json FROM media WHERE isHidden = 0"
+            total = conn.execute(
+                "SELECT COUNT(*) FROM media WHERE isHidden = 0"
+            ).fetchone()[0]
+            gps_count = conn.execute(
+                "SELECT COUNT(*) FROM media WHERE isHidden = 0 AND lat IS NOT NULL"
+            ).fetchone()[0]
+            rows = conn.execute(
+                """
+                SELECT uniqueName, name, type, lat, lng, date_sort
+                FROM media
+                WHERE isHidden = 0 AND lat IS NOT NULL
+                ORDER BY date_sort DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset)
             ).fetchall()
 
-        items = []
-        for r in rows:
-            try:
-                meta = json.loads(r["metadata_json"]) if r["metadata_json"] else {}
-                loc  = meta.get("location", {}) or {}
-                lat  = loc.get("latitude")
-                lng  = loc.get("longitude")
-                if lat is None or lng is None:
-                    continue
-                lat = float(lat)
-                lng = float(lng)
-                if lat == 0.0 and lng == 0.0:
-                    continue
-                items.append({
-                    "uniqueName": r["uniqueName"],
-                    "name":       r["name"],
-                    "type":       r["type"],
-                    "lat":        lat,
-                    "lng":        lng,
-                    "date":       r["date_sort"] or "",
-                })
-            except (ValueError, TypeError, json.JSONDecodeError):
-                continue
+        items = [
+            {
+                "uniqueName": r["uniqueName"],
+                "name":       r["name"],
+                "type":       r["type"],
+                "lat":        r["lat"],
+                "lng":        r["lng"],
+                "date":       r["date_sort"] or "",
+            }
+            for r in rows
+        ]
 
         return jsonify({
             "items":     items,
             "total":     total,
-            "gps_count": len(items),
+            "gps_count": gps_count,
+            "offset":    offset,
+            "limit":     limit,
+            "has_more":  (offset + limit) < gps_count,
         })
 
     @app.route("/api/media", methods=["GET"])

@@ -4132,6 +4132,11 @@ document.getElementById('photo-picker').addEventListener('click', function(e) {
 let _leafletMap     = null;
 let _clusterGroup   = null;
 let _mapLoaded      = false;
+let _mapLoadToken   = 0;        // bumped by _resetMap() to cancel any in-flight paginated load
+const _thumbLoaded  = new Set();
+
+const MAP_GPS_PAGE_SIZE = 2000; // items fetched per backend page
+const MAP_MARKER_CHUNK  = 300;  // markers built per animation frame
 
 async function openMapView() {
   if (!_leafletMap) {
@@ -4154,41 +4159,77 @@ async function openMapView() {
   if (_mapLoaded) return;
   _mapLoaded = true;
 
+  const loadToken = ++_mapLoadToken;
+
+  if (_clusterGroup) _leafletMap.removeLayer(_clusterGroup);
+  _clusterGroup = _buildClusterGroup();
+  _leafletMap.addLayer(_clusterGroup);
+  _leafletMap.off('moveend zoomend', _lazyLoadVisibleMarkers);
+  _leafletMap.on('moveend zoomend', _lazyLoadVisibleMarkers);
+  _thumbLoaded.clear();
+
+  const banner  = document.getElementById('map-gps-banner');
+  const bannerT = document.getElementById('map-gps-text');
+  banner.classList.remove('visible');
+
+  let bounds     = null;
+  let fittedOnce = false;
+
   try {
-    const r    = await fetch(`${API_BASE}/api/media/gps`);
-    const data = await r.json();
-    const total = data.total ?? data.total_count ?? 0;
-    _renderMapMarkers(data.items || [], data.gps_count ?? 0, total);
+    let offset = 0;
+    while (true) {
+      const r    = await fetch(`${API_BASE}/api/media/gps?offset=${offset}&limit=${MAP_GPS_PAGE_SIZE}`);
+      const data = await r.json();
+      if (loadToken !== _mapLoadToken) return;   // map was reset while this page was in flight
+
+      if (offset === 0) {
+        const gpsCount = data.gps_count ?? 0;
+        const total    = data.total ?? 0;
+        if (gpsCount === 0) {
+          bannerT.textContent = 'No photos with GPS coordinates found.';
+          banner.classList.add('visible');
+          return;
+        }
+        if (gpsCount < total) {
+          bannerT.textContent =
+            `⊙  ${gpsCount.toLocaleString()} of ${total.toLocaleString()} photos have GPS coordinates`;
+          banner.classList.add('visible');
+        }
+      }
+
+      const items = data.items || [];
+      for (const item of items) {
+        bounds = bounds ? bounds.extend([item.lat, item.lng]) : L.latLngBounds([[item.lat, item.lng]]);
+      }
+
+      // Build + add markers a chunk at a time, yielding to the browser
+      // between chunks — this is what actually prevents the freeze, since
+      // a large library can no longer build thousands of markers in one
+      // uninterrupted synchronous pass.
+      await _addMarkersChunked(items, loadToken);
+      if (loadToken !== _mapLoadToken) return;
+
+      // Fit to what's loaded as soon as the first page renders so the map
+      // feels instant; later pages just add more markers into view.
+      if (!fittedOnce && bounds) {
+        _leafletMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+        fittedOnce = true;
+      }
+
+      if (!data.has_more) break;
+      offset += MAP_GPS_PAGE_SIZE;
+
+      // Yield to the main thread before requesting the next page.
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
   } catch {
-    document.getElementById('map-gps-banner').classList.add('visible');
-    document.getElementById('map-gps-text').textContent = 'Could not load GPS data — is app.py running?';
+    banner.classList.add('visible');
+    bannerT.textContent = 'Could not load GPS data — is app.py running?';
   }
 }
 
-function _renderMapMarkers(items, gpsCount, total) {
-  // GPS coverage banner
-  const banner  = document.getElementById('map-gps-banner');
-  const bannerT = document.getElementById('map-gps-text');
-  if (items.length === 0) {
-    bannerT.textContent = 'No photos with GPS coordinates found.';
-    banner.classList.add('visible');
-    return;
-  }
-  if (gpsCount < total) {
-    bannerT.textContent =
-      `⊙  ${gpsCount.toLocaleString()} of ${total.toLocaleString()} photos have GPS coordinates`;
-    banner.classList.add('visible');
-  } else {
-    banner.classList.remove('visible');
-  }
-
-  if (_clusterGroup) _leafletMap.removeLayer(_clusterGroup);
-
-  // Track which marker icons have had their thumbnail loaded
-  // so we don't re-request on every map move
-  const _thumbLoaded = new Set();
-
-  _clusterGroup = L.markerClusterGroup({
+function _buildClusterGroup() {
+  return L.markerClusterGroup({
     maxClusterRadius(zoom) {
       // Tight clustering at every zoom level — never let markers spread into
       // individual thumbnails automatically; panel handles individual viewing
@@ -4200,6 +4241,7 @@ function _renderMapMarkers(items, gpsCount, total) {
     spiderfyOnMaxZoom:       false,
     showCoverageOnHover:     false,
     zoomToBoundsOnClick:     false,  // we handle all clicks ourselves
+    chunkedLoading:          true,   // markercluster's own async add, as a second safety net
 
     iconCreateFunction(cluster) {
       const children = cluster.getAllChildMarkers();
@@ -4228,10 +4270,7 @@ function _renderMapMarkers(items, gpsCount, total) {
         iconAnchor:[26, 26],
       });
     },
-  });
-
-  // Cluster click → open side panel
-  _clusterGroup.on('clusterclick', e => {
+  }).on('clusterclick', e => {
     e.originalEvent?.stopPropagation();
     const markers      = e.layer.getAllChildMarkers();
     markers.sort((a, b) => (b.options._date || '').localeCompare(a.options._date || ''));
@@ -4239,69 +4278,87 @@ function _renderMapMarkers(items, gpsCount, total) {
     const title        = `${markers.length} Photos`;
     openMapClusterPanel(clusterItems, title);
   });
+}
 
-  // Build individual markers with a placeholder icon — no thumbnail loaded yet.
-  // Thumbnails are loaded lazily only when the marker becomes visible on screen.
-  items.forEach(item => {
-    const thumbUrl = `${API_BASE}/api/thumb/${encodeURIComponent(item.uniqueName)}?size=80&quality=65`;
+// Build Leaflet markers for `items` and add them to the cluster group a
+// chunk at a time via requestAnimationFrame. This is the key fix for the
+// freeze: a full items.forEach() building thousands of markers in a single
+// synchronous pass blocks the main thread for as long as it takes; chunking
+// hands control back to the browser between batches so clicks, scrolling,
+// and rendering keep working throughout the load.
+function _addMarkersChunked(items, loadToken) {
+  return new Promise(resolve => {
+    let i = 0;
+    function step() {
+      if (loadToken !== _mapLoadToken) { resolve(); return; }  // map was reset mid-flight
 
-    // Start with a placeholder (no img src) — just a coloured square
-    const icon = L.divIcon({
-      html:      `<div class="map-thumb-marker map-thumb-placeholder" data-src="${thumbUrl}"><img src="" alt=""></div>`,
-      className: '',
-      iconSize:  [44, 44],
-      iconAnchor:[22, 22],
-    });
+      const end   = Math.min(i + MAP_MARKER_CHUNK, items.length);
+      const batch = [];
+      for (; i < end; i++) {
+        const item     = items[i];
+        const thumbUrl = `${API_BASE}/api/thumb/${encodeURIComponent(item.uniqueName)}?size=80&quality=65`;
 
-    const marker = L.marker([item.lat, item.lng], {
-      icon,
-      title:     item.name,
-      _thumbUrl: thumbUrl,
-      _date:     item.date || '',
-      _item:     item,
-    });
+        // Start with a placeholder (no img src) — just a coloured square
+        const icon = L.divIcon({
+          html:      `<div class="map-thumb-marker map-thumb-placeholder" data-src="${thumbUrl}"><img src="" alt=""></div>`,
+          className: '',
+          iconSize:  [44, 44],
+          iconAnchor:[22, 22],
+        });
 
-    // Single visible marker click → open panel with just this item
-    marker.on('click', e => {
-      e.originalEvent?.stopPropagation();
-      openMapClusterPanel([item], item.name);
-    });
+        const marker = L.marker([item.lat, item.lng], {
+          icon,
+          title:     item.name,
+          _thumbUrl: thumbUrl,
+          _date:     item.date || '',
+          _item:     item,
+        });
 
-    _clusterGroup.addLayer(marker);
-  });
+        // Single visible marker click → open panel with just this item
+        marker.on('click', e => {
+          e.originalEvent?.stopPropagation();
+          openMapClusterPanel([item], item.name);
+        });
 
-  _leafletMap.addLayer(_clusterGroup);
-
-  // Lazy-load thumbnails for individual markers that are currently on screen.
-  // Fires on move/zoom so thumbnails load only when their marker is visible.
-  const _lazyLoadVisibleMarkers = () => {
-    const mapBounds = _leafletMap.getBounds();
-    _clusterGroup.getLayers().forEach(marker => {
-      if (!marker.getLatLng) return;  // skip cluster objects
-      const un = marker.options._item?.uniqueName;
-      if (!un || _thumbLoaded.has(un)) return;
-      if (!mapBounds.contains(marker.getLatLng())) return;
-
-      // Marker is in viewport — swap placeholder src
-      const el = marker.getElement?.();
-      if (!el) return;
-      const wrapper = el.querySelector('.map-thumb-placeholder');
-      const img     = wrapper?.querySelector('img');
-      const src     = wrapper?.dataset?.src;
-      if (img && src && !img.src.includes('api/thumb')) {
-        img.src     = src;
-        img.onload  = () => { wrapper.classList.remove('map-thumb-placeholder'); };
-        img.onerror = () => { wrapper.classList.remove('map-thumb-placeholder'); };
-        _thumbLoaded.add(un);
+        batch.push(marker);
       }
-    });
-  };
 
-  _leafletMap.on('moveend zoomend', _lazyLoadVisibleMarkers);
+      _clusterGroup.addLayers(batch);  // bulk add — one internal redraw per chunk, not per marker
 
-  // Fit to all markers on first load — cap at zoom 12 to keep clusters intact
-  const bounds = L.latLngBounds(items.map(i => [i.lat, i.lng]));
-  _leafletMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+      if (i < items.length) {
+        requestAnimationFrame(step);
+      } else {
+        resolve();
+      }
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+// Lazy-load thumbnails for individual markers that are currently on screen.
+// Fires on move/zoom so thumbnails load only when their marker is visible.
+function _lazyLoadVisibleMarkers() {
+  if (!_leafletMap || !_clusterGroup) return;
+  const mapBounds = _leafletMap.getBounds();
+  _clusterGroup.getLayers().forEach(marker => {
+    if (!marker.getLatLng) return;  // skip cluster objects
+    const un = marker.options._item?.uniqueName;
+    if (!un || _thumbLoaded.has(un)) return;
+    if (!mapBounds.contains(marker.getLatLng())) return;
+
+    // Marker is in viewport — swap placeholder src
+    const el = marker.getElement?.();
+    if (!el) return;
+    const wrapper = el.querySelector('.map-thumb-placeholder');
+    const img     = wrapper?.querySelector('img');
+    const src     = wrapper?.dataset?.src;
+    if (img && src && !img.src.includes('api/thumb')) {
+      img.src     = src;
+      img.onload  = () => { wrapper.classList.remove('map-thumb-placeholder'); };
+      img.onerror = () => { wrapper.classList.remove('map-thumb-placeholder'); };
+      _thumbLoaded.add(un);
+    }
+  });
 }
 
 // ── Cluster side panel ────────────────────────────────────────────────────────
@@ -4437,11 +4494,13 @@ function _openMapItem(item, panelIdx, panelList) {
 // Reset map when media is re-synced so it reloads fresh GPS data
 function _resetMap() {
   _mapLoaded = false;
+  _mapLoadToken++;   // invalidates any paginated load loop / chunk step still in flight
   closeMapClusterPanel();
   if (_clusterGroup) {
     _leafletMap?.removeLayer(_clusterGroup);
     _clusterGroup = null;
   }
+  _thumbLoaded.clear();
 }
 
 // ─────────────────────────────────────────────
