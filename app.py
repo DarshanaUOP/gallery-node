@@ -1158,13 +1158,29 @@ def sync_library(progress=None) -> dict:
         {f.lower() for f in cfg.get("supported_video_formats", [])}
     )
 
+    # ── Phase 1: figure out which sources are reachable right now, and prune
+    # any DB records under them whose file is gone — BEFORE computing the
+    # dedup hash/path snapshot below. This ordering matters: on a rename,
+    # the new filename hashes identically to the old (now-stale) row. If we
+    # pruned *after* scanning, that stale row would still be in the dedup
+    # snapshot, the renamed file would look like a duplicate and get
+    # skipped, and the add would only happen on the *next* sync. Pruning
+    # first means the rename is detected as new content in this same run.
+    reachable_roots = []
+    for source in sources:
+        if not source.get("visibility", True):
+            continue
+        dir_path = source.get("path", "").rstrip("/\\")
+        if os.path.isdir(dir_path):
+            reachable_roots.append(str(Path(dir_path).resolve()))
+
+    removed = _prune_missing_media(reachable_roots, emit=emit) if reachable_roots else 0
+
     existing_hashes, existing_paths = get_existing_hashes_and_paths()
 
-    added          = 0
-    scanned        = 0
-    removed        = 0
-    new_entries    = []
-    reachable_roots = []   # source_roots confirmed on-disk this run — see _prune_missing_media
+    added       = 0
+    scanned     = 0
+    new_entries = []
 
     for source in sources:
         if not source.get("visibility", True):
@@ -1181,7 +1197,6 @@ def sync_library(progress=None) -> dict:
             continue
 
         source_root  = str(Path(dir_path).resolve())
-        reachable_roots.append(source_root)
         follow_links = cfg.get("follow_symlinks", True)
         skip_hidden  = cfg.get("skip_hidden_dirs", True)
         max_depth    = int(cfg.get("max_scan_depth", 0))
@@ -1263,12 +1278,6 @@ def sync_library(progress=None) -> dict:
 
     if new_entries:
         upsert_media_rows(new_entries)
-
-    # ── remove DB entries (+ cached thumbs) for files that vanished from disk ──
-    # Only checked against sources confirmed reachable this run, so a source
-    # that's temporarily offline/unmounted doesn't get its library wiped.
-    if reachable_roots:
-        removed = _prune_missing_media(reachable_roots, emit=emit)
 
     total = get_media_count()
     log.info("Sync complete — scanned %d, added %d, removed %d, total %d", scanned, added, removed, total)
