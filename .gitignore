@@ -22,3 +22,9 @@ Thumbs.db
 
 # Python venv
 venv/
+venv*/
+
+# Build related files and directories
+dist/
+build/
+*.spec
