@@ -2087,6 +2087,10 @@
         <span class="sync-counter-val" id="sync-scanned">0</span>
         <span class="sync-counter-label">Scanned</span>
       </div>
+      <div class="sync-counter">
+        <span class="sync-counter-val" id="sync-removed">0</span>
+        <span class="sync-counter-label">Removed</span>
+      </div>
     </div>
     <div id="sync-file"></div>
     <div id="sync-log"></div>
@@ -3464,6 +3468,7 @@ function openSyncOverlay() {
   document.getElementById('sync-close-btn').classList.remove('visible');
   document.getElementById('sync-added').textContent   = '0';
   document.getElementById('sync-scanned').textContent = '0';
+  document.getElementById('sync-removed').textContent = '0';
   document.getElementById('sync-source').textContent  = '';
   document.getElementById('sync-file').textContent    = '';
   document.getElementById('sync-log').innerHTML       = '';
@@ -3495,10 +3500,12 @@ async function _syncOnComplete(data) {
     _syncAppendLog('Error: ' + data.error);
     toast('Sync failed: ' + data.error, 'error');
   } else {
-    const added = data.result?.added ?? data.added ?? 0;
-    const total = data.result?.total ?? 0;
+    const added   = data.result?.added   ?? data.added   ?? 0;
+    const removed = data.result?.removed ?? 0;
+    const total   = data.result?.total   ?? 0;
+    document.getElementById('sync-removed').textContent = removed;
     document.getElementById('sync-title').textContent = `✓ Sync complete — ${added} new`;
-    toast(`Sync complete — ${added} new, ${total} total`, 'success');
+    toast(`Sync complete — ${added} new, ${removed} removed, ${total} total`, 'success');
   }
   document.getElementById('sync-close-btn').classList.add('visible');
   // Reload gallery with fresh data
