@@ -1216,6 +1216,14 @@ if FLASK_AVAILABLE:
         log.info("configuration.json updated")
         return jsonify({"ok": True})
 
+    @app.route("/api/media/by-id/<unique_name>", methods=["GET"])
+    def api_media_by_id(unique_name):
+        """Return a single full media record by uniqueName. Used by the map panel."""
+        item = get_media_by_unique_name(unique_name)
+        if not item:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify(item)
+
     @app.route("/api/media/count", methods=["GET"])
     def api_media_count():
         """Return total number of indexed media items — single indexed COUNT(*)."""
@@ -1275,6 +1283,54 @@ if FLASK_AVAILABLE:
         Used to populate the location/subfolder dropdown in the photo picker.
         """
         return jsonify(get_distinct_subdirs())
+
+    @app.route("/api/media/gps", methods=["GET"])
+    def api_media_gps():
+        """
+        Return a lightweight list of all non-hidden media that has GPS coordinates.
+        Each item contains only what the map needs — no full metadata blob.
+        Response: {
+          items: [{uniqueName, name, type, lat, lng, date}],
+          total: N,          -- total media in db (including those without GPS)
+          gps_count: N       -- number that have GPS coords
+        }
+        """
+        conn = get_db_conn()
+        with _db_lock:
+            total = conn.execute("SELECT COUNT(*) FROM media WHERE isHidden = 0").fetchone()[0]
+            rows  = conn.execute(
+                "SELECT uniqueName, name, type, date_sort, metadata_json FROM media WHERE isHidden = 0"
+            ).fetchall()
+
+        items = []
+        for r in rows:
+            try:
+                meta = json.loads(r["metadata_json"]) if r["metadata_json"] else {}
+                loc  = meta.get("location", {}) or {}
+                lat  = loc.get("latitude")
+                lng  = loc.get("longitude")
+                if lat is None or lng is None:
+                    continue
+                lat = float(lat)
+                lng = float(lng)
+                if lat == 0.0 and lng == 0.0:
+                    continue
+                items.append({
+                    "uniqueName": r["uniqueName"],
+                    "name":       r["name"],
+                    "type":       r["type"],
+                    "lat":        lat,
+                    "lng":        lng,
+                    "date":       r["date_sort"] or "",
+                })
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+
+        return jsonify({
+            "items":     items,
+            "total":     total,
+            "gps_count": len(items),
+        })
 
     @app.route("/api/media", methods=["GET"])
     def api_media():
