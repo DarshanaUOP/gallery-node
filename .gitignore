@@ -1,13 +1,14 @@
 # Luminary — .gitignore
 
 # All runtime data files (auto-generated on first run)
-data/
+app/src/resources/data/
+!app/src/resources/data/.gitkeep
 
 # Daily log files
-logs/*.log
+app/src/resources/temp/logs/*
 
 # Thumbnail cache — directory tracked, contents ignored
-thumb/*
+app/src/resources/temp/thumb/*
 !thumb/.gitkeep
 
 # Python
