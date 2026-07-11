@@ -1,0 +1,2311 @@
+// ─────────────────────────────────────────────
+//  CONFIG
+// ─────────────────────────────────────────────
+// Backend base URL — change port if you started app.py on a different port
+const API_BASE = `http://${location.hostname}:5000`;
+
+function imgUrl(uniqueName) {
+  return `${API_BASE}/api/image/${encodeURIComponent(uniqueName)}`;
+}
+function thumbUrl(uniqueName) {
+  return `${API_BASE}/api/thumb/${encodeURIComponent(uniqueName)}`;
+}
+
+// ─────────────────────────────────────────────
+//  STATE
+// ─────────────────────────────────────────────
+let db = { media: [], albums: [] };
+let config = {};
+let currentView = 'all';      // 'all' | 'hidden' | album id
+let currentSort = 'date-desc';
+let showHidden = false;
+let ctxTarget = null;          // media item for context menu
+let currentAlbumId = null;
+let filteredMedia = [];
+let renderedCount = 0;
+let lbIndex = 0;
+
+// ─────────────────────────────────────────────
+//  BOOT
+// ─────────────────────────────────────────────
+async function init() {
+  await loadConfig();
+  await loadDB();
+  renderAll();
+  populateAllFilters();   // fetches /api/media/formats, /api/media/cameras, /api/locations
+  setupIntersectionObserver();
+}
+
+async function loadConfig() {
+  try {
+    const r = await fetch(`${API_BASE}/api/config`);
+    config = await r.json();
+    if (config.show_hidden_default) {
+      showHidden = true;
+      document.getElementById('show-hidden-toggle').classList.add('on');
+    }
+    applyConfigToUI(config);
+  } catch {
+    config = { lazy_load_batch: 50, show_hidden_default: false };
+  }
+}
+
+async function loadDB() {
+  try {
+    const sort = _serverSort();
+    const url  = _buildMediaUrl('/api/db', 0).replace(
+      `sort=${sort}`, `sort=${sort}`
+    );
+    // Use /api/db for first load (returns albums too)
+    const p = new URLSearchParams({
+      offset: 0,
+      limit:  config.media_page_size || 500,
+      sort,
+      ..._serverFilters(),
+    });
+    const r    = await fetch(`${API_BASE}/api/db?${p.toString()}`);
+    const data = await r.json();
+    db.media     = data.media  || [];
+    db.albums    = data.albums || [];
+    db._total    = data.total    || db.media.length;
+    db._hasMore  = data.has_more || false;
+    db._offset   = db.media.length;
+    db._sort     = sort;
+    db._fetching = false;
+  } catch {
+    db = { media: [], albums: [], _total: 0, _hasMore: false, _offset: 0,
+           _sort: 'date-desc', _fetching: false };
+  }
+}
+
+// Map client currentSort to server sort param
+function _serverSort() {
+  if (currentSort === 'name')     return 'name';
+  if (currentSort === 'date-asc') return 'date-asc';
+  return 'date-desc';
+}
+
+// Build the current active filter params to send to the server
+function _serverFilters() {
+  const params = {};
+  const fmt = document.getElementById('filter-format')?.value  || '';
+  const cam = document.getElementById('filter-camera')?.value  || '';
+  const loc = document.getElementById('filter-location')?.value || '';
+  const q   = document.getElementById('search-input')?.value   || '';
+
+  if (fmt) params.format   = fmt;
+  if (cam) params.camera   = cam;
+  if (loc) params.location = loc;
+  if (q)   params.q        = q;
+
+  // Album view — let server filter by album membership via JOIN
+  if (currentView !== 'all' && currentView !== 'hidden') {
+    params.album = currentView;
+  }
+
+  // Hidden handling
+  if (currentView === 'hidden') {
+    params.hidden = 'true';
+  } else if (showHidden) {
+    params.hidden = 'include';
+  }
+  // else: default — server excludes hidden
+
+  return params;
+}
+
+// Build a URLSearchParams string from current filters + sort + pagination
+function _buildMediaUrl(base, offset) {
+  const p = new URLSearchParams({
+    offset: offset,
+    limit:  config.media_page_size || 500,
+    sort:   db._sort || _serverSort(),
+    ..._serverFilters(),
+  });
+  return `${API_BASE}${base}?${p.toString()}`;
+}
+
+// Fetch the next page from the server (with same active filters) and append
+// matching items directly to filteredMedia + gallery grid.
+// Called only by the intersection observer on scroll.
+async function _fetchNextPage() {
+  if (!db._hasMore || db._fetching) return;
+  db._fetching = true;
+
+  try {
+    const url  = _buildMediaUrl('/api/media', db._offset);
+    const r    = await fetch(url);
+    if (!r.ok) { db._fetching = false; return; }
+    const data     = await r.json();
+    const newItems = data.items || [];
+
+    db.media.push(...newItems);
+    db._total   = data.total;
+    db._hasMore = data.has_more;
+    db._offset  = db.media.length;
+
+    // Server applies all filters including album membership — render directly
+    if (newItems.length > 0) {
+      const startIdx = filteredMedia.length;
+      filteredMedia.push(...newItems);
+      const grid = document.getElementById('gallery-grid');
+      newItems.forEach((item, i) => grid.appendChild(createCard(item, startIdx + i)));
+      renderedCount = filteredMedia.length;
+      softRefresh();
+    }
+  } catch { /* network error — observer retries on next scroll */ }
+
+  db._fetching = false;
+}
+
+// ─────────────────────────────────────────────
+//  RENDER
+// ─────────────────────────────────────────────
+function renderAll() {
+  renderAlbumNav();
+  applyFilters();
+  updateStats();
+  updateFooter();
+}
+
+// Soft refresh: update sidebar/stats WITHOUT resetting the grid or scroll position.
+function softRefresh() {
+  renderAlbumNav();
+  updateStats();
+  updateFooter();
+  // Update visible cards in-place (hidden badge, etc.) without rebuilding the grid
+  document.querySelectorAll('.media-item').forEach(card => {
+    const item = db.media.find(m => m.uniqueName === card.dataset.unique);
+    if (!item) return;
+    const badge = card.querySelector('.hidden-badge');
+    if (item.isHidden && !badge) {
+      const b = document.createElement('span');
+      b.className = 'hidden-badge';
+      b.textContent = 'hidden';
+      card.appendChild(b);
+    } else if (!item.isHidden && badge) {
+      badge.remove();
+    }
+  });
+}
+
+function renderAlbumNav() {
+  const nav = document.getElementById('album-nav');
+  nav.innerHTML = '';
+  if (db.albums.length === 0) {
+    nav.innerHTML = '<div style="padding:8px 24px;font-size:11px;color:var(--text-muted)">No albums yet</div>';
+    return;
+  }
+  db.albums.forEach(album => {
+    const d = document.createElement('div');
+    d.className = 'album-nav-item' + (currentAlbumId === album.id ? ' active' : '');
+    d.innerHTML = `
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(album.name)}</span>
+      <span class="album-rename-icon" title="Rename" onclick="event.stopPropagation();promptRenameAlbum('${album.id}')">✎</span>
+      <span class="album-count">${album.media.length}</span>`;
+    d.onclick = () => setView(album.id, d);
+    nav.appendChild(d);
+  });
+}
+
+function applyFilters() {
+  // Reset pagination state and reload from server with current filters applied.
+  // The server handles format/camera/location/search/hidden — we only do
+  // album-membership filtering client-side (albums are small, already in memory).
+  db.media     = [];
+  db._offset   = 0;
+  db._hasMore  = false;
+  db._fetching = false;
+  db._sort     = _serverSort();
+
+  filteredMedia = [];
+  renderedCount = 0;
+  document.getElementById('gallery-grid').innerHTML = '';
+  document.getElementById('empty-state').style.display = 'none';
+
+  const p = new URLSearchParams({
+    offset: 0,
+    limit:  config.media_page_size || 500,
+    sort:   db._sort,
+    ..._serverFilters(),
+  });
+
+  fetch(`${API_BASE}/api/media?${p.toString()}`)
+    .then(r => r.json())
+    .then(data => {
+      const newItems = data.items || [];
+      db.media.push(...newItems);
+      db._total   = data.total;
+      db._hasMore = data.has_more;
+      db._offset  = db.media.length;
+
+      // Server applies all filters (including album JOIN) — render directly
+      filteredMedia = newItems;
+      renderedCount = 0;
+      renderBatch();
+      updateStats();
+      updateFooter();
+      document.getElementById('empty-state').style.display =
+        (newItems.length === 0 && !db._hasMore) ? 'flex' : 'none';
+    })
+    .catch(() => {
+      document.getElementById('empty-state').style.display = 'flex';
+    });
+}
+
+
+function renderBatch() {
+  const BATCH = config.lazy_load_batch || 50;
+  const grid = document.getElementById('gallery-grid');
+  const end = Math.min(renderedCount + BATCH, filteredMedia.length);
+  for (let i = renderedCount; i < end; i++) {
+    grid.appendChild(createCard(filteredMedia[i], i));
+  }
+  renderedCount = end;
+}
+
+function createCard(item, idx) {
+  const div = document.createElement('div');
+  div.className = 'media-item';
+  div.dataset.unique = item.uniqueName;
+  div.dataset.idx = idx;
+
+  const isVideo = item.type === 'video';
+  const src = thumbUrl(item.uniqueName);
+  const imgHtml = `
+    <img src="${src}" loading="lazy"
+         onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"
+         alt="${escHtml(item.name)}">
+    <div class="media-placeholder" style="display:none">
+      <span class="ph-icon">${isVideo ? '▶' : '⬡'}</span>
+      <span>${escHtml(item.name)}</span>
+    </div>
+    ${isVideo ? `
+      <div class="play-btn-overlay">
+        <div class="play-btn-circle"><div class="play-btn-triangle"></div></div>
+      </div>
+      ${item.metadata?.video?.duration_fmt
+        ? `<div class="video-duration">${escHtml(item.metadata.video.duration_fmt)}</div>`
+        : ''}
+    ` : ''}`;
+
+  const date = (item.metadata?.date?.modified || item.metadata?.date?.created)
+    ? new Date(item.metadata.date.modified || item.metadata.date.created).toLocaleDateString('en-GB', {day:'numeric',month:'short',year:'numeric'})
+    : '—';
+
+  const subfolder = item.metadata?.file?.subfolder;
+
+  div.innerHTML = `
+    ${imgHtml}
+    <div class="item-overlay"></div>
+    <div class="item-info">
+      <div class="item-name">${escHtml(item.name)}</div>
+      ${subfolder ? `<div class="item-path">⊂ ${escHtml(subfolder)}</div>` : ''}
+      <div class="item-date">${date}</div>
+    </div>
+    ${item.isHidden ? '<span class="hidden-badge">hidden</span>' : ''}
+    <div class="item-menu-btn" onclick="openCtxMenu(event, '${item.uniqueName}')">⋮</div>
+  `;
+
+  div.addEventListener('click', (e) => {
+    if (e.target.classList.contains('item-menu-btn')) return;
+    openLightbox(idx);
+  });
+
+  return div;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─────────────────────────────────────────────
+//  STATS & FOOTER
+// ─────────────────────────────────────────────
+function updateStats() {
+  document.getElementById('stat-visible').textContent = db.media.filter(m => !m.isHidden).length;
+  document.getElementById('stat-hidden').textContent = db.media.filter(m => m.isHidden).length;
+  document.getElementById('stat-albums').textContent = db.albums.length;
+}
+
+function updateFooter() {
+  const total = db._total || db.media.length;
+  const loaded = db.media.length;
+  const suffix = db._hasMore ? ` (${loaded} loaded)` : '';
+  document.getElementById('footer-count').textContent = `${total} photos indexed${suffix}`;
+  document.getElementById('footer-albums').textContent = `${db.albums.length} albums`;
+}
+
+// ─────────────────────────────────────────────
+//  FILTER DROPDOWN POPULATION (server-driven)
+// ─────────────────────────────────────────────
+
+// Called once after boot — fetches all three in parallel from the server.
+// Each dropdown is populated from the full db.json, not just the loaded page.
+async function populateAllFilters() {
+  await Promise.all([
+    populateFormatFilter(),
+    populateCameraFilter(),
+    populateLocationFilter(),
+  ]);
+}
+
+async function populateFormatFilter() {
+  try {
+    const r = await fetch(`${API_BASE}/api/media/formats`);
+    if (!r.ok) return;
+    const formats = await r.json();   // already sorted, normalised array of strings
+    const sel     = document.getElementById('filter-format');
+    const prev    = sel.value;
+    sel.innerHTML = '<option value="">All Formats</option>';
+    formats.forEach(f => {
+      const o = document.createElement('option');
+      o.value = f; o.textContent = f;
+      sel.appendChild(o);
+    });
+    if (prev && formats.includes(prev)) sel.value = prev;
+  } catch { /* backend not running — leave as-is */ }
+}
+
+async function populateCameraFilter() {
+  try {
+    const r = await fetch(`${API_BASE}/api/media/cameras`);
+    if (!r.ok) return;
+    const cameras = await r.json();   // sorted array of "Make Model" strings
+    const sel     = document.getElementById('filter-camera');
+    const prev    = sel.value;
+    sel.innerHTML = '<option value="">All Cameras</option>';
+    cameras.forEach(c => {
+      const o = document.createElement('option');
+      o.value = c; o.textContent = c;
+      sel.appendChild(o);
+    });
+    if (prev && cameras.includes(prev)) sel.value = prev;
+  } catch { /* backend not running */ }
+}
+
+async function populateLocationFilter() {
+  try {
+    const r = await fetch(`${API_BASE}/api/locations`);
+    if (!r.ok) return;
+    const locations = await r.json();  // [{name, path, visibility, root, label}]
+    const sel       = document.getElementById('filter-location');
+    const prev      = sel.value;
+    sel.innerHTML   = '<option value="">All Locations</option>';
+    locations.forEach(({ root, label }) => {
+      const o = document.createElement('option');
+      o.value       = root;
+      o.textContent = label;
+      o.title       = root;
+      sel.appendChild(o);
+    });
+    const roots = locations.map(l => l.root);
+    if (prev && roots.includes(prev)) sel.value = prev;
+  } catch { /* backend not running */ }
+}
+
+// Picker location dropdown (used inside Add Photos modal)
+async function populatePickerLocationFilter() {
+  const sel = document.getElementById('photo-picker-location');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">All Locations</option>';
+
+  try {
+    // Fetch full directory tree (source roots + all subdirectories with files)
+    const r = await fetch(`${API_BASE}/api/media/subdirs`);
+    if (!r.ok) return;
+    const dirs = await r.json(); // [{path, source_root, label, depth}]
+
+    if (dirs.length === 0) return;
+
+    // Group by source_root to render as optgroup sections
+    const groups = {};
+    const rootLabels = {};
+
+    // Also fetch configured location names for optgroup labels
+    try {
+      const lr = await fetch(`${API_BASE}/api/locations`);
+      if (lr.ok) {
+        const locs = await lr.json();
+        locs.forEach(l => { rootLabels[l.root] = l.label; });
+      }
+    } catch { /* fall back to path segment */ }
+
+    dirs.forEach(d => {
+      const g = d.source_root || d.path;
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(d);
+    });
+
+    Object.entries(groups).forEach(([srcRoot, items]) => {
+      const groupLabel = rootLabels[srcRoot] || srcRoot.split('/').filter(Boolean).pop() || srcRoot;
+      const group = document.createElement('optgroup');
+      group.label = groupLabel;
+
+      items.forEach(d => {
+        const opt   = document.createElement('option');
+        opt.value   = d.path;
+        opt.title   = d.path;
+        // Indent sub-directory labels by depth
+        const indent = '\u00A0\u00A0'.repeat(d.depth);   // non-breaking spaces
+        opt.textContent = indent + (d.depth === 0 ? '⊞ ' : '↳ ') + d.label;
+        group.appendChild(opt);
+      });
+
+      sel.appendChild(group);
+    });
+  } catch { /* backend not running */ }
+}
+
+// Show/hide "Add All" button depending on whether a location is selected
+function _pickerLocationChanged() {
+  const loc = document.getElementById('photo-picker-location').value;
+  const btn = document.getElementById('picker-add-all-btn');
+  if (btn) btn.style.display = loc ? 'inline-flex' : 'none';
+  filterPickerGrid();
+}
+
+// Add ALL indexed media from the selected location directly to the album,
+// fetching every page from the server — no pagination cap.
+async function addAllFromLocation() {
+  const loc = document.getElementById('photo-picker-location').value;
+  if (!loc || !currentAlbumId) return;
+
+  const album = db.albums.find(a => a.id === currentAlbumId);
+  if (!album) return;
+
+  const btn  = document.getElementById('picker-add-all-btn');
+  btn.disabled    = true;
+  btn.textContent = 'Loading…';
+
+  try {
+    const PAGE      = 500;
+    let offset      = 0;
+    let fetched     = 0;
+    const alreadyIn = new Set(album.media);
+    const toAdd     = [];
+
+    // Fetch all pages from server
+    while (true) {
+      const params = new URLSearchParams({
+        location: loc, limit: PAGE, offset, sort: 'date-desc',
+      });
+      const r = await fetch(`${API_BASE}/api/media?${params.toString()}`);
+      if (!r.ok) throw new Error('Server error ' + r.status);
+      const data  = await r.json();
+      const items = data.items || [];
+      if (items.length === 0) break;
+
+      items.forEach(m => {
+        if (!alreadyIn.has(m.uniqueName)) {
+          alreadyIn.add(m.uniqueName);
+          toAdd.push(m.uniqueName);
+        }
+      });
+
+      fetched += items.length;
+      offset  += items.length;
+      btn.textContent = `Loading… ${fetched}`;
+
+      if (!data.has_more || items.length < PAGE) break;
+    }
+
+    if (toAdd.length === 0) {
+      closePhotoPicker();
+      const dirName = loc.split('/').filter(Boolean).pop() || loc;
+      toast(`No new photos to add from "${dirName}"`, 'info');
+      return;
+    }
+
+    btn.textContent = `Adding ${toAdd.length}…`;
+
+    // Persist directly via bulk endpoint — bypasses saveDB() / save_albums() path
+    const r2 = await fetch(`${API_BASE}/api/album/add-bulk`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ albumId: currentAlbumId, uniqueNames: toAdd }),
+    });
+    if (!r2.ok) throw new Error('Bulk add failed: ' + r2.status);
+    const result = await r2.json();
+
+    // Update in-memory album so the UI reflects the change
+    toAdd.forEach(un => { if (!album.media.includes(un)) album.media.push(un); });
+
+    // Reset button before closing
+    btn.disabled    = false;
+    btn.textContent = '⊕ Add All';
+
+    closePhotoPicker();
+
+    // Re-fetch and render the album gallery from the server
+    applyFilters();
+
+    const dirName = loc.split('/').filter(Boolean).pop() || loc;
+    toast(`Added ${result.added} photo${result.added !== 1 ? 's' : ''} from "${dirName}" to "${album.name}"`, 'success');
+
+  } catch (err) {
+    toast('Failed: ' + err.message, 'error');
+    btn.disabled    = false;
+    btn.textContent = '⊕ Add All';
+  }
+}
+
+// ─────────────────────────────────────────────
+//  VIEW SWITCHING
+// ─────────────────────────────────────────────
+function setView(view, el) {
+  currentView    = view;
+  currentAlbumId = (view !== 'all' && view !== 'hidden' && view !== 'map') ? view : null;
+
+  document.querySelectorAll('.nav-item, .album-nav-item').forEach(n => n.classList.remove('active'));
+  if (el) el.classList.add('active');
+
+  const albumHeader = document.getElementById('album-header');
+  const galleryGrid = document.getElementById('gallery-grid');
+  const loadMore    = document.getElementById('load-more-trigger');
+  const filterbar   = document.getElementById('filterbar');
+  const statsBar    = document.getElementById('stats-bar');
+  const mapView     = document.getElementById('map-view');
+
+  if (view === 'map') {
+    // Show map, hide gallery elements
+    albumHeader.style.display = 'none';
+    galleryGrid.style.display = 'none';
+    loadMore.style.display    = 'none';
+    filterbar.style.display   = 'none';
+    statsBar.style.display    = 'none';
+    mapView.classList.add('active');
+    document.getElementById('topbar-title').textContent = 'Map';
+    openMapView();
+    return;
+  }
+
+  // Restore gallery elements when leaving map
+  galleryGrid.style.display = '';
+  loadMore.style.display    = '';
+  filterbar.style.display   = '';
+  statsBar.style.display    = '';
+  mapView.classList.remove('active');
+
+  if (currentAlbumId) {
+    const album = db.albums.find(a => a.id === currentAlbumId);
+    if (album) {
+      albumHeader.style.display = 'flex';
+      document.getElementById('album-header-name').textContent = album.name;
+      document.getElementById('album-header-count').textContent = `${album.media.length} items`;
+      document.getElementById('topbar-title').textContent = album.name;
+    }
+  } else {
+    albumHeader.style.display = 'none';
+    document.getElementById('topbar-title').textContent = view === 'hidden' ? 'Hidden Media' : 'All Photos';
+  }
+
+  applyFilters();
+}
+
+function setSort(sort, el) {
+  currentSort = sort;
+  document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+  if (el) el.classList.add('active');
+  applyFilters();
+}
+
+function toggleHidden(el) {
+  el.classList.toggle('on');
+  showHidden = el.classList.contains('on');
+  applyFilters();
+}
+
+// ─────────────────────────────────────────────
+//  INFINITE SCROLL
+// ─────────────────────────────────────────────
+function setupIntersectionObserver() {
+  const trigger = document.getElementById('load-more-trigger');
+  const obs = new IntersectionObserver(entries => {
+    if (!entries[0].isIntersecting) return;
+    if (renderedCount < filteredMedia.length) {
+      // Still have locally filtered items to render
+      renderBatch();
+    } else if (db._hasMore && !db._fetching) {
+      // All local items rendered — fetch next page from server
+      _fetchNextPage();
+    }
+  }, { rootMargin: '400px' });
+  obs.observe(trigger);
+}
+
+// ─────────────────────────────────────────────
+//  SCROLL DATE INDICATOR
+// ─────────────────────────────────────────────
+(function () {
+  const pill      = document.getElementById('scroll-date-pill');
+  const pillText  = document.getElementById('scroll-date-text');
+  let hideTimer   = null;
+
+  function fmtDate(iso) {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (isNaN(d)) return null;
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  function getVisibleDateRange() {
+    const cards = document.querySelectorAll('#gallery-grid .media-item');
+    if (!cards.length) return null;
+
+    const vpTop    = 0;
+    const vpBottom = window.innerHeight;
+    const dates    = [];
+
+    cards.forEach(card => {
+      const rect = card.getBoundingClientRect();
+      // Card is at least partially in the viewport
+      if (rect.bottom > vpTop && rect.top < vpBottom) {
+        const un   = card.dataset.unique;
+        const item = filteredMedia.find(m => m.uniqueName === un);
+        const iso  = item?.metadata?.date?.modified || item?.metadata?.date?.created;
+        const d    = iso ? new Date(iso) : null;
+        if (d && !isNaN(d)) dates.push(d);
+      }
+    });
+
+    if (!dates.length) return null;
+
+    const oldest  = new Date(Math.min(...dates));
+    const newest  = new Date(Math.max(...dates));
+
+    const fmtOld  = fmtDate(oldest.toISOString());
+    const fmtNew  = fmtDate(newest.toISOString());
+
+    return fmtOld === fmtNew ? fmtOld : `${fmtOld} — ${fmtNew}`;
+  }
+
+  function onScroll() {
+    // Don't show pill if lightbox or any modal is open
+    if (document.getElementById('lightbox').classList.contains('open')) return;
+    if (document.querySelector('.modal-overlay.open, #photo-picker.open')) return;
+
+    const range = getVisibleDateRange();
+    if (!range) return;
+
+    pillText.textContent = range;
+    pill.classList.add('visible');
+
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => pill.classList.remove('visible'), 1800);
+  }
+
+  // Attach to the scrollable container (#main) and window
+  document.getElementById('main').addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('scroll', onScroll, { passive: true });
+})();
+
+// ─────────────────────────────────────────────
+//  CONTEXT MENU
+// ─────────────────────────────────────────────
+function openCtxMenu(e, uniqueName) {
+  e.stopPropagation();
+  ctxTarget = db.media.find(m => m.uniqueName === uniqueName);
+  if (!ctxTarget) return;
+
+  const menu = document.getElementById('ctx-menu');
+  const lbl = document.getElementById('ctx-hide-label');
+  const ico = document.getElementById('ctx-hide-label-icon');
+  if (ctxTarget.isHidden) { lbl.textContent = 'Unhide Image'; ico.textContent = '◉'; }
+  else { lbl.textContent = 'Hide Image'; ico.textContent = '◌'; }
+
+  menu.style.display = 'block';
+  let x = e.clientX, y = e.clientY;
+  if (x + 180 > window.innerWidth) x -= 180;
+  if (y + 220 > window.innerHeight) y -= 220;
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+}
+
+document.addEventListener('click', () => {
+  document.getElementById('ctx-menu').style.display = 'none';
+});
+
+function ctxAddToAlbum() {
+  if (!ctxTarget) return;
+  openAddToAlbum(ctxTarget.uniqueName);
+}
+
+function ctxRemoveFromAlbum() {
+  if (!ctxTarget || !currentAlbumId) { toast('Navigate into an album first', 'info'); return; }
+  const album = db.albums.find(a => a.id === currentAlbumId);
+  if (!album) return;
+  const idx = album.media.indexOf(ctxTarget.uniqueName);
+  if (idx > -1) { album.media.splice(idx, 1); saveDB(); renderAll(); toast('Removed from album', 'success'); }
+}
+
+function ctxToggleHide() {
+  if (!ctxTarget) return;
+  ctxTarget.isHidden = !ctxTarget.isHidden;
+
+  // Persist via dedicated endpoint — never touches rest of the media table
+  fetch(`${API_BASE}/api/media/hide`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uniqueName: ctxTarget.uniqueName, hidden: ctxTarget.isHidden })
+  }).catch(() => {});
+
+  // Remove card from grid if hiding and show-hidden is off
+  if (!showHidden && ctxTarget.isHidden) {
+    const card = document.querySelector(`.media-item[data-unique="${ctxTarget.uniqueName}"]`);
+    if (card) card.remove();
+  }
+  softRefresh();
+  toast(ctxTarget.isHidden ? 'Image hidden' : 'Image unhidden', 'info');
+}
+
+function ctxViewMeta() {
+  if (!ctxTarget) return;
+  openMetaModal(ctxTarget);
+}
+
+// ─────────────────────────────────────────────
+//  LIGHTBOX
+// ─────────────────────────────────────────────
+function openLightbox(idx) {
+  lbIndex = idx;
+  renderLightbox();
+  document.getElementById('lightbox').classList.add('open');
+}
+
+function renderLightbox() {
+  const item = filteredMedia[lbIndex];
+  if (!item) return;
+  const lb   = document.getElementById('lb-content');
+  const name = escHtml(item.name);
+
+  // Reset zoom state on every navigation
+  lbZoomReset(true);
+  document.getElementById('lb-zoom-bar').classList.remove('visible');
+
+  if (item.type === 'video') {
+    const prev = lb.querySelector('video');
+    if (prev) { prev.pause(); prev.src = ''; prev.load(); }
+    const videoSrc  = `${API_BASE}/api/video/${encodeURIComponent(item.uniqueName)}`;
+    const videoMime = _videoMime(item.name);
+    const ext       = item.name.split('.').pop().toLowerCase();
+    const unsupported = ['avi','mkv','wmv','flv','ts','mts'];
+    const needsWarning = unsupported.includes(ext);
+    lb.innerHTML = `
+      <div id="lb-video-wrap">
+        <video id="lb-video" controls
+               preload="${config.video_preload || 'metadata'}"
+               ${config.video_autoplay ? 'autoplay muted' : ''}
+               playsinline
+               onerror="document.getElementById('lb-video-err').style.display='flex'">
+          <source src="${videoSrc}" type="${videoMime}">
+        </video>
+        <div id="lb-video-err" style="display:none;flex-direction:column;align-items:center;
+             gap:8px;color:var(--text-muted);font-size:12px;text-align:center;padding:20px">
+          <span style="font-size:32px">⚠</span>
+          <span>This browser cannot play <strong style="color:var(--text)">.${ext.toUpperCase()}</strong> files.</span>
+          <span>Convert to MP4/WebM, or open directly in a media player.</span>
+          <a href="${videoSrc}" download="${escHtml(item.name)}"
+             style="color:var(--accent);text-decoration:none;border:1px solid var(--accent);
+                    padding:6px 16px;border-radius:4px;margin-top:4px">⬇ Download file</a>
+        </div>
+        ${needsWarning ? `<div style="font-size:11px;color:var(--danger);opacity:0.8;text-align:center">
+          ⚠ .${ext.toUpperCase()} may not play in browsers — MP4 or WebM recommended</div>` : ''}
+      </div>`;
+  } else {
+    lb.innerHTML = `
+      <img id="lb-thumb" src="${thumbUrl(item.uniqueName)}" alt="${name}"
+           style="filter:blur(12px);transform:scale(1.03);transition:filter 0.35s,transform 0.35s">
+      <img id="lb-full"  src="${imgUrl(item.uniqueName)}"  alt="${name}"
+           style="opacity:0"
+           onload="
+             this.style.opacity='1';
+             this.style.transition='opacity 0.35s';
+             var t=document.getElementById('lb-thumb');
+             if(t){t.style.filter='none';t.style.transform='scale(1)';}
+             document.getElementById('lb-zoom-bar').classList.add('visible');
+             lbInitZoom();
+           "
+           onerror="
+             this.remove();
+             var t=document.getElementById('lb-thumb');
+             if(t){t.style.filter='none';t.style.transform='scale(1)';}
+           ">`;
+  }
+
+  document.getElementById('lb-filename').textContent = item.name;
+  document.getElementById('lb-nav-counter').textContent =
+    `${lbIndex + 1} / ${filteredMedia.length}`;
+
+  // Build rich details panel
+  _renderLbDetails(item);
+}
+
+function _renderLbDetails(item) {
+  const m   = item.metadata || {};
+  const det = document.getElementById('lb-details');
+
+  function row(key, val) {
+    if (val === null || val === undefined || val === '') return '';
+    return `<div class="lb-detail-row">
+      <span class="lb-detail-key">${key}</span>
+      <span class="lb-detail-val">${escHtml(String(val))}</span>
+    </div>`;
+  }
+  function section(title, rows) {
+    const content = rows.join('');
+    if (!content) return '';
+    return `<div class="lb-detail-section">
+      <div class="lb-detail-section-title">${title}</div>
+      ${content}
+    </div>`;
+  }
+
+  const fileSize = m.file?.size
+    ? (m.file.size >= 1048576
+        ? (m.file.size / 1048576).toFixed(1) + ' MB'
+        : (m.file.size / 1024).toFixed(0) + ' KB')
+    : null;
+
+  const fmtDate = iso => {
+    if (!iso) return null;
+    try { return new Date(iso).toLocaleString(); } catch { return iso; }
+  };
+
+  let html = '';
+
+  if (item.type === 'video') {
+    html += section('Video', [
+      row('Resolution', m.video?.resolution),
+      row('Codec',      m.video?.codec),
+      row('Duration',   m.video?.duration_fmt),
+      row('FPS',        m.video?.fps),
+    ]);
+    html += section('File', [
+      row('Format',   m.file?.format),
+      row('Size',     fileSize),
+      row('Path',     m.file?.path),
+      row('Subfolder',m.file?.subfolder || null),
+    ]);
+    html += section('Date', [
+      row('Created',  fmtDate(m.date?.created)),
+      row('Modified', fmtDate(m.date?.modified)),
+    ]);
+  } else {
+    html += section('Image', [
+      row('Resolution',   m.image?.resolution),
+      row('Color Space',  m.image?.color_space),
+      row('Orientation',  m.image?.orientation),
+    ]);
+    html += section('Camera', [
+      row('Make',         m.camera?.make),
+      row('Model',        m.camera?.model),
+      row('Lens',         m.camera?.lens),
+      row('Aperture',     m.camera?.aperture),
+      row('Shutter',      m.camera?.shutter_speed),
+      row('ISO',          m.camera?.iso),
+      row('Focal Length', m.camera?.focal_length),
+    ]);
+    html += section('File', [
+      row('Format',   m.file?.format),
+      row('Size',     fileSize),
+      row('Path',     m.file?.path),
+      row('Subfolder',m.file?.subfolder || null),
+    ]);
+    html += section('Date', [
+      row('Created',  fmtDate(m.date?.created)),
+      row('Modified', fmtDate(m.date?.modified)),
+    ]);
+    if (m.location?.latitude) {
+      html += section('Location', [
+        row('Latitude',  m.location?.latitude),
+        row('Longitude', m.location?.longitude),
+        row('City',      m.location?.city),
+        row('Country',   m.location?.country),
+      ]);
+    }
+    if (m.software?.editor) {
+      html += section('Software', [
+        row('Editor',  m.software?.editor),
+        row('Version', m.software?.version),
+      ]);
+    }
+  }
+
+  det.innerHTML = html || '<p style="font-size:11px;color:var(--text-muted)">No metadata available.</p>';
+}
+
+// Guess MIME type for video src attribute
+function _videoMime(filename) {
+  const ext = filename.split('.').pop().toLowerCase();
+  const map = {
+    mp4:  'video/mp4',
+    m4v:  'video/mp4',
+    mov:  'video/mp4',       // MOV from iPhone/Mac is H.264 in MP4 container — Chrome plays it
+    webm: 'video/webm',
+    '3gp':'video/3gpp',
+    avi:  'video/x-msvideo',
+    mkv:  'video/x-matroska',
+    wmv:  'video/x-ms-wmv',
+    flv:  'video/x-flv',
+    ts:   'video/mp2t',
+    mts:  'video/mp2t',
+  };
+  return map[ext] || 'video/mp4';
+}
+
+// ─────────────────────────────────────────────
+//  LIGHTBOX ZOOM & PAN
+// ─────────────────────────────────────────────
+let _lbScale   = 1;
+let _lbPanX    = 0;
+let _lbPanY    = 0;
+const LB_MIN   = 0.25;
+const LB_MAX   = 10;
+
+function _lbImg() { return document.getElementById('lb-full'); }
+function _lbBox() { return document.getElementById('lb-content'); }
+
+function _lbApply(animate) {
+  const img = _lbImg();
+  if (!img) return;
+  img.style.transition = animate ? 'transform 0.2s ease' : 'none';
+  img.style.transform  = `translate(${_lbPanX}px, ${_lbPanY}px) scale(${_lbScale})`;
+  // Clamp pan when zoomed out back toward fit
+  if (_lbScale <= 1) { _lbPanX = 0; _lbPanY = 0; img.style.transform = `scale(${_lbScale})`; }
+  // Update zoom label
+  document.getElementById('lb-zoom-level').textContent = Math.round(_lbScale * 100) + '%';
+  // Update cursor and zoomed class
+  _lbBox().classList.toggle('zoomed', _lbScale > 1);
+}
+
+function lbInitZoom() {
+  _lbScale = 1; _lbPanX = 0; _lbPanY = 0;
+  _lbApply(false);
+  _lbAttachEvents();
+}
+
+function lbZoom(delta, cx, cy) {
+  const prev = _lbScale;
+  _lbScale   = Math.min(LB_MAX, Math.max(LB_MIN, _lbScale + delta * _lbScale));
+  // Zoom toward cursor position if provided
+  if (cx !== undefined && prev !== _lbScale) {
+    const ratio = _lbScale / prev;
+    _lbPanX = cx + (_lbPanX - cx) * ratio;
+    _lbPanY = cy + (_lbPanY - cy) * ratio;
+  }
+  _lbApply(true);
+}
+
+function lbZoomReset(silent) {
+  _lbScale = 1; _lbPanX = 0; _lbPanY = 0;
+  if (!silent) _lbApply(true);
+  document.getElementById('lb-zoom-level').textContent = '100%';
+}
+
+function lbZoom100() {
+  const img = _lbImg();
+  if (!img) return;
+  // Compute natural size ratio vs displayed size
+  const rect = img.getBoundingClientRect();
+  const ratio = img.naturalWidth / (rect.width / _lbScale);
+  _lbPanX = 0; _lbPanY = 0;
+  _lbScale = Math.min(LB_MAX, Math.max(LB_MIN, ratio));
+  _lbApply(true);
+}
+
+// ── Attach mouse wheel + drag pan events ─────────────────────────────────────
+function _lbAttachEvents() {
+  const box = _lbBox();
+
+  // Mouse wheel zoom
+  box._lbWheel = (e) => {
+    e.preventDefault();
+    const rect  = box.getBoundingClientRect();
+    const cx    = e.clientX - rect.left - rect.width  / 2;
+    const cy    = e.clientY - rect.top  - rect.height / 2;
+    const delta = e.deltaY < 0 ? 0.15 : -0.15;
+    lbZoom(delta, cx, cy);
+  };
+  box.addEventListener('wheel', box._lbWheel, { passive: false });
+
+  // Drag pan
+  let dragging = false, startX = 0, startY = 0, startPX = 0, startPY = 0;
+
+  box._lbPointerDown = (e) => {
+    if (_lbScale <= 1) return;
+    if (e.button !== undefined && e.button !== 0) return;
+    dragging = true;
+    startX = e.clientX; startY = e.clientY;
+    startPX = _lbPanX;  startPY = _lbPanY;
+    box.classList.add('panning');
+    e.preventDefault();
+  };
+  box._lbPointerMove = (e) => {
+    if (!dragging) return;
+    _lbPanX = startPX + (e.clientX - startX);
+    _lbPanY = startPY + (e.clientY - startY);
+    _lbApply(false);
+  };
+  box._lbPointerUp = () => {
+    dragging = false;
+    box.classList.remove('panning');
+  };
+
+  box.addEventListener('mousedown',  box._lbPointerDown);
+  window.addEventListener('mousemove', box._lbPointerMove);
+  window.addEventListener('mouseup',   box._lbPointerUp);
+
+  // Touch pinch-to-zoom
+  let lastDist = 0, lastMidX = 0, lastMidY = 0;
+  box._lbTouchStart = (e) => {
+    if (e.touches.length === 2) {
+      const [a, b] = e.touches;
+      lastDist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      const rect = box.getBoundingClientRect();
+      lastMidX = (a.clientX + b.clientX) / 2 - rect.left - rect.width  / 2;
+      lastMidY = (a.clientY + b.clientY) / 2 - rect.top  - rect.height / 2;
+    }
+  };
+  box._lbTouchMove = (e) => {
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const [a, b] = e.touches;
+      const dist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      if (lastDist > 0) {
+        const factor = dist / lastDist - 1;
+        lbZoom(factor, lastMidX, lastMidY);
+      }
+      lastDist = dist;
+    }
+  };
+  box.addEventListener('touchstart', box._lbTouchStart, { passive: true });
+  box.addEventListener('touchmove',  box._lbTouchMove,  { passive: false });
+
+  // Double-click: toggle fit ↔ 2×
+  box._lbDblClick = (e) => {
+    if (_lbScale > 1) {
+      lbZoomReset();
+    } else {
+      const rect = box.getBoundingClientRect();
+      lbZoom(1, e.clientX - rect.left - rect.width / 2, e.clientY - rect.top - rect.height / 2);
+    }
+  };
+  box.addEventListener('dblclick', box._lbDblClick);
+}
+
+// Clean up zoom events when lightbox closes or navigates
+function _lbDetachEvents() {
+  const box = _lbBox();
+  if (!box) return;
+  if (box._lbWheel)       { box.removeEventListener('wheel', box._lbWheel); }
+  if (box._lbPointerDown) { box.removeEventListener('mousedown', box._lbPointerDown); }
+  if (box._lbPointerMove) { window.removeEventListener('mousemove', box._lbPointerMove); }
+  if (box._lbPointerUp)   { window.removeEventListener('mouseup',   box._lbPointerUp); }
+  if (box._lbTouchStart)  { box.removeEventListener('touchstart', box._lbTouchStart); }
+  if (box._lbTouchMove)   { box.removeEventListener('touchmove',  box._lbTouchMove); }
+  if (box._lbDblClick)    { box.removeEventListener('dblclick',   box._lbDblClick); }
+}
+
+function closeLightbox() {
+  _lbDetachEvents();
+  const vid = document.getElementById('lb-content')?.querySelector('video');
+  if (vid) { vid.pause(); vid.src = ''; vid.load(); }
+  document.getElementById('lightbox').classList.remove('open');
+}
+
+function lbNav(dir) {
+  _lbDetachEvents();
+  lbIndex = (lbIndex + dir + filteredMedia.length) % filteredMedia.length;
+  renderLightbox();
+}
+
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('lightbox').classList.contains('open')) return;
+  if (e.key === 'ArrowLeft')  lbNav(-1);
+  if (e.key === 'ArrowRight') lbNav(1);
+  if (e.key === 'Escape')     closeLightbox();
+  if (e.key === '+' || e.key === '=') lbZoom(+0.25);
+  if (e.key === '-')                  lbZoom(-0.25);
+  if (e.key === '0')                  lbZoomReset();
+  if (e.key === '1')                  lbZoom100();
+});
+
+// ─────────────────────────────────────────────
+//  METADATA MODAL
+// ─────────────────────────────────────────────
+function openMetaModal(item) {
+  const m = item.metadata || {};
+  document.getElementById('meta-modal-title').textContent = item.name;
+
+  const sections = [
+    { title: 'File', rows: [
+      ['Name', item.name],
+      ['Format', m.file?.format],
+      ['Size', m.file?.size ? (m.file.size / 1024 / 1024).toFixed(2) + ' MB' : null],
+      ['Path', m.file?.path],
+      ['Subfolder', m.file?.subfolder || null],
+      ['Relative Path', m.file?.relative_path || null],
+      ['Source Root', m.file?.source_root || null],
+    ]},
+    { title: 'Image', rows: [
+      ['Dimensions', m.image?.resolution],
+      ['Color Space', m.image?.color_space],
+      ['Orientation', m.image?.orientation],
+    ]},
+    { title: 'Camera', rows: [
+      ['Make', m.camera?.make],
+      ['Model', m.camera?.model],
+      ['Lens', m.camera?.lens],
+      ['ISO', m.camera?.iso],
+      ['Aperture', m.camera?.aperture],
+      ['Shutter Speed', m.camera?.shutter_speed],
+      ['Focal Length', m.camera?.focal_length],
+    ]},
+    { title: 'Date', rows: [
+      ['Created', m.date?.created],
+      ['Modified', m.date?.modified],
+    ]},
+    { title: 'Location', rows: [
+      ['Latitude', m.location?.latitude],
+      ['Longitude', m.location?.longitude],
+      ['City', m.location?.city],
+      ['Country', m.location?.country],
+    ]},
+    { title: 'Software', rows: [
+      ['Editor', m.software?.editor],
+      ['Version', m.software?.version],
+    ]},
+  ];
+
+  let html = '';
+  sections.forEach(sec => {
+    const rows = sec.rows.filter(r => r[1] != null && r[1] !== '');
+    if (rows.length === 0) return;
+    html += `<div class="meta-section"><div class="meta-section-title">${sec.title}</div>`;
+    rows.forEach(([k, v]) => {
+      html += `<div class="meta-row"><span class="meta-key">${k}</span><span class="meta-val">${escHtml(String(v))}</span></div>`;
+    });
+    html += '</div>';
+  });
+
+  document.getElementById('meta-content').innerHTML = html || '<p style="color:var(--text-muted);font-size:12px">No metadata available.</p>';
+  document.getElementById('meta-modal').classList.add('open');
+}
+
+// ─────────────────────────────────────────────
+//  ALBUM MODALS
+// ─────────────────────────────────────────────
+let pendingAddUnique = null;
+
+function openAddToAlbum(uniqueName) {
+  pendingAddUnique = uniqueName;
+  const list = document.getElementById('album-list-select');
+  if (db.albums.length === 0) {
+    list.innerHTML = '<p style="color:var(--text-muted);font-size:12px;padding:8px 0">No albums yet. Create one first.</p>';
+  } else {
+    list.innerHTML = db.albums.map(a => `
+      <label class="album-check-item">
+        <input type="checkbox" value="${a.id}" ${a.media.includes(uniqueName) ? 'checked' : ''}>
+        ${escHtml(a.name)} <span style="color:var(--text-muted);margin-left:auto">${a.media.length}</span>
+      </label>
+    `).join('');
+  }
+  document.getElementById('add-album-modal').classList.add('open');
+}
+
+function confirmAddToAlbum() {
+  if (!pendingAddUnique) return;
+  const checks = document.getElementById('album-list-select').querySelectorAll('input[type=checkbox]');
+  checks.forEach(cb => {
+    const album = db.albums.find(a => a.id === cb.value);
+    if (!album) return;
+    if (cb.checked && !album.media.includes(pendingAddUnique)) album.media.push(pendingAddUnique);
+    if (!cb.checked) { const i = album.media.indexOf(pendingAddUnique); if (i > -1) album.media.splice(i, 1); }
+  });
+  saveDB();
+  softRefresh();
+  closeModal('add-album-modal');
+  toast('Album membership updated', 'success');
+}
+
+function openCreateAlbum() {
+  document.getElementById('new-album-name').value = '';
+  document.getElementById('create-album-modal').classList.add('open');
+  setTimeout(() => document.getElementById('new-album-name').focus(), 100);
+}
+
+function confirmCreateAlbum() {
+  const name = document.getElementById('new-album-name').value.trim();
+  if (!name) { toast('Enter an album name', 'error'); return; }
+  const id = 'album_' + Date.now();
+  db.albums.push({ name, id, media: [] });
+  saveDB();
+  renderAll();
+  closeModal('create-album-modal');
+  toast(`Album "${name}" created`, 'success');
+}
+
+document.getElementById('new-album-name').addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmCreateAlbum();
+});
+
+function deleteCurrentAlbum() {
+  if (!currentAlbumId) return;
+  const album = db.albums.find(a => a.id === currentAlbumId);
+  if (!confirm(`Delete album "${album?.name}"? Media files are not affected.`)) return;
+  db.albums = db.albums.filter(a => a.id !== currentAlbumId);
+  saveDB();
+  currentAlbumId = null;
+  setView('all', document.querySelector('[data-view="all"]'));
+  renderAll();
+  toast('Album deleted', 'info');
+}
+
+// ── Inline rename from album header ───────────────────────────────────────────
+function startInlineRename() {
+  if (!currentAlbumId) return;
+  const album     = db.albums.find(a => a.id === currentAlbumId);
+  if (!album) return;
+  const nameEl    = document.getElementById('album-header-name');
+  const oldName   = album.name;
+
+  // Replace the display div content with an input
+  nameEl.innerHTML = '';
+  const input = document.createElement('input');
+  input.className = 'album-rename-input';
+  input.value     = oldName;
+  nameEl.appendChild(input);
+  input.focus();
+  input.select();
+
+  function commit() {
+    const newName = input.value.trim();
+    if (newName && newName !== oldName) {
+      album.name = newName;
+      saveDB();
+      // Update header name and sidebar without rebuilding grid
+      document.getElementById('album-header-name').textContent = newName;
+      document.getElementById('topbar-title').textContent = newName;
+      softRefresh();
+      toast(`Renamed to "${newName}"`, 'success');
+    } else {
+      nameEl.textContent = oldName;
+    }
+  }
+
+  input.addEventListener('blur',    commit);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { input.blur(); }
+    if (e.key === 'Escape') { input.value = oldName; input.blur(); }
+  });
+}
+
+// ── Rename from sidebar pencil icon ───────────────────────────────────────────
+function promptRenameAlbum(albumId) {
+  const album = db.albums.find(a => a.id === albumId);
+  if (!album) return;
+  const newName = window.prompt('Rename album:', album.name);
+  if (newName === null) return;          // cancelled
+  const trimmed = newName.trim();
+  if (!trimmed) { toast('Name cannot be empty', 'error'); return; }
+  if (trimmed === album.name) return;
+  album.name = trimmed;
+  saveDB();
+  softRefresh();
+  toast(`Renamed to "${trimmed}"`, 'success');
+}
+
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+// ─────────────────────────────────────────────
+//  SYNC
+// ─────────────────────────────────────────────
+async function triggerSync() {
+  // Check if already running
+  try {
+    const check = await fetch(`${API_BASE}/api/sync/status`);
+    if (check.ok) {
+      const st = await check.json();
+      if (st.running) { openSyncOverlay(); _syncPoll(); return; }
+    }
+  } catch { /* backend not running */ }
+
+  // Start sync
+  let started = false;
+  try {
+    const r = await fetch(`${API_BASE}/api/sync`, { method: 'POST' });
+    if (r.status === 409) { openSyncOverlay(); _syncPoll(); return; } // already running
+    if (!r.ok) throw new Error('Backend returned ' + r.status);
+    started = true;
+  } catch (err) {
+    toast('Sync failed — is app.py running?', 'error');
+    return;
+  }
+
+  if (!started) return;
+  openSyncOverlay();
+
+  // Prefer SSE stream; fall back to polling if EventSource unavailable
+  if (typeof EventSource !== 'undefined') {
+    _syncStream();
+  } else {
+    _syncPoll();
+  }
+}
+
+function openSyncOverlay() {
+  document.getElementById('sync-overlay').classList.add('show');
+  document.getElementById('sync-title').textContent   = 'Synchronising media library…';
+  document.getElementById('sync-spinner').classList.remove('done');
+  document.getElementById('sync-close-btn').classList.remove('visible');
+  document.getElementById('sync-added').textContent   = '0';
+  document.getElementById('sync-scanned').textContent = '0';
+  document.getElementById('sync-removed').textContent = '0';
+  document.getElementById('sync-source').textContent  = '';
+  document.getElementById('sync-file').textContent    = '';
+  document.getElementById('sync-log').innerHTML       = '';
+}
+
+function closeSyncOverlay() {
+  document.getElementById('sync-overlay').classList.remove('show');
+}
+
+function _syncApplyProgress(data) {
+  if (data.scanned    !== undefined) document.getElementById('sync-scanned').textContent   = data.scanned;
+  if (data.added      !== undefined) document.getElementById('sync-added').textContent     = data.added;
+  if (data.current_source)           document.getElementById('sync-source').textContent    = data.current_source;
+  if (data.current_file)             document.getElementById('sync-file').textContent      = '↳ ' + data.current_file;
+}
+
+function _syncAppendLog(line) {
+  const el  = document.getElementById('sync-log');
+  const div = document.createElement('div');
+  div.textContent = line;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function _syncOnComplete(data) {
+  document.getElementById('sync-spinner').classList.add('done');
+  if (data.error) {
+    document.getElementById('sync-title').textContent = '✗ Sync failed';
+    _syncAppendLog('Error: ' + data.error);
+    toast('Sync failed: ' + data.error, 'error');
+  } else {
+    const added   = data.result?.added   ?? data.added   ?? 0;
+    const removed = data.result?.removed ?? 0;
+    const total   = data.result?.total   ?? 0;
+    document.getElementById('sync-removed').textContent = removed;
+    document.getElementById('sync-title').textContent = `✓ Sync complete — ${added} new`;
+    toast(`Sync complete — ${added} new, ${removed} removed, ${total} total`, 'success');
+  }
+  document.getElementById('sync-close-btn').classList.add('visible');
+  // Reload gallery with fresh data
+  await loadDB();
+  renderAll();
+  populateAllFilters();
+}
+
+// ── SSE stream (preferred) ────────────────────────────────────────────────────
+function _syncStream() {
+  const es = new EventSource(`${API_BASE}/api/sync/stream`);
+
+  es.addEventListener('progress', e => {
+    try { _syncApplyProgress(JSON.parse(e.data)); } catch {}
+  });
+  es.addEventListener('log', e => {
+    try { _syncAppendLog(JSON.parse(e.data)); } catch {}
+  });
+  es.addEventListener('complete', e => {
+    es.close();
+    try { _syncOnComplete(JSON.parse(e.data)); } catch { _syncOnComplete({}); }
+  });
+  es.addEventListener('heartbeat', () => { /* keep-alive, nothing to do */ });
+  es.onerror = () => {
+    es.close();
+    // SSE connection dropped mid-sync — fall back to polling
+    _syncPoll();
+  };
+}
+
+// ── Polling fallback (when SSE unavailable or connection drops) ──────────────
+let _syncPollTimer = null;
+function _syncPoll() {
+  if (_syncPollTimer) return;
+  _syncPollTimer = setInterval(async () => {
+    try {
+      const r    = await fetch(`${API_BASE}/api/sync/status`);
+      const data = await r.json();
+      _syncApplyProgress(data);
+      // Append any new log lines
+      (data.log || []).forEach(line => {
+        const logEl = document.getElementById('sync-log');
+        if (!logEl.querySelector(`[data-line="${CSS.escape(line)}"]`)) {
+          const d = document.createElement('div');
+          d.textContent      = line;
+          d.dataset.line     = line;
+          logEl.appendChild(d);
+          logEl.scrollTop    = logEl.scrollHeight;
+        }
+      });
+      if (data.done) {
+        clearInterval(_syncPollTimer);
+        _syncPollTimer = null;
+        _syncOnComplete(data);
+      }
+    } catch {
+      clearInterval(_syncPollTimer);
+      _syncPollTimer = null;
+      toast('Lost connection to backend during sync', 'error');
+      document.getElementById('sync-close-btn').classList.add('visible');
+    }
+  }, 1500);
+}
+
+// ─────────────────────────────────────────────
+//  PERSIST (saves to localStorage as fallback)
+// ─────────────────────────────────────────────
+function saveDB() {
+  // Only save albums via POST /api/db — albums are always fully loaded in memory.
+  // Media mutations (hide/unhide) use /api/media/hide directly.
+  // Never send db.media here — it's a partial page and would overwrite the full DB.
+  fetch(`${API_BASE}/api/db`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ albums: db.albums })
+  }).catch(() => {});
+  updateFooter();
+  renderAlbumNav();
+  updateStats();
+}
+
+// ─────────────────────────────────────────────
+//  TOAST
+// ─────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const icons = { success: '✓', error: '✕', info: '◆' };
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span>${icons[type] || '◆'}</span> ${escHtml(msg)}`;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ─────────────────────────────────────────────
+//  SETTINGS PANEL
+// ─────────────────────────────────────────────
+let _settingsCurrent = {};   // live copy while panel is open
+
+const ALL_IMAGE_FORMATS = ['jpg','jpeg','png','heic','heif','webp','tiff','bmp','gif'];
+const ALL_VIDEO_FORMATS = ['mp4','mov','avi','mkv','webm','m4v','3gp','wmv','flv','ts','mts'];
+
+function settingsToggle(el) {
+  el.classList.toggle('on');
+}
+
+async function openSettings() {
+  try {
+    const r = await fetch(`${API_BASE}/api/config`);
+    _settingsCurrent = r.ok ? await r.json() : {};
+  } catch { _settingsCurrent = {}; }
+
+  _settingsPopulate(_settingsCurrent);
+  document.getElementById('settings-status').textContent = '';
+  document.getElementById('settings-overlay').classList.add('open');
+}
+
+function closeSettings() {
+  document.getElementById('settings-overlay').classList.remove('open');
+}
+
+function _settingsPopulate(c) {
+  // Helpers
+  const sel  = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? el.options[0]?.value; };
+  const tog  = (id, val) => { const el = document.getElementById(id); if (el) el.classList.toggle('on', !!val); };
+  const num  = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ''; };
+  const txt  = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ''; };
+
+  // Appearance
+  sel('s-theme',           c.theme            ?? 'dark');
+  sel('s-grid-columns',    String(c.grid_columns ?? 4));
+  sel('s-card-size',       c.card_size         ?? 'medium');
+  tog('s-show-filename',   c.show_filename_on_card  ?? true);
+  tog('s-show-date',       c.show_date_on_card      ?? true);
+  tog('s-show-subfolder',  c.show_subfolder_on_card ?? true);
+  // Sorting
+  sel('s-default-sort',        c.default_sort       ?? 'date-desc');
+  sel('s-default-date-field',  c.default_date_field ?? 'modified');
+  tog('s-show-hidden-default', c.show_hidden_default ?? false);
+  // Performance
+  num('s-lazy-load-batch',      c.lazy_load_batch      ?? 50);
+  num('s-media-page-size',      c.media_page_size      ?? 500);
+  num('s-thumbnail-size',       c.thumbnail_size       ?? 400);
+  num('s-thumbnail-quality',    c.thumbnail_quality    ?? 60);
+  txt('s-thumbnail-cache-path', c.thumbnail_cache_path ?? 'thumb');
+  // Media types — chips
+  _buildFormatChips('s-image-formats', ALL_IMAGE_FORMATS, c.supported_image_formats ?? ALL_IMAGE_FORMATS);
+  _buildFormatChips('s-video-formats', ALL_VIDEO_FORMATS, c.supported_video_formats ?? ALL_VIDEO_FORMATS);
+  sel('s-video-preload',   c.video_preload   ?? 'metadata');
+  tog('s-video-autoplay',  c.video_autoplay  ?? false);
+  // Sync
+  tog('s-follow-symlinks',  c.follow_symlinks  ?? true);
+  tog('s-skip-hidden-dirs', c.skip_hidden_dirs ?? true);
+  num('s-max-scan-depth',   c.max_scan_depth   ?? 0);
+  sel('s-dedup-method',     c.dedup_method     ?? 'both');
+  // Metadata
+  tog('s-show-gps',           c.show_gps_in_metadata   ?? true);
+  tog('s-extract-video-meta', c.extract_video_metadata ?? true);
+  // Server
+  num('s-api-port',      c.api_port         ?? 5000);
+  sel('s-log-level',     c.log_level        ?? 'INFO');
+  num('s-log-retention', c.log_retention_days ?? 30);
+}
+
+function _buildFormatChips(containerId, allFormats, activeFormats) {
+  const active = new Set((activeFormats || []).map(f => f.toLowerCase()));
+  const wrap   = document.getElementById(containerId);
+  wrap.innerHTML = '';
+  allFormats.forEach(fmt => {
+    const chip = document.createElement('span');
+    chip.className = 'settings-chip' + (active.has(fmt) ? ' active' : '');
+    chip.textContent = fmt;
+    chip.onclick = () => chip.classList.toggle('active');
+    wrap.appendChild(chip);
+  });
+}
+
+function _getToggle(id)   { return document.getElementById(id)?.classList.contains('on') ?? false; }
+function _getSelect(id)   { return document.getElementById(id)?.value ?? ''; }
+function _getNumber(id)   { return parseInt(document.getElementById(id)?.value ?? '0', 10); }
+function _getText(id)     { return document.getElementById(id)?.value?.trim() ?? ''; }
+function _getChips(id)    { return [...document.querySelectorAll(`#${id} .settings-chip.active`)].map(c => c.textContent); }
+
+async function saveSettings() {
+  const payload = {
+    // Appearance
+    theme:                    _getSelect('s-theme'),
+    grid_columns:             _getSelect('s-grid-columns') === 'auto' ? 'auto' : parseInt(_getSelect('s-grid-columns')),
+    card_size:                _getSelect('s-card-size'),
+    show_filename_on_card:    _getToggle('s-show-filename'),
+    show_date_on_card:        _getToggle('s-show-date'),
+    show_subfolder_on_card:   _getToggle('s-show-subfolder'),
+    // Sorting
+    default_sort:             _getSelect('s-default-sort'),
+    default_date_field:       _getSelect('s-default-date-field'),
+    show_hidden_default:      _getToggle('s-show-hidden-default'),
+    // Performance
+    lazy_load_batch:          _getNumber('s-lazy-load-batch'),
+    media_page_size:          _getNumber('s-media-page-size'),
+    thumbnail_size:           _getNumber('s-thumbnail-size'),
+    thumbnail_quality:        _getNumber('s-thumbnail-quality'),
+    thumbnail_cache_path:     _getText('s-thumbnail-cache-path'),
+    // Media types
+    supported_image_formats:  _getChips('s-image-formats'),
+    supported_video_formats:  _getChips('s-video-formats'),
+    video_autoplay:           _getToggle('s-video-autoplay'),
+    video_preload:            _getSelect('s-video-preload'),
+    // Sync
+    follow_symlinks:          _getToggle('s-follow-symlinks'),
+    skip_hidden_dirs:         _getToggle('s-skip-hidden-dirs'),
+    max_scan_depth:           _getNumber('s-max-scan-depth'),
+    dedup_method:             _getSelect('s-dedup-method'),
+    // Metadata
+    show_gps_in_metadata:     _getToggle('s-show-gps'),
+    extract_video_metadata:   _getToggle('s-extract-video-meta'),
+    // Server
+    api_port:                 _getNumber('s-api-port'),
+    log_level:                _getSelect('s-log-level'),
+    log_retention_days:       _getNumber('s-log-retention'),
+  };
+
+  const status = document.getElementById('settings-status');
+  try {
+    const r = await fetch(`${API_BASE}/api/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) throw new Error('Server returned ' + r.status);
+    // Apply settings that take effect immediately (no restart needed)
+    _applyImmediateSettings(payload);
+    config = { ...config, ...payload };
+    closeSettings();
+    toast('Settings saved', 'success');
+  } catch {
+    status.textContent = '⚠ Could not save — is app.py running?';
+    status.style.color = 'var(--danger)';
+  }
+}
+
+function _applyImmediateSettings(s) {
+  // Grid columns
+  const grid = document.getElementById('gallery-grid');
+  if (s.grid_columns === 'auto') {
+    grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(180px, 1fr))';
+  } else {
+    grid.style.gridTemplateColumns = `repeat(${s.grid_columns}, 1fr)`;
+  }
+
+  // Card size → row height
+  const heights = { small: '160px', medium: '220px', large: '300px' };
+  grid.style.gridAutoRows = heights[s.card_size] || '220px';
+
+  // Show/hide card overlay elements — toggle CSS class on body
+  document.body.classList.toggle('hide-card-filename',  !s.show_filename_on_card);
+  document.body.classList.toggle('hide-card-date',      !s.show_date_on_card);
+  document.body.classList.toggle('hide-card-subfolder', !s.show_subfolder_on_card);
+
+  // Theme
+  _applyTheme(s.theme);
+
+  // Sort chips — sync active chip to new default if not already changed
+  if (s.default_sort !== currentSort) {
+    const chip = document.querySelector(`.filter-chip[data-sort="${s.default_sort}"]`);
+    if (chip) setSort(s.default_sort, chip);
+  }
+
+  // Show hidden
+  if (s.show_hidden_default !== showHidden) {
+    showHidden = s.show_hidden_default;
+    const tog = document.getElementById('show-hidden-toggle');
+    tog.classList.toggle('on', showHidden);
+    applyFilters();
+  }
+}
+
+function _applyTheme(theme) {
+  const root = document.documentElement;
+  const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  if (isDark) {
+    root.style.setProperty('--bg',      '#0a0a0b');
+    root.style.setProperty('--surface', '#111113');
+    root.style.setProperty('--surface2','#1a1a1e');
+    root.style.setProperty('--text',    '#e8e6e0');
+    root.style.setProperty('--text-dim','#9e9b94');
+    root.style.setProperty('--text-muted','#6b6860');
+  } else {
+    root.style.setProperty('--bg',      '#f5f4f0');
+    root.style.setProperty('--surface', '#ffffff');
+    root.style.setProperty('--surface2','#eeecea');
+    root.style.setProperty('--text',    '#1a1a1c');
+    root.style.setProperty('--text-dim','#4a4845');
+    root.style.setProperty('--text-muted','#8a8784');
+  }
+}
+
+// Apply settings on boot from loaded config
+function applyConfigToUI(cfg) {
+  if (!cfg) return;
+  _applyImmediateSettings(cfg);
+}
+
+// ─────────────────────────────────────────────
+//  LOCATIONS MANAGER
+// ─────────────────────────────────────────────
+let locationsData = [];   // working copy while modal is open
+
+async function openLocationsManager() {
+  try {
+    const r = await fetch(`${API_BASE}/api/locations`);
+    if (!r.ok) throw new Error('Backend returned ' + r.status);
+    locationsData = await r.json();
+  } catch {
+    toast('Could not load media.json — is app.py running?', 'error');
+    return;
+  }
+  renderLocationsList();
+  document.getElementById('loc-new-name').value = '';
+  document.getElementById('loc-new-path').value = '';
+  document.getElementById('loc-new-vis').checked = true;
+  document.getElementById('locations-modal').classList.add('open');
+}
+
+function renderLocationsList() {
+  const list = document.getElementById('locations-list');
+  list.innerHTML = '';
+
+  if (locationsData.length === 0) {
+    list.innerHTML = '';   // CSS :empty will show placeholder
+    return;
+  }
+
+  locationsData.forEach((loc, idx) => {
+    const row = document.createElement('div');
+    row.className = 'loc-row' + (loc.visibility === false ? ' loc-hidden-row' : '');
+    row.dataset.idx = idx;
+
+    row.innerHTML = `
+      <div class="loc-fields">
+        <input class="loc-name-input" type="text"
+               value="${escHtml(loc.name || '')}"
+               placeholder="Label"
+               oninput="locationsData[${idx}].name = this.value">
+        <input class="loc-path-input" type="text"
+               value="${escHtml(loc.path || '')}"
+               placeholder="Absolute path"
+               oninput="locationsData[${idx}].path = this.value">
+        <label class="loc-vis-toggle">
+          <input type="checkbox" ${loc.visibility !== false ? 'checked' : ''}
+                 onchange="locationsData[${idx}].visibility = this.checked; this.closest('.loc-row').classList.toggle('loc-hidden-row', !this.checked)">
+          Scan during Sync
+        </label>
+      </div>
+      <div class="loc-actions">
+        <button class="loc-delete-btn" onclick="deleteLocation(${idx})">✕ Remove</button>
+      </div>`;
+
+    list.appendChild(row);
+  });
+}
+
+function deleteLocation(idx) {
+  const loc = locationsData[idx];
+  if (!confirm(`Remove "${loc.name || loc.path}"?\n\nThis only removes it from the scan list — your files are not affected.`)) return;
+  locationsData.splice(idx, 1);
+  renderLocationsList();
+}
+
+function addLocation() {
+  const name = document.getElementById('loc-new-name').value.trim();
+  const path = document.getElementById('loc-new-path').value.trim();
+  const vis  = document.getElementById('loc-new-vis').checked;
+
+  if (!path) { toast('Path is required', 'error'); return; }
+
+  locationsData.push({ name: name || path, path, visibility: vis });
+  renderLocationsList();
+
+  document.getElementById('loc-new-name').value = '';
+  document.getElementById('loc-new-path').value = '';
+  document.getElementById('loc-new-vis').checked = true;
+  toast('Location added — click Save Changes to write to media.json', 'info');
+}
+
+async function saveLocations() {
+  // Validate — each entry must have a path
+  const invalid = locationsData.filter(l => !l.path || !l.path.trim());
+  if (invalid.length) {
+    toast('All locations must have a path', 'error');
+    return;
+  }
+
+  try {
+    const r = await fetch(`${API_BASE}/api/locations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(locationsData),
+    });
+    if (!r.ok) throw new Error('Backend returned ' + r.status);
+    closeModal('locations-modal');
+    populateLocationFilter();  // refresh dropdown with updated labels
+    toast('media.json saved — run Sync to index changes', 'success');
+  } catch {
+    toast('Could not save — is app.py running?', 'error');
+  }
+}
+
+// ─────────────────────────────────────────────
+//  PHOTO PICKER
+// ─────────────────────────────────────────────
+let pickerSelected = new Set();
+let pickerAllMedia = [];          // current page of results shown in grid
+let pickerTotal    = 0;           // total matching on server
+let pickerOffset   = 0;           // current offset into server results
+let pickerHasMore  = false;
+let pickerFetching = false;
+
+async function openPhotoPicker() {
+  if (!currentAlbumId) return;
+  const album = db.albums.find(a => a.id === currentAlbumId);
+  if (!album) return;
+
+  pickerSelected = new Set();
+  pickerAllMedia = [];
+  pickerOffset   = 0;
+  pickerHasMore  = false;
+  pickerFetching = false;
+
+  document.getElementById('photo-picker-title').textContent =
+    `Add Photos to "${album.name}"`;
+  document.getElementById('photo-picker-search').value   = '';
+  document.getElementById('photo-picker-location').value = '';
+  document.getElementById('picker-confirm-btn').disabled = true;
+  document.getElementById('picker-confirm-btn').textContent = 'Add Selected';
+  document.getElementById('photo-picker-sel-count').classList.remove('visible');
+  const addAllBtn = document.getElementById('picker-add-all-btn');
+  if (addAllBtn) {
+    addAllBtn.style.display = 'none';
+    addAllBtn.disabled      = false;
+    addAllBtn.textContent   = '⊕ Add All';
+  }
+
+  await populatePickerLocationFilter();
+
+  document.getElementById('photo-picker').classList.add('open');
+
+  await _pickerFetch(true);   // initial load
+}
+
+// Fetch a page of media for the picker, applying current picker filters.
+// replace=true clears the grid first (used on open / filter change).
+async function _pickerFetch(replace = false) {
+  if (pickerFetching) return;
+  pickerFetching = true;
+
+  const album  = db.albums.find(a => a.id === currentAlbumId);
+  const q      = document.getElementById('photo-picker-search').value.trim();
+  const loc    = document.getElementById('photo-picker-location').value;
+  const params = new URLSearchParams({
+    offset: replace ? 0 : pickerOffset,
+    limit:  200,
+    sort:   'date-desc',
+  });
+  if (q)   params.set('q', q);
+  if (loc) params.set('location', loc);
+
+  try {
+    const r    = await fetch(`${API_BASE}/api/media?${params.toString()}`);
+    const data = await r.json();
+    const items = data.items || [];
+
+    if (replace) {
+      pickerAllMedia = items;
+      pickerOffset   = items.length;
+    } else {
+      pickerAllMedia.push(...items);
+      pickerOffset += items.length;
+    }
+    pickerTotal   = data.total;
+    pickerHasMore = data.has_more;
+
+    renderPickerGrid(replace ? pickerAllMedia : items, album, !replace);
+  } catch { /* network error */ }
+
+  pickerFetching = false;
+}
+
+function closePhotoPicker() {
+  document.getElementById('photo-picker').classList.remove('open');
+}
+
+function renderPickerGrid(mediaList, album, append = false) {
+  const grid = document.getElementById('photo-picker-grid');
+  if (!append) grid.innerHTML = '';
+
+  if (!append && mediaList.length === 0) {
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:60px;font-size:12px">No photos found</div>';
+    return;
+  }
+
+  const alreadyIn = new Set(album ? album.media : []);
+
+  mediaList.forEach(item => {
+    const inAlbum    = alreadyIn.has(item.uniqueName);
+    const isSelected = pickerSelected.has(item.uniqueName);
+
+    const div = document.createElement('div');
+    div.className = 'picker-item' +
+      (isSelected ? ' selected'   : '') +
+      (inAlbum    ? ' already-in' : '');
+    div.dataset.unique = item.uniqueName;
+
+    div.innerHTML = `
+      <img src="${thumbUrl(item.uniqueName)}" loading="lazy" alt="${escHtml(item.name)}"
+           onerror="this.style.opacity='0'">
+      <div class="picker-check">✓</div>
+      <div class="picker-item-name">${escHtml(item.name)}</div>
+      ${inAlbum ? '<span class="picker-already-badge">Added</span>' : ''}`;
+
+    if (!inAlbum) {
+      div.addEventListener('click', () => togglePickerItem(item.uniqueName, div));
+    }
+
+    grid.appendChild(div);
+  });
+
+  // If more pages exist, add a load-more sentinel at the bottom
+  _pickerAttachSentinel();
+}
+
+let _pickerObserver = null;
+
+function _pickerAttachSentinel() {
+  const grid = document.getElementById('photo-picker-grid');
+  // Remove existing sentinel
+  grid.querySelector('.picker-sentinel')?.remove();
+  if (!pickerHasMore) return;
+
+  const sentinel = document.createElement('div');
+  sentinel.className = 'picker-sentinel';
+  sentinel.style.cssText = 'grid-column:1/-1;height:40px';
+  grid.appendChild(sentinel);
+
+  if (_pickerObserver) _pickerObserver.disconnect();
+  _pickerObserver = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) _pickerFetch(false);
+  }, { root: grid, rootMargin: '100px' });
+  _pickerObserver.observe(sentinel);
+}
+
+async function filterPickerGrid() {
+  // Re-fetch from offset 0 with new filters
+  pickerAllMedia = [];
+  pickerOffset   = 0;
+  pickerHasMore  = false;
+  if (_pickerObserver) { _pickerObserver.disconnect(); _pickerObserver = null; }
+  await _pickerFetch(true);
+}
+
+function togglePickerItem(uniqueName, el) {
+  if (pickerSelected.has(uniqueName)) {
+    pickerSelected.delete(uniqueName);
+    el.classList.remove('selected');
+  } else {
+    pickerSelected.add(uniqueName);
+    el.classList.add('selected');
+  }
+  updatePickerCount();
+}
+
+function updatePickerCount() {
+  const n     = pickerSelected.size;
+  const badge = document.getElementById('photo-picker-sel-count');
+  const btn   = document.getElementById('picker-confirm-btn');
+  if (n > 0) {
+    badge.textContent = `${n} selected`;
+    badge.classList.add('visible');
+    btn.disabled = false;
+    btn.textContent = `Add ${n} Photo${n !== 1 ? 's' : ''}`;
+  } else {
+    badge.classList.remove('visible');
+    btn.disabled = true;
+    btn.textContent = 'Add Selected';
+  }
+}
+
+
+function pickerSelectAll() {
+  // Select all currently rendered non-already-in items
+  document.querySelectorAll('.picker-item:not(.already-in)').forEach(el => {
+    const un = el.dataset.unique;
+    if (un) { pickerSelected.add(un); el.classList.add('selected'); }
+  });
+  updatePickerCount();
+}
+
+function pickerClearAll() {
+  pickerSelected.clear();
+  document.querySelectorAll('.picker-item.selected').forEach(el =>
+    el.classList.remove('selected'));
+  updatePickerCount();
+}
+
+function confirmPhotoPicker() {
+  if (pickerSelected.size === 0 || !currentAlbumId) return;
+  const album = db.albums.find(a => a.id === currentAlbumId);
+  if (!album) return;
+
+  let added = 0;
+  pickerSelected.forEach(un => {
+    if (!album.media.includes(un)) { album.media.push(un); added++; }
+  });
+
+  saveDB();
+  closePhotoPicker();
+  applyFilters();
+  toast(`Added ${added} photo${added !== 1 ? 's' : ''} to "${album.name}"`, 'success');
+}
+
+// Close picker on backdrop click
+document.getElementById('photo-picker').addEventListener('click', function(e) {
+  if (e.target === this) closePhotoPicker();
+});
+
+// ─────────────────────────────────────────────
+//  MAP VIEW
+// ─────────────────────────────────────────────
+let _leafletMap     = null;
+let _clusterGroup   = null;
+let _mapLoaded      = false;
+
+async function openMapView() {
+  if (!_leafletMap) {
+    _leafletMap = L.map('map-container', {
+      center:      [20, 0],
+      zoom:        3,
+      zoomControl: true,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19,
+    }).addTo(_leafletMap);
+
+    // Close panel when clicking the map background
+    _leafletMap.on('click', () => closeMapClusterPanel());
+  }
+
+  setTimeout(() => _leafletMap.invalidateSize(), 50);
+
+  if (_mapLoaded) return;
+  _mapLoaded = true;
+
+  try {
+    const r    = await fetch(`${API_BASE}/api/media/gps`);
+    const data = await r.json();
+    const total = data.total ?? data.total_count ?? 0;
+    _renderMapMarkers(data.items || [], data.gps_count ?? 0, total);
+  } catch {
+    document.getElementById('map-gps-banner').classList.add('visible');
+    document.getElementById('map-gps-text').textContent = 'Could not load GPS data — is app.py running?';
+  }
+}
+
+function _renderMapMarkers(items, gpsCount, total) {
+  // GPS coverage banner
+  const banner  = document.getElementById('map-gps-banner');
+  const bannerT = document.getElementById('map-gps-text');
+  if (items.length === 0) {
+    bannerT.textContent = 'No photos with GPS coordinates found.';
+    banner.classList.add('visible');
+    return;
+  }
+  if (gpsCount < total) {
+    bannerT.textContent =
+      `⊙  ${gpsCount.toLocaleString()} of ${total.toLocaleString()} photos have GPS coordinates`;
+    banner.classList.add('visible');
+  } else {
+    banner.classList.remove('visible');
+  }
+
+  if (_clusterGroup) _leafletMap.removeLayer(_clusterGroup);
+
+  _clusterGroup = L.markerClusterGroup({
+    maxClusterRadius:        80,
+    disableClusteringAtZoom: 50,
+    spiderfyOnMaxZoom:       false,
+    showCoverageOnHover:     false,
+    zoomToBoundsOnClick:     false,  // we handle click ourselves
+
+    iconCreateFunction(cluster) {
+      // Single most-recent thumbnail + compact count badge
+      const children = cluster.getAllChildMarkers();
+      const newest   = children.reduce((best, m) =>
+        (!best || (m.options._date || '') > (best.options._date || '')) ? m : best, null);
+      const thumbUrl = newest?.options._thumbUrl || '';
+      const count    = cluster.getChildCount();
+      const badge    = count > 9999 ? '9999+' : String(count);
+
+      const html = `
+        <div class="map-cluster-wrap">
+          <div class="map-cluster-thumb">
+            ${thumbUrl
+              ? `<img src="${thumbUrl}" loading="lazy" alt="">`
+              : `<div style="width:100%;height:100%;background:var(--surface2)"></div>`}
+          </div>
+          <div class="map-cluster-badge">${badge}</div>
+        </div>`;
+
+      return L.divIcon({
+        html,
+        className: '',
+        iconSize:  [52, 52],
+        iconAnchor:[26, 26],
+      });
+    },
+  });
+
+  // Cluster click → open side panel, sorted newest first
+  _clusterGroup.on('clusterclick', e => {
+    e.originalEvent?.stopPropagation();
+    const markers     = e.layer.getAllChildMarkers();
+    markers.sort((a, b) => (b.options._date || '').localeCompare(a.options._date || ''));
+    const clusterItems = markers.map(m => m.options._item);
+    const title = markers.length === 1 ? clusterItems[0].name : `${markers.length} Photos`;
+    openMapClusterPanel(clusterItems, title);
+  });
+
+  // Build individual markers — small thumbnail, single item
+  items.forEach(item => {
+    // Use a small thumbnail (80px) to keep network load minimal
+    const thumbUrl = `${API_BASE}/api/thumb/${encodeURIComponent(item.uniqueName)}?size=80&quality=65`;
+
+    const icon = L.divIcon({
+      html:      `<div class="map-thumb-marker"><img src="${thumbUrl}" loading="lazy" alt=""></div>`,
+      className: '',
+      iconSize:  [44, 44],
+      iconAnchor:[22, 22],
+    });
+
+    const marker = L.marker([item.lat, item.lng], {
+      icon,
+      title:     item.name,
+      _thumbUrl: thumbUrl,
+      _date:     item.date || '',
+      _item:     item,
+    });
+
+    // Single marker click → fetch full record then open lightbox directly
+    marker.on('click', e => {
+      e.originalEvent?.stopPropagation();
+      closeMapClusterPanel();
+      _openMapItem(item, 0, [item]);
+    });
+
+    _clusterGroup.addLayer(marker);
+  });
+
+  _leafletMap.addLayer(_clusterGroup);
+
+  // Fit to all markers on first load
+  const bounds = L.latLngBounds(items.map(i => [i.lat, i.lng]));
+  _leafletMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+}
+
+// ── Cluster side panel ────────────────────────────────────────────────────────
+let _panelItems    = [];
+let _panelRendered = 0;
+let _panelObserver = null;   // lazy IMAGE loader
+let _panelSentinel = null;   // scroll sentinel for incremental card rendering
+
+const PANEL_BATCH = 24;      // cards per scroll batch (3-column × 8 rows)
+
+function openMapClusterPanel(items, title) {
+  const panel = document.getElementById('map-cluster-panel');
+  const grid  = document.getElementById('map-cluster-panel-grid');
+  document.getElementById('map-cluster-panel-title').textContent =
+    `${title}${items.length > 1 ? ' · ' + items.length + ' photos' : ''}`;
+
+  // Disconnect previous observers
+  if (_panelObserver) { _panelObserver.disconnect(); _panelObserver = null; }
+  grid.innerHTML = '';
+
+  // Sort newest first
+  _panelItems = items.slice().sort((a, b) =>
+    (b.date || '').localeCompare(a.date || ''));
+  _panelRendered = 0;
+
+  // IntersectionObserver for lazy IMAGE loading — fires when each card enters the grid viewport
+  _panelObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const img = entry.target.querySelector('img[data-src]');
+      if (img) {
+        img.src = img.dataset.src;
+        img.removeAttribute('data-src');
+        img.onload  = () => img.classList.add('loaded');
+        img.onerror = () => img.classList.add('loaded');  // show even on error
+      }
+      _panelObserver.unobserve(entry.target);
+    });
+  }, { root: grid, rootMargin: '160px' });
+
+  _panelRenderBatch();
+  panel.classList.add('open');
+}
+
+function _panelRenderBatch() {
+  const grid = document.getElementById('map-cluster-panel-grid');
+
+  // Remove old scroll sentinel
+  if (_panelSentinel?.parentNode) {
+    _panelSentinel.parentNode.removeChild(_panelSentinel);
+    _panelSentinel = null;
+  }
+
+  const end = Math.min(_panelRendered + PANEL_BATCH, _panelItems.length);
+
+  for (let i = _panelRendered; i < end; i++) {
+    const item     = _panelItems[i];
+    const thumbSrc = `${API_BASE}/api/thumb/${encodeURIComponent(item.uniqueName)}?size=160&quality=70`;
+    const card     = document.createElement('div');
+    card.className = 'map-panel-thumb';
+
+    // Use data-src so the image only loads when the card enters the viewport
+    card.innerHTML = `
+      <img data-src="${thumbSrc}" src="" alt="${escHtml(item.name)}">
+      ${item.type === 'video' ? '<div class="map-panel-play">▶</div>' : ''}`;
+
+    card.addEventListener('click', () => _openMapItem(item, i, _panelItems));
+    grid.appendChild(card);
+    _panelObserver.observe(card);   // trigger lazy load when this card is visible
+  }
+
+  _panelRendered = end;
+
+  // Attach a sentinel at the bottom to trigger the next batch
+  if (_panelRendered < _panelItems.length) {
+    _panelSentinel = document.createElement('div');
+    _panelSentinel.style.cssText = 'grid-column:1/-1;height:1px';
+
+    const sentinelObs = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        sentinelObs.disconnect();
+        _panelRenderBatch();
+      }
+    }, { root: grid, rootMargin: '80px' });
+
+    grid.appendChild(_panelSentinel);
+    sentinelObs.observe(_panelSentinel);
+  }
+}
+
+function closeMapClusterPanel() {
+  document.getElementById('map-cluster-panel').classList.remove('open');
+  if (_panelObserver) { _panelObserver.disconnect(); _panelObserver = null; }
+  _panelItems    = [];
+  _panelRendered = 0;
+  _panelSentinel = null;
+}
+
+// Open a map item in the lightbox.
+// Fetches the full media record on demand if not already in memory.
+function _openMapItem(item, panelIdx, panelList) {
+  // Build filteredMedia from panelList so ← → navigation works in lightbox
+  const list = panelList || [item];
+
+  // Check in-memory first — may already be a full record
+  const resolve = (it) =>
+    db.media.find(m => m.uniqueName === it.uniqueName) || { ...it, metadata: {} };
+
+  const tryOpen = () => {
+    filteredMedia = list.map(resolve);
+    lbIndex = panelIdx;
+    openLightbox(panelIdx);
+  };
+
+  // If the item's full record is not in memory, fetch it first so metadata panel works
+  const inMemory = db.media.find(m => m.uniqueName === item.uniqueName);
+  if (inMemory) {
+    tryOpen();
+    return;
+  }
+
+  fetch(`${API_BASE}/api/media/by-id/${encodeURIComponent(item.uniqueName)}`)
+    .then(r => r.ok ? r.json() : null)
+    .then(full => {
+      if (full && !db.media.find(m => m.uniqueName === full.uniqueName)) {
+        db.media.push(full);
+      }
+      tryOpen();
+    })
+    .catch(() => tryOpen());  // open with stub on network error
+}
+
+// Reset map when media is re-synced so it reloads fresh GPS data
+function _resetMap() {
+  _mapLoaded = false;
+  closeMapClusterPanel();
+  if (_clusterGroup) {
+    _leafletMap?.removeLayer(_clusterGroup);
+    _clusterGroup = null;
+  }
+}
+
+// ─────────────────────────────────────────────
+//  BOOT
+// ─────────────────────────────────────────────
+init();
