@@ -1,6 +1,6 @@
 # Luminary — Local Media Gallery
 
-A lightweight, local-first photo and video gallery. Index media from your filesystem, browse with a refined dark UI, organise into albums, and manage everything without any cloud dependency, accounts, or tracking.
+A lightweight, local-first photo and video gallery. Index media from your filesystem, browse with a refined dark UI, organise into albums, view geotagged photos on a map, and manage everything without any cloud dependency, accounts, or tracking.
 
 ---
 
@@ -8,6 +8,7 @@ A lightweight, local-first photo and video gallery. Index media from your filesy
 
 - Python 3.8+
 - ffmpeg — for video thumbnails and metadata (`apt install ffmpeg` or `brew install ffmpeg`)
+- Internet connection for the **Map** view — Leaflet, the marker-clustering plugin, and OpenStreetMap tiles are loaded from a CDN at runtime. Everything else works fully offline.
 
 ---
 
@@ -18,10 +19,10 @@ A lightweight, local-first photo and video gallery. Index media from your filesy
 cd luminary
 
 # 2. Install Python dependencies
-pip install flask flask-cors Pillow pillow-heif
+pip install -r requirements.txt
 ```
 
-`pillow-heif` is optional but strongly recommended for HEIC/HEIF support. Without it, Luminary falls back to system ImageMagick or ffmpeg for HEIC decoding.
+`requirements.txt` includes `pillow-heif` for HEIC/HEIF support. It's optional but strongly recommended — without it, Luminary falls back to system ImageMagick or ffmpeg for HEIC decoding.
 
 ---
 
@@ -35,10 +36,10 @@ chmod +x run.sh
 Then open **http://localhost:5000** in your browser.
 
 ```bash
-./run.sh --sync             # run a sync pass then start the server
-python3 app.py              # start server on port 5000
-python3 app.py --port 8080  # custom port
-python3 app.py --sync-only  # scan directories and exit, no server
+./run.sh --sync                            # run a sync pass then start the server
+python3 app/src/backend/app.py              # start server on port 5000
+python3 app/src/backend/app.py --port 8080  # custom port
+python3 app/src/backend/app.py --sync-only  # scan directories and exit, no server
 ```
 
 ---
@@ -47,22 +48,33 @@ python3 app.py --sync-only  # scan directories and exit, no server
 
 ```
 luminary/
-├── app.py                  # Flask backend — API, scanner, metadata extractor
-├── index.html              # Frontend single-page app
-├── run.sh                  # Startup script
-├── config/                 # App settings — tracked in git
-│   └── configuration.json  # All configurable settings (edit this)
-├── data/                   # Runtime data — auto-created, git-ignored
-│   ├── media.json          # Source directory list
-│   ├── luminary.db         # Media + albums — SQLite database
-│   ├── luminary.db-wal     # SQLite write-ahead log (transient)
-│   └── luminary.db-shm     # SQLite shared memory (transient)
-├── thumb/                  # Thumbnail cache — auto-created, git-ignored
-└── logs/                   # Daily rotating logs — git-ignored
-    └── log-YYYY-MM-DD.log
+├── README.md
+├── requirements.txt              # Python dependencies
+├── run.sh                        # Startup script
+└── app/
+    └── src/
+        ├── backend/
+        │   ├── app.py                 # Flask backend — API, scanner, metadata extractor
+        │   ├── config/                # App settings — tracked in git
+        │   │   └── configuration.json # All configurable settings (edit this)
+        │   ├── data/                  # Runtime data — auto-created, git-ignored
+        │   │   ├── media.json         # Source directory list
+        │   │   ├── luminary.db        # Media + albums — SQLite database
+        │   │   ├── luminary.db-wal    # SQLite write-ahead log (transient)
+        │   │   └── luminary.db-shm    # SQLite shared memory (transient)
+        │   ├── logs/                  # Daily rotating logs — git-ignored
+        │   │   └── log-YYYY-MM-DD.log
+        │   └── thumb/                 # Thumbnail cache — auto-created, git-ignored
+        └── frontend/
+            ├── index.html             # Frontend markup
+            └── static/
+                ├── app.js             # Frontend logic
+                └── style.css          # Frontend styles
 ```
 
-On first run `app.py` automatically creates `data/media.json` with a default entry pointing at `~/Pictures`. `config/configuration.json` is shipped with the project and tracked in git — edit it directly to change settings.
+On first run `app.py` automatically creates `backend/data/media.json` with a default entry pointing at `~/Pictures`. `backend/config/configuration.json` is shipped with the project and tracked in git — edit it directly to change settings.
+
+`index.html` is served from `app/src/frontend/`, with `app.js` and `style.css` served from `app/src/frontend/static/` — no build step or bundler required, just edit and refresh.
 
 ### Why SQLite
 
@@ -259,9 +271,17 @@ New media appears in the gallery immediately — no page refresh needed.
 
 ### Albums
 - Create, rename (inline click on title or pencil icon in sidebar), and delete albums
-- **Add Photos picker** — full-screen thumbnail grid, server-paginated, with search and location filter; shows "Added" badge on photos already in the album; scrolls to load more
+- **Add Photos picker** — full-screen thumbnail grid, server-paginated, with search and location filter; shows "Added" badge on photos already in the album; scrolls to load more; **Add All** button bulk-adds every photo matching the current location filter in a single request
 - Add individual photos via the per-card context menu (⋮)
 - Remove photos from an album via context menu when inside that album view
+
+### Map
+- **⊙ Map view** — geotagged photos and videos plotted on an interactive Leaflet map (loaded from CDN — requires an internet connection for map tiles and the Leaflet/marker-cluster libraries)
+- **Clustering** — nearby items group into a cluster marker showing the most recent thumbnail and a count badge; clusters expand as you zoom
+- **Cluster panel** — clicking a cluster opens a scrollable side panel of every photo at that location, newest first, lazy-loaded as you scroll
+- **Coverage banner** — shows how many of your indexed items have GPS coordinates when it's less than the full library
+- Clicking any marker or panel thumbnail opens the full lightbox, with `←`/`→` navigation scoped to that cluster
+- Map refreshes automatically after a Sync so newly indexed GPS data appears
 
 ### Media Management
 - **Hide / unhide** — per-card context menu; hidden items are excluded from all queries by default
@@ -290,10 +310,13 @@ All media endpoints support server-side filtering via query parameters.
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/media` | Filtered, sorted, paginated media. Params: `offset`, `limit`, `sort` (`date-desc`\|`date-asc`\|`name`), `format`, `camera`, `location`, `q`, `hidden` (`true`\|`include`) |
+| GET | `/api/media/by-id/<uniqueName>` | Single full media record — used by the map panel to fetch details on demand |
 | GET | `/api/media/count` | `{total: N}` — fast indexed count |
 | GET | `/api/media/formats` | All distinct formats in the database (`SELECT DISTINCT` on indexed column) |
 | GET | `/api/media/cameras` | All distinct `Make Model` camera strings |
 | GET | `/api/media/locations` | Union of `data/media.json` sources + indexed source roots. Returns `[{root, label}]` |
+| GET | `/api/media/subdirs` | All distinct source roots and subdirectories containing indexed files, as a flat tree list. Returns `[{path, source_root, label, depth, is_root}]` — used by the photo picker's location filter |
+| GET | `/api/media/gps` | Lightweight list of non-hidden media with GPS coordinates, for the Map view. Returns `{items: [{uniqueName, name, type, lat, lng, date}], total, gps_count}` |
 | POST | `/api/media/hide` | `{"uniqueName": "…", "hidden": true\|false}` |
 
 ### Database
@@ -314,7 +337,9 @@ All media endpoints support server-side filtering via query parameters.
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/sync` | Scan all visible sources and incrementally index new media. Returns `{added, scanned, total}` |
+| POST | `/api/sync` | Start a background sync of all visible sources. Returns `202 {status: "started"}` immediately, or `409` if a sync is already running |
+| GET | `/api/sync/status` | Poll current sync state — `{running, done, scanned, added, total_at_start, current_file, current_source, log (last 50 lines), result, error}` |
+| GET | `/api/sync/stream` | Server-Sent Events stream of live sync progress — `connected`, `progress`, `log`, `complete`, `heartbeat` events; closes automatically when sync finishes |
 
 ### Albums
 
@@ -323,6 +348,7 @@ All media endpoints support server-side filtering via query parameters.
 | GET | `/api/albums` | Full albums array |
 | POST | `/api/album/create` | `{"name": "…"}` — returns created album with generated `id` |
 | POST | `/api/album/add` | `{"albumId": "…", "uniqueName": "…"}` |
+| POST | `/api/album/add-bulk` | `{"albumId": "…", "uniqueNames": ["…", …]}` — adds many photos to an album in one transaction. Returns `{ok: true, added: N}` where `N` is the number newly inserted (duplicates skipped) |
 
 ### Locations (media.json)
 
@@ -335,7 +361,7 @@ All media endpoints support server-side filtering via query parameters.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/thumb/<id>` | Thumbnail JPEG — disk-cached, size/quality from config. Supports images and video frame extraction |
+| GET | `/api/thumb/<id>` | Thumbnail JPEG — disk-cached, size/quality from config by default, overridable per-request with `?size=` and `?quality=` (used by the Map view for small 80px marker thumbnails). Supports images and video frame extraction |
 | GET | `/api/image/<id>` | Full-resolution image — HEIC transcoded to JPEG on the fly |
 | GET/HEAD | `/api/video/<id>` | Video stream with HTTP 206 range-request support |
 
@@ -349,7 +375,7 @@ All media endpoints support server-side filtering via query parameters.
 | `data/media.json` | ✗ | Source directory list — auto-created with `~/Pictures` entry on first run |
 | `data/luminary.db` | ✗ | SQLite database — media records + albums |
 | `data/luminary.db-wal` / `-shm` | ✗ | SQLite WAL files — transient, safe to delete when server is stopped |
-| `thumb/` | ✗ (contents) | Thumbnail cache — directory tracked via `.gitkeep`, contents ignored |
+| `thumb/` | ✗ | Thumbnail cache — auto-created on first run, fully git-ignored |
 | `logs/log-YYYY-MM-DD.log` | ✗ | Daily rotating log files |
 
 ---

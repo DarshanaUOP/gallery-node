@@ -410,6 +410,87 @@ def set_media_hidden(unique_name: str, hidden: bool) -> bool:
         )
     return cur.rowcount > 0
 
+def delete_media_records(unique_names) -> int:
+    """
+    Permanently remove media rows for the given uniqueNames — used whenever we
+    detect the original source file is gone (deleted/renamed on disk).
+    album_media rows cascade automatically (ON DELETE CASCADE). Also clears
+    any cached thumbnail files for those uniqueNames. Safe to call with an
+    empty list. Returns the number of DB rows actually deleted.
+    """
+    unique_names = [u for u in (unique_names or []) if u]
+    if not unique_names:
+        return 0
+    conn = get_db_conn()
+    deleted = 0
+    with _db_lock:
+        with conn:
+            for un in unique_names:
+                cur = conn.execute("DELETE FROM media WHERE uniqueName = ?", (un,))
+                deleted += cur.rowcount
+    for un in unique_names:
+        _delete_thumb_files(un)
+    if deleted:
+        preview = ", ".join(unique_names[:10]) + ("…" if len(unique_names) > 10 else "")
+        log.info("Removed %d media record(s) for missing source file(s): %s", deleted, preview)
+    return deleted
+
+
+def _delete_thumb_files(unique_name: str):
+    """
+    Delete every cached thumbnail variant for a uniqueName. Cache filenames
+    are '<uniqueName>_<size>q<quality>.jpg', so there can be more than one
+    per item if it was ever viewed at different sizes/qualities.
+    """
+    try:
+        thumb_dir = _get_thumb_cache_dir()
+    except NameError:
+        # Flask routes (and _get_thumb_cache_dir) aren't defined in --sync-only
+        # mode without Flask installed — fall back to the default thumb dir.
+        thumb_dir = THUMB_DIR
+    try:
+        for f in thumb_dir.glob(f"{unique_name}_*.jpg"):
+            try:
+                f.unlink()
+            except OSError as e:
+                log.warning("Could not delete cached thumbnail %s: %s", f, e)
+    except OSError as e:
+        log.warning("Could not scan thumbnail cache dir for %s: %s", unique_name, e)
+
+
+def _prune_missing_media(source_roots, emit=None) -> int:
+    """
+    For every media record whose source_root was confirmed reachable this
+    sync run, check whether the original file still exists on disk. Records
+    whose file is gone (deleted/renamed) are removed, along with their
+    cached thumbnails. Scoping to *reachable* roots only means a source that
+    is temporarily offline/unmounted won't have its entire library wiped —
+    the same caution the scan loop already applies via os.path.isdir().
+    """
+    if not source_roots:
+        return 0
+    conn = get_db_conn()
+    placeholders = ",".join("?" for _ in source_roots)
+    rows = conn.execute(
+        f"SELECT uniqueName, file_path, name FROM media WHERE source_root IN ({placeholders})",
+        source_roots,
+    ).fetchall()
+
+    missing = []
+    for r in rows:
+        full_path = os.path.join(r["file_path"] or "", r["name"] or "")
+        if not r["file_path"] or not r["name"] or not os.path.isfile(full_path):
+            missing.append(r["uniqueName"])
+
+    if missing:
+        log.info("Sync: %d file(s) no longer found on disk — removing from library", len(missing))
+        if emit:
+            emit("log", msg=f"Removed {len(missing)} missing file(s) from library")
+        delete_media_records(missing)
+
+    return len(missing)
+
+
 def get_existing_hashes_and_paths() -> tuple:
     """
     Return (set of hashes, set of resolved full paths) for dedup checks.
@@ -1077,6 +1158,24 @@ def sync_library(progress=None) -> dict:
         {f.lower() for f in cfg.get("supported_video_formats", [])}
     )
 
+    # ── Phase 1: figure out which sources are reachable right now, and prune
+    # any DB records under them whose file is gone — BEFORE computing the
+    # dedup hash/path snapshot below. This ordering matters: on a rename,
+    # the new filename hashes identically to the old (now-stale) row. If we
+    # pruned *after* scanning, that stale row would still be in the dedup
+    # snapshot, the renamed file would look like a duplicate and get
+    # skipped, and the add would only happen on the *next* sync. Pruning
+    # first means the rename is detected as new content in this same run.
+    reachable_roots = []
+    for source in sources:
+        if not source.get("visibility", True):
+            continue
+        dir_path = source.get("path", "").rstrip("/\\")
+        if os.path.isdir(dir_path):
+            reachable_roots.append(str(Path(dir_path).resolve()))
+
+    removed = _prune_missing_media(reachable_roots, emit=emit) if reachable_roots else 0
+
     existing_hashes, existing_paths = get_existing_hashes_and_paths()
 
     added       = 0
@@ -1181,9 +1280,9 @@ def sync_library(progress=None) -> dict:
         upsert_media_rows(new_entries)
 
     total = get_media_count()
-    log.info("Sync complete — scanned %d, added %d, total %d", scanned, added, total)
-    emit("log", msg=f"Sync complete — {added} new, {total} total")
-    return {"added": added, "scanned": scanned, "total": total}
+    log.info("Sync complete — scanned %d, added %d, removed %d, total %d", scanned, added, removed, total)
+    emit("log", msg=f"Sync complete — {added} new, {removed} removed, {total} total")
+    return {"added": added, "scanned": scanned, "removed": removed, "total": total}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1191,7 +1290,8 @@ def sync_library(progress=None) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 if FLASK_AVAILABLE:
-    app = Flask(__name__, static_folder=".", static_url_path="")
+    frontend_dir = BASE_DIR.parent / "frontend"
+    app = Flask(__name__, static_folder=str(frontend_dir), static_url_path="")
     CORS(app, expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"])
 
     @app.route("/")
@@ -1215,6 +1315,14 @@ if FLASK_AVAILABLE:
         save_json(CONFIG_JSON, cfg)
         log.info("configuration.json updated")
         return jsonify({"ok": True})
+
+    @app.route("/api/media/by-id/<unique_name>", methods=["GET"])
+    def api_media_by_id(unique_name):
+        """Return a single full media record by uniqueName. Used by the map panel."""
+        item = get_media_by_unique_name(unique_name)
+        if not item:
+            return jsonify({"error": "Not found"}), 404
+        return jsonify(item)
 
     @app.route("/api/media/count", methods=["GET"])
     def api_media_count():
@@ -1276,6 +1384,54 @@ if FLASK_AVAILABLE:
         """
         return jsonify(get_distinct_subdirs())
 
+    @app.route("/api/media/gps", methods=["GET"])
+    def api_media_gps():
+        """
+        Return a lightweight list of all non-hidden media that has GPS coordinates.
+        Each item contains only what the map needs — no full metadata blob.
+        Response: {
+          items: [{uniqueName, name, type, lat, lng, date}],
+          total: N,          -- total media in db (including those without GPS)
+          gps_count: N       -- number that have GPS coords
+        }
+        """
+        conn = get_db_conn()
+        with _db_lock:
+            total = conn.execute("SELECT COUNT(*) FROM media WHERE isHidden = 0").fetchone()[0]
+            rows  = conn.execute(
+                "SELECT uniqueName, name, type, date_sort, metadata_json FROM media WHERE isHidden = 0"
+            ).fetchall()
+
+        items = []
+        for r in rows:
+            try:
+                meta = json.loads(r["metadata_json"]) if r["metadata_json"] else {}
+                loc  = meta.get("location", {}) or {}
+                lat  = loc.get("latitude")
+                lng  = loc.get("longitude")
+                if lat is None or lng is None:
+                    continue
+                lat = float(lat)
+                lng = float(lng)
+                if lat == 0.0 and lng == 0.0:
+                    continue
+                items.append({
+                    "uniqueName": r["uniqueName"],
+                    "name":       r["name"],
+                    "type":       r["type"],
+                    "lat":        lat,
+                    "lng":        lng,
+                    "date":       r["date_sort"] or "",
+                })
+            except (ValueError, TypeError, json.JSONDecodeError):
+                continue
+
+        return jsonify({
+            "items":     items,
+            "total":     total,
+            "gps_count": len(items),
+        })
+
     @app.route("/api/media", methods=["GET"])
     def api_media():
         """
@@ -1311,15 +1467,35 @@ if FLASK_AVAILABLE:
     # ── shared image helpers ──────────────────────────────────────────────────
 
     def _resolve_path(unique_name):
-        """Return (full_path, item) or raise 404. Uses indexed SQLite primary key lookup."""
+        """
+        Return (full_path, item) or raise 404. Uses indexed SQLite primary key lookup.
+
+        Self-healing: if the DB record exists but the underlying file is gone
+        (deleted/renamed since the last sync), the record and its cached
+        thumbnail are removed on the spot — this is what actually purges an
+        item when a user simply browses to it (e.g. via /api/image/<uniqueName>),
+        without waiting for the next full sync.
+
+        Safety: if the file's source_root itself isn't reachable (e.g. a
+        network drive that's temporarily unmounted), we do NOT delete —
+        that would look identical to "every file in this source is missing"
+        and wipe the whole source. We only prune when the source directory
+        is confirmed up but the individual file specifically is not.
+        """
         from flask import abort
         item = get_media_by_unique_name(unique_name)
         if not item:
             abort(404)
-        file_dir  = item.get("metadata", {}).get("file", {}).get("path", "")
+        file_meta = item.get("metadata", {}).get("file", {})
+        file_dir  = file_meta.get("path", "")
         full_path = os.path.join(file_dir, item["name"])
         if not os.path.isfile(full_path):
-            log.warning("File not found on disk: %s", full_path)
+            source_root = file_meta.get("source_root", "")
+            if not source_root or os.path.isdir(source_root):
+                log.warning("File not found on disk — removing stale record: %s", full_path)
+                delete_media_records([unique_name])
+            else:
+                log.warning("File not found and source root unreachable — leaving record intact: %s", full_path)
             abort(404)
         return full_path, item
 
@@ -1671,7 +1847,7 @@ if FLASK_AVAILABLE:
                     running=False, done=True,
                     result=result,
                     current_file="", current_source="",
-                    log=f"✓ Complete — {result['added']} new, {result['total']} total",
+                    log=f"✓ Complete — {result['added']} new, {result.get('removed', 0)} removed, {result['total']} total",
                 )
             except Exception as e:
                 log.exception("Background sync failed")

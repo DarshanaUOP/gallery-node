@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Luminary — Local Media Gallery</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- Leaflet MarkerCluster -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.min.js"></script>
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside id="sidebar">
+  <div class="sidebar-logo">
+    <h1>Luminary</h1>
+    <span>Local Media Gallery</span>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-label">Library</div>
+    <div class="nav-item active" data-view="all" onclick="setView('all', this)">
+      <span class="icon">◈</span> All Photos
+    </div>
+    <div class="nav-item" data-view="hidden" onclick="setView('hidden', this)">
+      <span class="icon">◌</span> Hidden
+    </div>
+    <div class="nav-item" data-view="map" onclick="setView('map', this)">
+      <span class="icon">⊙</span> Map
+    </div>
+  </div>
+
+  <div class="sidebar-section">
+    <div class="sidebar-label" style="display:flex;justify-content:space-between;align-items:center;padding-right:12px">
+      Albums
+      <span style="cursor:pointer;color:var(--accent);font-size:16px" onclick="openCreateAlbum()" title="New album">+</span>
+    </div>
+    <div id="album-nav" class="sidebar-albums"></div>
+  </div>
+
+  <div class="sidebar-footer">
+    <div style="font-size:10px;color:var(--text-muted);line-height:1.6">
+      <div id="footer-count">— photos indexed</div>
+      <div id="footer-albums">— albums</div>
+    </div>
+    <div style="margin-top:12px">
+      <button class="btn btn-ghost" style="width:100%;justify-content:center;font-size:11px" onclick="openSettings()">⚙ Settings</button>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<div id="main">
+
+  <!-- TOPBAR -->
+  <div id="topbar">
+    <div class="topbar-title" id="topbar-title">All Photos</div>
+    <div class="search-wrap">
+      <span class="search-icon">⌕</span>
+      <input type="text" id="search-input" placeholder="Search by name, camera, date…" oninput="applyFilters()">
+    </div>
+    <div class="toggle-wrap">
+      <span>Hidden</span>
+      <div class="toggle" id="show-hidden-toggle" onclick="toggleHidden(this)"></div>
+    </div>
+    <button class="btn btn-ghost" onclick="openCreateAlbum()">＋ Album</button>
+    <button class="btn btn-ghost" onclick="openLocationsManager()">⊞ Locations</button>
+    <button class="btn btn-accent" onclick="triggerSync()">↻ Sync</button>
+  </div>
+
+  <!-- FILTER BAR -->
+  <div id="filterbar">
+    <span class="filter-chip active" data-sort="date-desc" onclick="setSort('date-desc',this)">Newest First</span>
+    <span class="filter-chip" data-sort="date-asc" onclick="setSort('date-asc',this)">Oldest First</span>
+    <span class="filter-chip" data-sort="name" onclick="setSort('name',this)">Name</span>
+    <div class="filter-sep"></div>
+    <select class="filter-select" id="filter-format" onchange="applyFilters()">
+      <option value="">All Formats</option>
+    </select>
+    <select class="filter-select" id="filter-camera" onchange="applyFilters()">
+      <option value="">All Cameras</option>
+    </select>
+    <select class="filter-select" id="filter-location" onchange="applyFilters()" style="max-width:200px">
+      <option value="">All Locations</option>
+    </select>
+  </div>
+
+  <!-- CONTENT -->
+  <div id="content">
+    <div id="album-header">
+      <span class="album-header-icon">⬡</span>
+      <div>
+        <div class="album-header-name" id="album-header-name"
+             title="Click to rename" onclick="startInlineRename()"></div>
+        <div class="album-header-count" id="album-header-count"></div>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-ghost" onclick="startInlineRename()" title="Rename album">✎ Rename</button>
+        <button class="btn btn-accent" id="add-photos-btn" onclick="openPhotoPicker()">＋ Add Photos</button>
+        <button class="btn btn-danger" id="delete-album-btn" onclick="deleteCurrentAlbum()">✕ Delete Album</button>
+      </div>
+    </div>
+
+    <div id="stats-bar">
+      <div class="stat"><strong id="stat-visible">0</strong> visible</div>
+      <div class="stat"><strong id="stat-hidden">0</strong> hidden</div>
+      <div class="stat"><strong id="stat-albums">0</strong> albums</div>
+    </div>
+
+    <div id="empty-state">
+      <div class="empty-icon">⬡</div>
+      <div class="empty-title">No media found</div>
+      <div class="empty-sub">Add directories to media.json and hit Sync to index your photos.</div>
+    </div>
+
+    <div id="gallery-grid"></div>
+    <div id="load-more-trigger"></div>
+
+    <!-- MAP VIEW -->
+    <div id="map-view">
+      <div id="map-gps-banner">
+        <span id="map-gps-text"></span>
+      </div>
+      <div id="map-container">
+        <!-- Cluster photo panel — slides in from the right over the map -->
+        <div id="map-cluster-panel">
+          <div id="map-cluster-panel-header">
+            <span id="map-cluster-panel-title">Photos</span>
+            <button id="map-cluster-panel-close" onclick="closeMapClusterPanel()">✕</button>
+          </div>
+          <div id="map-cluster-panel-grid"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCROLL DATE INDICATOR -->
+<div id="scroll-date-pill">
+  <span id="scroll-date-text"></span>
+</div>
+
+<!-- CONTEXT MENU -->
+<div id="ctx-menu">
+  <div class="ctx-item" onclick="ctxAddToAlbum()"><span>⬡</span> Add to Album</div>
+  <div class="ctx-item" onclick="ctxRemoveFromAlbum()"><span>⊟</span> Remove from Album</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxToggleHide()"><span id="ctx-hide-label-icon">◌</span> <span id="ctx-hide-label">Hide Image</span></div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="ctxViewMeta()"><span>≡</span> View Metadata</div>
+</div>
+
+<!-- LIGHTBOX -->
+<div id="lightbox">
+
+  <!-- LEFT: media fills all available space -->
+  <div id="lb-left">
+    <div id="lb-content"></div>
+  </div>
+
+  <!-- RIGHT: controls + details panel -->
+  <div id="lb-right">
+
+    <!-- Header row: filename + close -->
+    <div id="lb-right-header">
+      <div id="lb-filename"></div>
+      <button id="lb-close" onclick="closeLightbox()">✕</button>
+    </div>
+
+    <!-- Navigation -->
+    <div id="lb-nav">
+      <button onclick="lbNav(-1)">← Prev</button>
+      <span id="lb-nav-counter"></span>
+      <button onclick="lbNav(1)">Next →</button>
+    </div>
+
+    <!-- Zoom bar (images only — shown after full load) -->
+    <div id="lb-zoom-bar">
+      <span style="font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-muted)">Zoom</span>
+      <button class="lb-zoom-btn" onclick="lbZoom(-0.25)" title="Zoom out (−)">−</button>
+      <span id="lb-zoom-level">100%</span>
+      <button class="lb-zoom-btn" onclick="lbZoom(+0.25)" title="Zoom in (+)">+</button>
+      <button class="lb-zoom-btn" onclick="lbZoomReset()" title="Fit">⊡</button>
+      <button class="lb-zoom-btn" onclick="lbZoom100()" title="Actual size">1:1</button>
+    </div>
+
+    <!-- Scrollable details -->
+    <div id="lb-details"></div>
+
+  </div>
+</div>
+
+<!-- ADD TO ALBUM MODAL -->
+<div class="modal-overlay" id="add-album-modal">
+  <div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeModal('add-album-modal')">✕</button>
+    <h2>Add to Album</h2>
+    <div id="album-list-select"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('add-album-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="confirmAddToAlbum()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE ALBUM MODAL -->
+<div class="modal-overlay" id="create-album-modal">
+  <div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeModal('create-album-modal')">✕</button>
+    <h2>New Album</h2>
+    <input type="text" id="new-album-name" placeholder="Album name…">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('create-album-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="confirmCreateAlbum()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- METADATA MODAL -->
+<div class="modal-overlay" id="meta-modal">
+  <div class="modal" style="position:relative;max-width:560px;width:560px">
+    <button class="modal-close" onclick="closeModal('meta-modal')">✕</button>
+    <h2 id="meta-modal-title">Metadata</h2>
+    <div id="meta-content"></div>
+  </div>
+</div>
+
+<!-- PHOTO PICKER MODAL -->
+<div id="photo-picker" role="dialog" aria-modal="true">
+  <div id="photo-picker-inner">
+    <div id="photo-picker-header">
+      <div id="photo-picker-title-wrap">
+        <span id="photo-picker-title">Add Photos to Album</span>
+        <span id="photo-picker-sel-count"></span>
+      </div>
+      <div id="photo-picker-actions">
+        <input type="text" id="photo-picker-search" placeholder="Search…" oninput="filterPickerGrid()">
+        <select id="photo-picker-location" class="filter-select" onchange="_pickerLocationChanged()" style="max-width:200px">
+          <option value="">All Locations</option>
+        </select>
+        <button class="btn btn-ghost" id="picker-add-all-btn" onclick="addAllFromLocation()" title="Add all photos from the selected location to the album" style="display:none">⊕ Add All</button>
+        <button class="btn btn-ghost" onclick="pickerSelectAll()">Select All</button>
+        <button class="btn btn-ghost" onclick="pickerClearAll()">Clear</button>
+        <button class="btn btn-accent" id="picker-confirm-btn" onclick="confirmPhotoPicker()">Add Selected</button>
+        <button class="btn btn-ghost" onclick="closePhotoPicker()">✕ Cancel</button>
+      </div>
+    </div>
+    <div id="photo-picker-grid"></div>
+  </div>
+</div>
+
+<!-- LOCATIONS MANAGER MODAL -->
+<div class="modal-overlay" id="locations-modal">
+  <div class="modal" style="position:relative;width:580px;max-width:96vw">
+    <button class="modal-close" onclick="closeModal('locations-modal')">✕</button>
+    <h2>Media Locations</h2>
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:18px;line-height:1.6">
+      Directories scanned during Sync. Toggle visibility to include or exclude a location without deleting it.
+    </p>
+    <div id="locations-list"></div>
+    <div id="locations-add-form" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
+      <div style="font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-muted);margin-bottom:10px">Add New Location</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <input type="text" id="loc-new-name" placeholder="Label  (e.g. Travel Photos)">
+        <input type="text" id="loc-new-path" placeholder="Absolute path  (e.g. /home/user/photos/travel)">
+        <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-dim)">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="loc-new-vis" checked style="accent-color:var(--accent)">
+            Visible (scanned during Sync)
+          </label>
+          <button class="btn btn-accent" style="margin-left:auto" onclick="addLocation()">＋ Add</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('locations-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="saveLocations()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- SETTINGS PANEL -->
+<div id="settings-overlay" class="modal-overlay">
+  <div id="settings-panel" class="modal" style="position:relative;width:640px;max-width:96vw;max-height:88vh;overflow-y:auto">
+    <button class="modal-close" onclick="closeSettings()">✕</button>
+    <h2 style="margin-bottom:6px">Settings</h2>
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:24px">Changes are saved immediately to <code style="background:var(--surface2);padding:1px 5px;border-radius:3px">data/configuration.json</code></p>
+
+    <!-- ── APPEARANCE ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Appearance</div>
+
+      <div class="settings-row">
+        <div class="settings-label">Theme</div>
+        <select class="settings-select" id="s-theme">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+          <option value="system">System</option>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">Grid Columns</div>
+        <select class="settings-select" id="s-grid-columns">
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="auto">Auto</option>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">Card Size</div>
+        <select class="settings-select" id="s-card-size">
+          <option value="small">Small</option>
+          <option value="medium">Medium</option>
+          <option value="large">Large</option>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">Show filename on cards</div>
+        <div class="settings-toggle" id="s-show-filename" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Show date on cards</div>
+        <div class="settings-toggle" id="s-show-date" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Show subfolder path on cards</div>
+        <div class="settings-toggle" id="s-show-subfolder" onclick="settingsToggle(this)"></div>
+      </div>
+    </div>
+
+    <!-- ── SORTING & FILTERING ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Sorting &amp; Filtering</div>
+
+      <div class="settings-row">
+        <div class="settings-label">Default sort order</div>
+        <select class="settings-select" id="s-default-sort">
+          <option value="date-desc">Newest First</option>
+          <option value="date-asc">Oldest First</option>
+          <option value="name">Name</option>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">Default date field</div>
+        <select class="settings-select" id="s-default-date-field">
+          <option value="modified">Modified Date</option>
+          <option value="created">Created Date</option>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">Show hidden media by default</div>
+        <div class="settings-toggle" id="s-show-hidden-default" onclick="settingsToggle(this)"></div>
+      </div>
+    </div>
+
+    <!-- ── PERFORMANCE ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Performance</div>
+
+      <div class="settings-row">
+        <div class="settings-label">Lazy load batch size <span class="settings-hint">cards per scroll batch</span></div>
+        <input class="settings-input" id="s-lazy-load-batch" type="number" min="10" max="200" step="10">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Media page size <span class="settings-hint">items per API page</span></div>
+        <input class="settings-input" id="s-media-page-size" type="number" min="50" max="2000" step="50">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Thumbnail size <span class="settings-hint">px max-side</span></div>
+        <input class="settings-input" id="s-thumbnail-size" type="number" min="100" max="800" step="50">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Thumbnail quality <span class="settings-hint">JPEG 1–95</span></div>
+        <input class="settings-input" id="s-thumbnail-quality" type="number" min="1" max="95" step="5">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Thumbnail cache path <span class="settings-hint">relative to project root, or absolute</span></div>
+        <input class="settings-input settings-input-wide" id="s-thumbnail-cache-path" type="text" placeholder="e.g. thumb  or  /mnt/ssd/thumbs">
+      </div>
+    </div>
+
+    <!-- ── MEDIA TYPES ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Media Types</div>
+
+      <div class="settings-row settings-row-top">
+        <div class="settings-label">Image formats</div>
+        <div class="settings-chips" id="s-image-formats"></div>
+      </div>
+      <div class="settings-row settings-row-top">
+        <div class="settings-label">Video formats</div>
+        <div class="settings-chips" id="s-video-formats"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Auto-play video in lightbox</div>
+        <div class="settings-toggle" id="s-video-autoplay" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Video preload</div>
+        <select class="settings-select" id="s-video-preload">
+          <option value="none">None</option>
+          <option value="metadata">Metadata only</option>
+          <option value="auto">Auto</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- ── SYNC BEHAVIOUR ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Sync Behaviour</div>
+
+      <div class="settings-row">
+        <div class="settings-label">Follow symlinks</div>
+        <div class="settings-toggle" id="s-follow-symlinks" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Skip hidden directories <span class="settings-hint">folders starting with .</span></div>
+        <div class="settings-toggle" id="s-skip-hidden-dirs" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Max scan depth <span class="settings-hint">0 = unlimited</span></div>
+        <input class="settings-input" id="s-max-scan-depth" type="number" min="0" max="20" step="1">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Duplicate detection</div>
+        <select class="settings-select" id="s-dedup-method">
+          <option value="both">Path + Hash (safest)</option>
+          <option value="path">Path only (faster)</option>
+          <option value="hash">Hash only (cross-dir)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- ── METADATA ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Metadata</div>
+
+      <div class="settings-row">
+        <div class="settings-label">Show GPS coordinates in metadata panel</div>
+        <div class="settings-toggle" id="s-show-gps" onclick="settingsToggle(this)"></div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Extract video metadata via ffprobe</div>
+        <div class="settings-toggle" id="s-extract-video-meta" onclick="settingsToggle(this)"></div>
+      </div>
+    </div>
+
+    <!-- ── SERVER ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Server</div>
+
+      <div class="settings-row">
+        <div class="settings-label">API port <span class="settings-hint">requires restart</span></div>
+        <input class="settings-input" id="s-api-port" type="number" min="1024" max="65535">
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Log level</div>
+        <select class="settings-select" id="s-log-level">
+          <option value="DEBUG">Debug</option>
+          <option value="INFO">Info</option>
+          <option value="WARNING">Warning</option>
+          <option value="ERROR">Error</option>
+        </select>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">Log retention days</div>
+        <input class="settings-input" id="s-log-retention" type="number" min="1" max="365">
+      </div>
+    </div>
+
+    <div class="modal-actions" style="position:sticky;bottom:0;background:var(--surface);padding:16px 0 4px;margin-top:8px;border-top:1px solid var(--border)">
+      <div id="settings-status" style="font-size:11px;color:var(--text-muted);flex:1;line-height:1.6"></div>
+      <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button class="btn btn-accent" onclick="saveSettings()">Save Settings</button>
+    </div>
+  </div>
+</div>
+
+<!-- SYNC OVERLAY -->
+<div id="sync-overlay">
+  <div class="sync-card">
+    <div class="sync-card-header">
+      <div class="sync-spinner" id="sync-spinner"></div>
+      <span id="sync-title">Synchronising media library…</span>
+    </div>
+    <div id="sync-source"></div>
+    <div id="sync-counters">
+      <div class="sync-counter">
+        <span class="sync-counter-val" id="sync-added">0</span>
+        <span class="sync-counter-label">Added</span>
+      </div>
+      <div class="sync-counter">
+        <span class="sync-counter-val" id="sync-scanned">0</span>
+        <span class="sync-counter-label">Scanned</span>
+      </div>
+      <div class="sync-counter">
+        <span class="sync-counter-val" id="sync-removed">0</span>
+        <span class="sync-counter-label">Removed</span>
+      </div>
+    </div>
+    <div id="sync-file"></div>
+    <div id="sync-log"></div>
+    <button class="btn btn-ghost" id="sync-close-btn" onclick="closeSyncOverlay()">✓ Done</button>
+  </div>
+</div>
+
+<!-- TOAST CONTAINER -->
+<div id="toast-container"></div>
+
+<script src="static/app.js"></script>
+</body>

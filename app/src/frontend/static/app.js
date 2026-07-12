@@ -1,1891 +1,3 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Luminary — Local Media Gallery</title>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #0a0a0b;
-    --surface: #111113;
-    --surface2: #1a1a1e;
-    --border: rgba(255,255,255,0.07);
-    --border-hover: rgba(255,255,255,0.15);
-    --text: #e8e6e0;
-    --text-muted: #6b6860;
-    --text-dim: #9e9b94;
-    --accent: #c8a97e;
-    --accent-dim: rgba(200,169,126,0.15);
-    --accent-glow: rgba(200,169,126,0.08);
-    --danger: #c87e7e;
-    --success: #7ec8a0;
-    --radius: 4px;
-    --font-display: 'Cormorant Garamond', Georgia, serif;
-    --font-mono: 'DM Mono', monospace;
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 13px;
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
-
-  /* ── SIDEBAR ── */
-  #sidebar {
-    position: fixed;
-    left: 0; top: 0; bottom: 0;
-    width: 220px;
-    background: var(--surface);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    z-index: 100;
-    transition: transform 0.3s ease;
-  }
-
-  .sidebar-logo {
-    padding: 28px 24px 20px;
-    border-bottom: 1px solid var(--border);
-  }
-  .sidebar-logo h1 {
-    font-family: var(--font-display);
-    font-size: 22px;
-    font-weight: 300;
-    color: var(--accent);
-    letter-spacing: 0.05em;
-  }
-  .sidebar-logo span {
-    display: block;
-    font-size: 10px;
-    color: var(--text-muted);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    margin-top: 3px;
-  }
-
-  .sidebar-section {
-    padding: 16px 0 8px;
-  }
-  .sidebar-label {
-    padding: 0 24px 8px;
-    font-size: 9px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-  }
-
-  .nav-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 9px 24px;
-    cursor: pointer;
-    color: var(--text-dim);
-    transition: all 0.15s;
-    border-left: 2px solid transparent;
-    font-size: 12px;
-  }
-  .nav-item:hover { color: var(--text); background: var(--accent-glow); }
-  .nav-item.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-dim); }
-  .nav-item .icon { font-size: 14px; width: 16px; text-align: center; flex-shrink: 0; }
-
-  .sidebar-albums {
-    flex: 1;
-    overflow-y: auto;
-    padding-bottom: 16px;
-  }
-  .sidebar-albums::-webkit-scrollbar { width: 3px; }
-  .sidebar-albums::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-  .album-nav-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 7px 24px 7px 20px;
-    cursor: pointer;
-    color: var(--text-dim);
-    font-size: 11px;
-    border-left: 2px solid transparent;
-    transition: all 0.15s;
-  }
-  .album-nav-item:hover { color: var(--text); background: var(--accent-glow); }
-  .album-nav-item.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-dim); }
-  .album-count {
-    font-size: 10px;
-    color: var(--text-muted);
-    background: var(--surface2);
-    padding: 1px 6px;
-    border-radius: 10px;
-  }
-
-  .sidebar-footer {
-    padding: 16px 24px;
-    border-top: 1px solid var(--border);
-  }
-
-  /* ── MAIN ── */
-  #main {
-    margin-left: 220px;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* ── TOPBAR ── */
-  #topbar {
-    position: sticky;
-    top: 0;
-    z-index: 50;
-    background: rgba(10,10,11,0.85);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border);
-    padding: 14px 32px;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
-
-  .topbar-title {
-    font-family: var(--font-display);
-    font-size: 18px;
-    font-weight: 300;
-    color: var(--text);
-    flex: 1;
-  }
-
-  .search-wrap {
-    position: relative;
-  }
-  .search-wrap input {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    padding: 7px 14px 7px 34px;
-    width: 220px;
-    outline: none;
-    transition: all 0.2s;
-  }
-  .search-wrap input:focus { border-color: var(--accent); width: 280px; }
-  .search-wrap input::placeholder { color: var(--text-muted); }
-  .search-icon {
-    position: absolute;
-    left: 11px; top: 50%;
-    transform: translateY(-50%);
-    color: var(--text-muted);
-    font-size: 12px;
-    pointer-events: none;
-  }
-
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 7px 16px;
-    border-radius: var(--radius);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    cursor: pointer;
-    border: 1px solid;
-    transition: all 0.15s;
-    letter-spacing: 0.04em;
-  }
-  .btn-ghost {
-    background: transparent;
-    border-color: var(--border);
-    color: var(--text-dim);
-  }
-  .btn-ghost:hover { border-color: var(--border-hover); color: var(--text); background: var(--surface2); }
-  .btn-accent {
-    background: var(--accent-dim);
-    border-color: rgba(200,169,126,0.3);
-    color: var(--accent);
-  }
-  .btn-accent:hover { background: rgba(200,169,126,0.22); border-color: var(--accent); }
-  .btn-danger {
-    background: rgba(200,126,126,0.1);
-    border-color: rgba(200,126,126,0.3);
-    color: var(--danger);
-  }
-  .btn-danger:hover { background: rgba(200,126,126,0.2); }
-
-  .toggle-wrap {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-  .toggle {
-    width: 32px; height: 18px;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    cursor: pointer;
-    position: relative;
-    transition: background 0.2s;
-  }
-  .toggle.on { background: rgba(200,169,126,0.3); border-color: var(--accent); }
-  .toggle::after {
-    content: '';
-    position: absolute;
-    width: 12px; height: 12px;
-    background: var(--text-muted);
-    border-radius: 50%;
-    top: 2px; left: 2px;
-    transition: all 0.2s;
-  }
-  .toggle.on::after { left: 16px; background: var(--accent); }
-
-  /* ── FILTER BAR ── */
-  #filterbar {
-    padding: 12px 32px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    background: var(--surface);
-  }
-  .filter-chip {
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-size: 11px;
-    cursor: pointer;
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    transition: all 0.15s;
-  }
-  .filter-chip:hover { border-color: var(--border-hover); color: var(--text); }
-  .filter-chip.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
-  .filter-sep { width: 1px; height: 20px; background: var(--border); }
-
-  select.filter-select {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text-dim);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 4px 10px;
-    outline: none;
-    cursor: pointer;
-  }
-  select.filter-select:focus { border-color: var(--accent); }
-
-  /* ── GALLERY ── */
-  #content {
-    flex: 1;
-    padding: 28px 32px;
-  }
-
-  #stats-bar {
-    display: flex;
-    align-items: center;
-    gap: 24px;
-    margin-bottom: 20px;
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-  .stat { display: flex; align-items: center; gap: 6px; }
-  .stat strong { color: var(--text-dim); }
-
-  #gallery-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    grid-auto-rows: 220px;
-    gap: 10px;
-  }
-
-  .media-item {
-    position: relative;
-    overflow: hidden;
-    border-radius: var(--radius);
-    background: var(--surface2);
-    cursor: pointer;
-    border: 1px solid transparent;
-    transition: border-color 0.2s;
-  }
-  .media-item:hover { border-color: var(--border-hover); }
-  .media-item:hover .item-overlay { opacity: 1; }
-  .media-item:hover .item-menu-btn { opacity: 1; }
-
-  .media-item img {
-    width: 100%;
-    height: 100%;
-    display: block;
-    object-fit: cover;
-    border-radius: var(--radius);
-    transition: transform 0.3s ease;
-  }
-  .media-item:hover img { transform: scale(1.02); }
-
-  /* Placeholder when no real images */
-  .media-placeholder {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    color: var(--text-muted);
-    font-size: 11px;
-    background: var(--surface2);
-    border-radius: var(--radius);
-  }
-  .media-placeholder .ph-icon { font-size: 28px; opacity: 0.4; }
-
-  .item-overlay {
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 50%);
-    opacity: 0;
-    transition: opacity 0.2s;
-    pointer-events: none;
-  }
-
-  .item-info {
-    position: absolute;
-    bottom: 8px; left: 10px; right: 36px;
-    pointer-events: none;
-  }
-  .item-name {
-    font-size: 10px;
-    color: rgba(255,255,255,0.85);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .item-date {
-    font-size: 9px;
-    color: rgba(255,255,255,0.5);
-    margin-top: 1px;
-  }
-  .item-path {
-    font-size: 9px;
-    color: rgba(200,169,126,0.6);
-    margin-top: 1px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .item-menu-btn {
-    position: absolute;
-    top: 8px; right: 8px;
-    width: 28px; height: 28px;
-    background: rgba(0,0,0,0.6);
-    border: 1px solid rgba(255,255,255,0.15);
-    border-radius: var(--radius);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.2s;
-    z-index: 2;
-    font-size: 14px;
-    color: white;
-  }
-  .item-menu-btn:hover { background: rgba(0,0,0,0.85); border-color: rgba(255,255,255,0.3); }
-
-  /* Video play badge */
-  .play-btn-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-  }
-  .play-btn-circle {
-    width: 44px; height: 44px;
-    background: rgba(0,0,0,0.55);
-    border: 2px solid rgba(255,255,255,0.7);
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    backdrop-filter: blur(2px);
-    transition: transform 0.15s, background 0.15s;
-  }
-  .media-item:hover .play-btn-circle {
-    background: rgba(200,169,126,0.75);
-    border-color: var(--accent);
-    transform: scale(1.12);
-  }
-  .play-btn-triangle {
-    width: 0; height: 0;
-    border-top: 9px solid transparent;
-    border-bottom: 9px solid transparent;
-    border-left: 16px solid rgba(255,255,255,0.9);
-    margin-left: 4px;
-  }
-  .media-item:hover .play-btn-triangle { border-left-color: #fff; }
-
-  .video-duration {
-    position: absolute;
-    bottom: 8px; right: 8px;
-    background: rgba(0,0,0,0.65);
-    color: rgba(255,255,255,0.9);
-    font-size: 9px;
-    padding: 2px 6px;
-    border-radius: 3px;
-    letter-spacing: 0.04em;
-    pointer-events: none;
-  }
-
-  .hidden-badge {
-    position: absolute;
-    top: 8px; left: 8px;
-    background: rgba(200,126,126,0.8);
-    color: white;
-    font-size: 8px;
-    padding: 2px 6px;
-    border-radius: 10px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  /* ── CONTEXT MENU ── */
-  #ctx-menu {
-    position: fixed;
-    background: var(--surface);
-    border: 1px solid var(--border-hover);
-    border-radius: 6px;
-    padding: 6px 0;
-    min-width: 170px;
-    z-index: 1000;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    display: none;
-  }
-  .ctx-item {
-    padding: 9px 16px;
-    cursor: pointer;
-    font-size: 12px;
-    color: var(--text-dim);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    transition: all 0.1s;
-  }
-  .ctx-item:hover { background: var(--surface2); color: var(--text); }
-  .ctx-item.danger { color: var(--danger); }
-  .ctx-item.danger:hover { background: rgba(200,126,126,0.1); }
-  .ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
-
-  /* ── MODALS ── */
-  .modal-overlay {
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.75);
-    backdrop-filter: blur(4px);
-    z-index: 500;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.2s;
-  }
-  .modal-overlay.open { opacity: 1; pointer-events: all; }
-
-  .modal {
-    background: var(--surface);
-    border: 1px solid var(--border-hover);
-    border-radius: 8px;
-    padding: 28px;
-    width: 440px;
-    max-height: 80vh;
-    overflow-y: auto;
-    transform: translateY(8px);
-    transition: transform 0.2s;
-  }
-  .modal-overlay.open .modal { transform: translateY(0); }
-  .modal h2 {
-    font-family: var(--font-display);
-    font-size: 20px;
-    font-weight: 300;
-    color: var(--text);
-    margin-bottom: 20px;
-  }
-  .modal input, .modal select {
-    width: 100%;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    padding: 9px 12px;
-    outline: none;
-    transition: border-color 0.2s;
-    margin-bottom: 12px;
-  }
-  .modal input:focus, .modal select:focus { border-color: var(--accent); }
-  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
-  .modal-close {
-    position: absolute;
-    top: 16px; right: 16px;
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-size: 18px;
-    padding: 4px;
-  }
-
-  /* Metadata modal wider */
-  #meta-modal .modal { width: 560px; }
-
-  .meta-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
-  }
-  .meta-section {
-    margin-bottom: 16px;
-  }
-  .meta-section-title {
-    font-size: 9px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    margin-bottom: 8px;
-    padding-bottom: 4px;
-    border-bottom: 1px solid var(--border);
-  }
-  .meta-row {
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 0;
-    font-size: 11px;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
-  }
-  .meta-key { color: var(--text-muted); }
-  .meta-val { color: var(--text); text-align: right; max-width: 60%; word-break: break-all; }
-
-  /* ══ LIGHTBOX — two-column layout ══════════════════════════════════════════ */
-  #lightbox {
-    position: fixed; inset: 0;
-    background: #0c0c0e;
-    z-index: 800;
-    display: none;
-    flex-direction: row;
-    align-items: stretch;
-  }
-  #lightbox.open { display: flex; }
-
-  /* ── LEFT: media area — takes all remaining space ─────────────────────────── */
-  #lb-left {
-    flex: 1;
-    min-width: 0;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-    background: #000;
-  }
-
-  #lb-content {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-    overflow: hidden;
-    cursor: default;
-  }
-  #lb-content.zoomed  { cursor: grab; }
-  #lb-content.panning { cursor: grabbing; }
-
-  /* Blurred thumbnail placeholder */
-  #lb-thumb {
-    display: block;
-    max-width: 100%;
-    max-height: 100%;
-    width: auto; height: auto;
-    object-fit: contain;
-    pointer-events: none;
-  }
-
-  /* Full-res image — zoom/pan applied here */
-  #lb-full {
-    position: absolute;
-    inset: 0; margin: auto;
-    max-width: 100%; max-height: 100%;
-    width: auto; height: auto;
-    object-fit: contain;
-    transform-origin: center center;
-    transition: transform 0.15s ease, opacity 0.35s;
-    will-change: transform;
-    user-select: none;
-    -webkit-user-drag: none;
-  }
-
-  /* Video wrapper */
-  #lb-video-wrap {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    width: 100%; height: 100%;
-    gap: 10px; min-height: 0;
-  }
-  #lb-video {
-    display: block;
-    max-width: 100%; max-height: 100%;
-    width: auto; height: auto;
-    background: #000; outline: none;
-    flex-shrink: 1; min-height: 0;
-  }
-
-  .lb-placeholder {
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    gap: 12px;
-    color: var(--text-muted); font-size: 14px;
-    width: 100%; height: 100%;
-  }
-  .lb-placeholder .lb-icon { font-size: 48px; opacity: 0.3; }
-
-  /* ── RIGHT: controls + details panel ──────────────────────────────────────── */
-  #lb-right {
-    width: 280px;
-    flex-shrink: 0;
-    background: var(--surface);
-    border-left: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  /* Header: filename + close button */
-  #lb-right-header {
-    padding: 16px 16px 12px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    flex-shrink: 0;
-  }
-  #lb-filename {
-    flex: 1;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--text);
-    word-break: break-all;
-    line-height: 1.5;
-  }
-  #lb-close {
-    flex-shrink: 0;
-    background: none;
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    cursor: pointer;
-    width: 28px; height: 28px;
-    border-radius: 50%;
-    font-size: 14px;
-    display: flex; align-items: center; justify-content: center;
-    transition: all 0.15s;
-  }
-  #lb-close:hover { border-color: var(--border-hover); color: var(--text); background: var(--surface2); }
-
-  /* Navigation row */
-  #lb-nav {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-  #lb-nav button {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    padding: 5px 12px;
-    border-radius: var(--radius);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    cursor: pointer;
-    flex: 1;
-    transition: all 0.15s;
-  }
-  #lb-nav button:hover { border-color: var(--border-hover); color: var(--text); }
-  #lb-nav-counter {
-    font-size: 10px;
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-    white-space: nowrap;
-    text-align: center;
-    flex-shrink: 0;
-  }
-
-  /* Zoom bar */
-  #lb-zoom-bar {
-    display: none;
-    align-items: center;
-    gap: 2px;
-    padding: 8px 16px;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-  #lb-zoom-bar.visible { display: flex; }
-  .lb-zoom-btn {
-    background: none;
-    border: none;
-    color: var(--text-dim);
-    cursor: pointer;
-    font-size: 15px;
-    width: 26px; height: 26px;
-    border-radius: 4px;
-    display: flex; align-items: center; justify-content: center;
-    transition: background 0.15s, color 0.15s;
-    padding: 0; line-height: 1;
-  }
-  .lb-zoom-btn:hover { background: var(--surface2); color: var(--text); }
-  #lb-zoom-level {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--text-muted);
-    min-width: 36px;
-    text-align: center;
-    flex: 1;
-  }
-
-  /* Scrollable details area */
-  #lb-details {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px;
-  }
-  #lb-details::-webkit-scrollbar { width: 3px; }
-  #lb-details::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-  .lb-detail-section {
-    margin-bottom: 18px;
-  }
-  .lb-detail-section-title {
-    font-size: 9px;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--accent);
-    margin-bottom: 8px;
-    padding-bottom: 5px;
-    border-bottom: 1px solid var(--border);
-  }
-  .lb-detail-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 4px 0;
-    font-size: 11px;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
-  }
-  .lb-detail-key { color: var(--text-muted); flex-shrink: 0; }
-  .lb-detail-val {
-    color: var(--text-dim);
-    text-align: right;
-    word-break: break-all;
-    max-width: 60%;
-  }
-
-  /* ── TOAST ── */
-  #toast-container {
-    position: fixed;
-    bottom: 24px; right: 24px;
-    z-index: 2000;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .toast {
-    background: var(--surface);
-    border: 1px solid var(--border-hover);
-    border-radius: var(--radius);
-    padding: 12px 18px;
-    font-size: 12px;
-    color: var(--text);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-    animation: slideUp 0.25s ease;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .toast.success { border-left: 3px solid var(--success); }
-  .toast.error { border-left: 3px solid var(--danger); }
-  .toast.info { border-left: 3px solid var(--accent); }
-  @keyframes slideUp {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  /* ── SYNC OVERLAY ── */
-  #sync-overlay {
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.6);
-    backdrop-filter: blur(4px);
-    z-index: 600;
-    display: none;
-    align-items: center;
-    justify-content: center;
-  }
-  #sync-overlay.show { display: flex; }
-  .sync-card {
-    background: var(--surface);
-    border: 1px solid var(--border-hover);
-    border-radius: 10px;
-    padding: 28px 32px;
-    width: 480px;
-    max-width: 94vw;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-  .sync-card-header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .sync-spinner {
-    width: 22px; height: 22px;
-    border: 2px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-    flex-shrink: 0;
-  }
-  .sync-spinner.done {
-    border-color: var(--accent);
-    border-top-color: var(--accent);
-    animation: none;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  #sync-title {
-    font-family: var(--font-display);
-    font-size: 16px;
-    font-weight: 300;
-    color: var(--text);
-    flex: 1;
-  }
-  #sync-source {
-    font-size: 11px;
-    color: var(--accent);
-    font-family: var(--font-mono);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  #sync-counters {
-    display: flex;
-    gap: 20px;
-    font-family: var(--font-mono);
-    font-size: 12px;
-  }
-  .sync-counter { display: flex; flex-direction: column; gap: 2px; }
-  .sync-counter-val { font-size: 22px; color: var(--text); line-height: 1; }
-  .sync-counter-label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; }
-  #sync-file {
-    font-size: 10px;
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-height: 14px;
-  }
-  #sync-log {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    color: var(--text-dim);
-    padding: 8px 10px;
-    height: 100px;
-    overflow-y: auto;
-    line-height: 1.7;
-  }
-  #sync-log::-webkit-scrollbar { width: 3px; }
-  #sync-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-  #sync-close-btn {
-    align-self: flex-end;
-    display: none;
-  }
-  #sync-close-btn.visible { display: block; }
-
-  /* ── EMPTY STATE ── */
-  #empty-state {
-    display: none;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 400px;
-    gap: 16px;
-    color: var(--text-muted);
-    text-align: center;
-  }
-  .empty-icon { font-size: 56px; opacity: 0.2; }
-  .empty-title { font-family: var(--font-display); font-size: 22px; font-weight: 300; color: var(--text-dim); }
-  .empty-sub { font-size: 12px; line-height: 1.6; max-width: 320px; }
-
-  /* ── ALBUM HEADER ── */
-  #album-header {
-    display: none;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 24px;
-    padding-bottom: 20px;
-    border-bottom: 1px solid var(--border);
-  }
-  .album-header-icon { font-size: 32px; }
-  .album-header-name {
-    font-family: var(--font-display);
-    font-size: 26px;
-    font-weight: 300;
-    color: var(--text);
-  }
-  .album-header-count { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-
-  /* Inline rename input inside album header */
-  #album-header-name {
-    cursor: pointer;
-  }
-  #album-header-name:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--border-hover); }
-
-  .album-rename-input {
-    font-family: var(--font-display);
-    font-size: 26px;
-    font-weight: 300;
-    color: var(--text);
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid var(--accent);
-    outline: none;
-    padding: 0 2px;
-    width: 260px;
-    max-width: 50vw;
-  }
-
-  /* Rename pencil icon in sidebar album list */
-  .album-nav-item .album-rename-icon {
-    opacity: 0;
-    font-size: 11px;
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 3px;
-    transition: opacity 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-  .album-nav-item:hover .album-rename-icon { opacity: 1; }
-  .album-nav-item .album-rename-icon:hover { color: var(--accent); }
-
-  /* Scrollbar global */
-  ::-webkit-scrollbar { width: 4px; height: 4px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-  /* Load more */
-  #load-more-trigger { height: 60px; }
-
-  /* Album select in modal */
-  #album-list-select { max-height: 200px; overflow-y: auto; }
-  .album-check-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    cursor: pointer;
-    border-radius: var(--radius);
-    font-size: 12px;
-    color: var(--text-dim);
-    transition: background 0.1s;
-  }
-  .album-check-item:hover { background: var(--surface2); }
-  .album-check-item input[type="checkbox"] { accent-color: var(--accent); }
-
-  @media (max-width: 1200px) { #gallery-grid { grid-template-columns: repeat(3, 1fr); } }
-  @media (max-width: 900px)  { #gallery-grid { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width: 600px) {
-    #sidebar { transform: translateX(-100%); }
-    #main { margin-left: 0; }
-    #gallery-grid { grid-template-columns: repeat(2, 1fr); }
-  }
-
-  /* ── PHOTO PICKER ── */
-  #photo-picker {
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.88);
-    backdrop-filter: blur(6px);
-    z-index: 900;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-  }
-  #photo-picker.open { display: flex; }
-
-  #photo-picker-inner {
-    background: var(--surface);
-    border: 1px solid var(--border-hover);
-    border-radius: 10px;
-    width: 100%;
-    max-width: 1100px;
-    height: 88vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  #photo-picker-header {
-    padding: 18px 24px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    flex-shrink: 0;
-  }
-
-  #photo-picker-title-wrap {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-  }
-  #photo-picker-title {
-    font-family: var(--font-display);
-    font-size: 18px;
-    font-weight: 300;
-    color: var(--text);
-  }
-  #photo-picker-sel-count {
-    font-size: 11px;
-    color: var(--accent);
-    background: var(--accent-dim);
-    padding: 2px 10px;
-    border-radius: 10px;
-    display: none;
-  }
-  #photo-picker-sel-count.visible { display: inline; }
-
-  #photo-picker-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  #photo-picker-search {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    padding: 6px 12px;
-    width: 180px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  #photo-picker-search:focus { border-color: var(--accent); }
-
-  #photo-picker-grid {
-    flex: 1;
-    overflow-y: auto;
-    padding: 20px 24px;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-    grid-auto-rows: 150px;
-    gap: 10px;
-    align-content: start;
-  }
-  #photo-picker-grid::-webkit-scrollbar { width: 4px; }
-  #photo-picker-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-  .picker-item {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    border-radius: var(--radius);
-    overflow: hidden;
-    cursor: pointer;
-    border: 2px solid transparent;
-    transition: border-color 0.15s, transform 0.15s;
-    background: var(--surface2);
-  }
-  .picker-item:hover { border-color: var(--border-hover); transform: scale(1.02); }
-  .picker-item.selected { border-color: var(--accent); }
-  .picker-item.already-in { opacity: 0.35; cursor: default; pointer-events: none; }
-
-  .picker-item img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
-
-  .picker-check {
-    position: absolute;
-    top: 6px; right: 6px;
-    width: 22px; height: 22px;
-    background: rgba(0,0,0,0.55);
-    border: 2px solid rgba(255,255,255,0.4);
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 11px;
-    color: transparent;
-    transition: all 0.15s;
-  }
-  .picker-item.selected .picker-check {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #000;
-  }
-
-  .picker-item-name {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    padding: 18px 6px 5px;
-    background: linear-gradient(transparent, rgba(0,0,0,0.7));
-    font-size: 9px;
-    color: rgba(255,255,255,0.75);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    opacity: 0;
-    transition: opacity 0.15s;
-  }
-  .picker-item:hover .picker-item-name { opacity: 1; }
-
-  .picker-already-badge {
-    position: absolute;
-    top: 6px; left: 6px;
-    background: rgba(200,169,126,0.85);
-    color: #000;
-    font-size: 8px;
-    padding: 2px 5px;
-    border-radius: 3px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-
-  #picker-confirm-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  /* ── SETTINGS PANEL ── */
-  .settings-section {
-    margin-bottom: 28px;
-  }
-  .settings-section-title {
-    font-size: 9px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--accent);
-    margin-bottom: 12px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--border);
-  }
-  .settings-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 8px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.03);
-    min-height: 38px;
-  }
-  .settings-row-top { align-items: flex-start; padding-top: 10px; }
-  .settings-label {
-    font-size: 12px;
-    color: var(--text-dim);
-    flex: 1;
-    line-height: 1.5;
-  }
-  .settings-hint {
-    display: block;
-    font-size: 10px;
-    color: var(--text-muted);
-    margin-top: 1px;
-  }
-  .settings-select {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 5px 10px;
-    outline: none;
-    cursor: pointer;
-    flex-shrink: 0;
-    min-width: 140px;
-    transition: border-color 0.2s;
-  }
-  .settings-select:focus { border-color: var(--accent); }
-  .settings-input {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 5px 10px;
-    outline: none;
-    width: 90px;
-    flex-shrink: 0;
-    transition: border-color 0.2s;
-  }
-  .settings-input-wide { width: 200px; }
-  .settings-input:focus { border-color: var(--accent); }
-  .settings-toggle {
-    width: 36px; height: 20px;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    cursor: pointer;
-    position: relative;
-    transition: background 0.2s;
-    flex-shrink: 0;
-  }
-  .settings-toggle.on { background: rgba(200,169,126,0.3); border-color: var(--accent); }
-  .settings-toggle::after {
-    content: '';
-    position: absolute;
-    width: 14px; height: 14px;
-    background: var(--text-muted);
-    border-radius: 50%;
-    top: 2px; left: 2px;
-    transition: all 0.2s;
-  }
-  .settings-toggle.on::after { left: 18px; background: var(--accent); }
-  /* Format chips */
-  .settings-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-    justify-content: flex-end;
-    max-width: 280px;
-  }
-  .settings-chip {
-    padding: 3px 9px;
-    border-radius: 12px;
-    font-size: 10px;
-    cursor: pointer;
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    transition: all 0.15s;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    user-select: none;
-  }
-  .settings-chip.active {
-    border-color: var(--accent);
-    color: var(--accent);
-    background: var(--accent-dim);
-  }
-
-  /* Card visibility toggles from Settings */
-  body.hide-card-filename .item-name     { display: none; }
-  body.hide-card-date     .item-date     { display: none; }
-  body.hide-card-subfolder .item-path    { display: none; }
-
-  /* ── SCROLL DATE INDICATOR ── */
-  #scroll-date-pill {
-    position: fixed;
-    top: 50%;
-    right: 28px;
-    transform: translateY(-50%);
-    background: rgba(15, 15, 18, 0.88);
-    border: 1px solid var(--border-hover);
-    backdrop-filter: blur(10px);
-    border-radius: 20px;
-    padding: 8px 16px;
-    font-family: var(--font-display);
-    font-size: 15px;
-    font-weight: 300;
-    color: var(--text);
-    letter-spacing: 0.03em;
-    pointer-events: none;
-    z-index: 200;
-    white-space: nowrap;
-    opacity: 0;
-    transition: opacity 0.25s ease;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
-  }
-  #scroll-date-pill.visible { opacity: 1; }
-
-  /* ── LOCATIONS MANAGER ── */
-  .loc-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 8px;
-    align-items: start;
-    padding: 12px 14px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin-bottom: 8px;
-    background: var(--surface2);
-    transition: border-color 0.15s;
-  }
-  .loc-row:hover { border-color: var(--border-hover); }
-  .loc-row.loc-hidden-row { opacity: 0.5; }
-
-  .loc-fields { display: flex; flex-direction: column; gap: 6px; }
-
-  .loc-name-input,
-  .loc-path-input {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    padding: 6px 10px;
-    width: 100%;
-    outline: none;
-    transition: border-color 0.2s;
-    box-sizing: border-box;
-  }
-  .loc-name-input { font-weight: 400; }
-  .loc-path-input { font-size: 11px; color: var(--text-dim); }
-  .loc-name-input:focus,
-  .loc-path-input:focus { border-color: var(--accent); }
-
-  .loc-actions {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    padding-top: 2px;
-  }
-
-  .loc-vis-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 10px;
-    color: var(--text-muted);
-    white-space: nowrap;
-    cursor: pointer;
-    margin-top: 4px;
-  }
-  .loc-vis-toggle input { accent-color: var(--accent); cursor: pointer; }
-
-  .loc-delete-btn {
-    background: none;
-    border: 1px solid rgba(200,126,126,0.3);
-    color: var(--danger);
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 11px;
-    padding: 4px 10px;
-    transition: all 0.15s;
-    white-space: nowrap;
-  }
-  .loc-delete-btn:hover { background: rgba(200,126,126,0.15); border-color: var(--danger); }
-
-  #locations-list:empty::after {
-    content: 'No locations configured. Add one below.';
-    display: block;
-    text-align: center;
-    font-size: 12px;
-    color: var(--text-muted);
-    padding: 24px 0;
-  }
-</style>
-</head>
-<body>
-
-<!-- SIDEBAR -->
-<aside id="sidebar">
-  <div class="sidebar-logo">
-    <h1>Luminary</h1>
-    <span>Local Media Gallery</span>
-  </div>
-
-  <div class="sidebar-section">
-    <div class="sidebar-label">Library</div>
-    <div class="nav-item active" data-view="all" onclick="setView('all', this)">
-      <span class="icon">◈</span> All Photos
-    </div>
-    <div class="nav-item" data-view="hidden" onclick="setView('hidden', this)">
-      <span class="icon">◌</span> Hidden
-    </div>
-  </div>
-
-  <div class="sidebar-section">
-    <div class="sidebar-label" style="display:flex;justify-content:space-between;align-items:center;padding-right:12px">
-      Albums
-      <span style="cursor:pointer;color:var(--accent);font-size:16px" onclick="openCreateAlbum()" title="New album">+</span>
-    </div>
-    <div id="album-nav" class="sidebar-albums"></div>
-  </div>
-
-  <div class="sidebar-footer">
-    <div style="font-size:10px;color:var(--text-muted);line-height:1.6">
-      <div id="footer-count">— photos indexed</div>
-      <div id="footer-albums">— albums</div>
-    </div>
-    <div style="margin-top:12px">
-      <button class="btn btn-ghost" style="width:100%;justify-content:center;font-size:11px" onclick="openSettings()">⚙ Settings</button>
-    </div>
-  </div>
-</aside>
-
-<!-- MAIN -->
-<div id="main">
-
-  <!-- TOPBAR -->
-  <div id="topbar">
-    <div class="topbar-title" id="topbar-title">All Photos</div>
-    <div class="search-wrap">
-      <span class="search-icon">⌕</span>
-      <input type="text" id="search-input" placeholder="Search by name, camera, date…" oninput="applyFilters()">
-    </div>
-    <div class="toggle-wrap">
-      <span>Hidden</span>
-      <div class="toggle" id="show-hidden-toggle" onclick="toggleHidden(this)"></div>
-    </div>
-    <button class="btn btn-ghost" onclick="openCreateAlbum()">＋ Album</button>
-    <button class="btn btn-ghost" onclick="openLocationsManager()">⊞ Locations</button>
-    <button class="btn btn-accent" onclick="triggerSync()">↻ Sync</button>
-  </div>
-
-  <!-- FILTER BAR -->
-  <div id="filterbar">
-    <span class="filter-chip active" data-sort="date-desc" onclick="setSort('date-desc',this)">Newest First</span>
-    <span class="filter-chip" data-sort="date-asc" onclick="setSort('date-asc',this)">Oldest First</span>
-    <span class="filter-chip" data-sort="name" onclick="setSort('name',this)">Name</span>
-    <div class="filter-sep"></div>
-    <select class="filter-select" id="filter-format" onchange="applyFilters()">
-      <option value="">All Formats</option>
-    </select>
-    <select class="filter-select" id="filter-camera" onchange="applyFilters()">
-      <option value="">All Cameras</option>
-    </select>
-    <select class="filter-select" id="filter-location" onchange="applyFilters()" style="max-width:200px">
-      <option value="">All Locations</option>
-    </select>
-  </div>
-
-  <!-- CONTENT -->
-  <div id="content">
-    <div id="album-header">
-      <span class="album-header-icon">⬡</span>
-      <div>
-        <div class="album-header-name" id="album-header-name"
-             title="Click to rename" onclick="startInlineRename()"></div>
-        <div class="album-header-count" id="album-header-count"></div>
-      </div>
-      <div style="margin-left:auto;display:flex;gap:8px">
-        <button class="btn btn-ghost" onclick="startInlineRename()" title="Rename album">✎ Rename</button>
-        <button class="btn btn-accent" id="add-photos-btn" onclick="openPhotoPicker()">＋ Add Photos</button>
-        <button class="btn btn-danger" id="delete-album-btn" onclick="deleteCurrentAlbum()">✕ Delete Album</button>
-      </div>
-    </div>
-
-    <div id="stats-bar">
-      <div class="stat"><strong id="stat-visible">0</strong> visible</div>
-      <div class="stat"><strong id="stat-hidden">0</strong> hidden</div>
-      <div class="stat"><strong id="stat-albums">0</strong> albums</div>
-    </div>
-
-    <div id="empty-state">
-      <div class="empty-icon">⬡</div>
-      <div class="empty-title">No media found</div>
-      <div class="empty-sub">Add directories to media.json and hit Sync to index your photos.</div>
-    </div>
-
-    <div id="gallery-grid"></div>
-    <div id="load-more-trigger"></div>
-  </div>
-</div>
-
-<!-- SCROLL DATE INDICATOR -->
-<div id="scroll-date-pill">
-  <span id="scroll-date-text"></span>
-</div>
-
-<!-- CONTEXT MENU -->
-<div id="ctx-menu">
-  <div class="ctx-item" onclick="ctxAddToAlbum()"><span>⬡</span> Add to Album</div>
-  <div class="ctx-item" onclick="ctxRemoveFromAlbum()"><span>⊟</span> Remove from Album</div>
-  <div class="ctx-sep"></div>
-  <div class="ctx-item" onclick="ctxToggleHide()"><span id="ctx-hide-label-icon">◌</span> <span id="ctx-hide-label">Hide Image</span></div>
-  <div class="ctx-sep"></div>
-  <div class="ctx-item" onclick="ctxViewMeta()"><span>≡</span> View Metadata</div>
-</div>
-
-<!-- LIGHTBOX -->
-<div id="lightbox">
-
-  <!-- LEFT: media fills all available space -->
-  <div id="lb-left">
-    <div id="lb-content"></div>
-  </div>
-
-  <!-- RIGHT: controls + details panel -->
-  <div id="lb-right">
-
-    <!-- Header row: filename + close -->
-    <div id="lb-right-header">
-      <div id="lb-filename"></div>
-      <button id="lb-close" onclick="closeLightbox()">✕</button>
-    </div>
-
-    <!-- Navigation -->
-    <div id="lb-nav">
-      <button onclick="lbNav(-1)">← Prev</button>
-      <span id="lb-nav-counter"></span>
-      <button onclick="lbNav(1)">Next →</button>
-    </div>
-
-    <!-- Zoom bar (images only — shown after full load) -->
-    <div id="lb-zoom-bar">
-      <span style="font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-muted)">Zoom</span>
-      <button class="lb-zoom-btn" onclick="lbZoom(-0.25)" title="Zoom out (−)">−</button>
-      <span id="lb-zoom-level">100%</span>
-      <button class="lb-zoom-btn" onclick="lbZoom(+0.25)" title="Zoom in (+)">+</button>
-      <button class="lb-zoom-btn" onclick="lbZoomReset()" title="Fit">⊡</button>
-      <button class="lb-zoom-btn" onclick="lbZoom100()" title="Actual size">1:1</button>
-    </div>
-
-    <!-- Scrollable details -->
-    <div id="lb-details"></div>
-
-  </div>
-</div>
-
-<!-- ADD TO ALBUM MODAL -->
-<div class="modal-overlay" id="add-album-modal">
-  <div class="modal" style="position:relative">
-    <button class="modal-close" onclick="closeModal('add-album-modal')">✕</button>
-    <h2>Add to Album</h2>
-    <div id="album-list-select"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('add-album-modal')">Cancel</button>
-      <button class="btn btn-accent" onclick="confirmAddToAlbum()">Add</button>
-    </div>
-  </div>
-</div>
-
-<!-- CREATE ALBUM MODAL -->
-<div class="modal-overlay" id="create-album-modal">
-  <div class="modal" style="position:relative">
-    <button class="modal-close" onclick="closeModal('create-album-modal')">✕</button>
-    <h2>New Album</h2>
-    <input type="text" id="new-album-name" placeholder="Album name…">
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('create-album-modal')">Cancel</button>
-      <button class="btn btn-accent" onclick="confirmCreateAlbum()">Create</button>
-    </div>
-  </div>
-</div>
-
-<!-- METADATA MODAL -->
-<div class="modal-overlay" id="meta-modal">
-  <div class="modal" style="position:relative;max-width:560px;width:560px">
-    <button class="modal-close" onclick="closeModal('meta-modal')">✕</button>
-    <h2 id="meta-modal-title">Metadata</h2>
-    <div id="meta-content"></div>
-  </div>
-</div>
-
-<!-- PHOTO PICKER MODAL -->
-<div id="photo-picker" role="dialog" aria-modal="true">
-  <div id="photo-picker-inner">
-    <div id="photo-picker-header">
-      <div id="photo-picker-title-wrap">
-        <span id="photo-picker-title">Add Photos to Album</span>
-        <span id="photo-picker-sel-count"></span>
-      </div>
-      <div id="photo-picker-actions">
-        <input type="text" id="photo-picker-search" placeholder="Search…" oninput="filterPickerGrid()">
-        <select id="photo-picker-location" class="filter-select" onchange="_pickerLocationChanged()" style="max-width:200px">
-          <option value="">All Locations</option>
-        </select>
-        <button class="btn btn-ghost" id="picker-add-all-btn" onclick="addAllFromLocation()" title="Add all photos from the selected location to the album" style="display:none">⊕ Add All</button>
-        <button class="btn btn-ghost" onclick="pickerSelectAll()">Select All</button>
-        <button class="btn btn-ghost" onclick="pickerClearAll()">Clear</button>
-        <button class="btn btn-accent" id="picker-confirm-btn" onclick="confirmPhotoPicker()">Add Selected</button>
-        <button class="btn btn-ghost" onclick="closePhotoPicker()">✕ Cancel</button>
-      </div>
-    </div>
-    <div id="photo-picker-grid"></div>
-  </div>
-</div>
-
-<!-- LOCATIONS MANAGER MODAL -->
-<div class="modal-overlay" id="locations-modal">
-  <div class="modal" style="position:relative;width:580px;max-width:96vw">
-    <button class="modal-close" onclick="closeModal('locations-modal')">✕</button>
-    <h2>Media Locations</h2>
-    <p style="font-size:11px;color:var(--text-muted);margin-bottom:18px;line-height:1.6">
-      Directories scanned during Sync. Toggle visibility to include or exclude a location without deleting it.
-    </p>
-    <div id="locations-list"></div>
-    <div id="locations-add-form" style="margin-top:18px;padding-top:18px;border-top:1px solid var(--border)">
-      <div style="font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-muted);margin-bottom:10px">Add New Location</div>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <input type="text" id="loc-new-name" placeholder="Label  (e.g. Travel Photos)">
-        <input type="text" id="loc-new-path" placeholder="Absolute path  (e.g. /home/user/photos/travel)">
-        <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-dim)">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input type="checkbox" id="loc-new-vis" checked style="accent-color:var(--accent)">
-            Visible (scanned during Sync)
-          </label>
-          <button class="btn btn-accent" style="margin-left:auto" onclick="addLocation()">＋ Add</button>
-        </div>
-      </div>
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('locations-modal')">Cancel</button>
-      <button class="btn btn-accent" onclick="saveLocations()">Save Changes</button>
-    </div>
-  </div>
-</div>
-
-<!-- SETTINGS PANEL -->
-<div id="settings-overlay" class="modal-overlay">
-  <div id="settings-panel" class="modal" style="position:relative;width:640px;max-width:96vw;max-height:88vh;overflow-y:auto">
-    <button class="modal-close" onclick="closeSettings()">✕</button>
-    <h2 style="margin-bottom:6px">Settings</h2>
-    <p style="font-size:11px;color:var(--text-muted);margin-bottom:24px">Changes are saved immediately to <code style="background:var(--surface2);padding:1px 5px;border-radius:3px">data/configuration.json</code></p>
-
-    <!-- ── APPEARANCE ── -->
-    <div class="settings-section">
-      <div class="settings-section-title">Appearance</div>
-
-      <div class="settings-row">
-        <div class="settings-label">Theme</div>
-        <select class="settings-select" id="s-theme">
-          <option value="dark">Dark</option>
-          <option value="light">Light</option>
-          <option value="system">System</option>
-        </select>
-      </div>
-
-      <div class="settings-row">
-        <div class="settings-label">Grid Columns</div>
-        <select class="settings-select" id="s-grid-columns">
-          <option value="2">2</option>
-          <option value="3">3</option>
-          <option value="4">4</option>
-          <option value="auto">Auto</option>
-        </select>
-      </div>
-
-      <div class="settings-row">
-        <div class="settings-label">Card Size</div>
-        <select class="settings-select" id="s-card-size">
-          <option value="small">Small</option>
-          <option value="medium">Medium</option>
-          <option value="large">Large</option>
-        </select>
-      </div>
-
-      <div class="settings-row">
-        <div class="settings-label">Show filename on cards</div>
-        <div class="settings-toggle" id="s-show-filename" onclick="settingsToggle(this)"></div>
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Show date on cards</div>
-        <div class="settings-toggle" id="s-show-date" onclick="settingsToggle(this)"></div>
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Show subfolder path on cards</div>
-        <div class="settings-toggle" id="s-show-subfolder" onclick="settingsToggle(this)"></div>
-      </div>
-    </div>
-
-    <!-- ── SORTING & FILTERING ── -->
-    <div class="settings-section">
-      <div class="settings-section-title">Sorting &amp; Filtering</div>
-
-      <div class="settings-row">
-        <div class="settings-label">Default sort order</div>
-        <select class="settings-select" id="s-default-sort">
-          <option value="date-desc">Newest First</option>
-          <option value="date-asc">Oldest First</option>
-          <option value="name">Name</option>
-        </select>
-      </div>
-
-      <div class="settings-row">
-        <div class="settings-label">Default date field</div>
-        <select class="settings-select" id="s-default-date-field">
-          <option value="modified">Modified Date</option>
-          <option value="created">Created Date</option>
-        </select>
-      </div>
-
-      <div class="settings-row">
-        <div class="settings-label">Show hidden media by default</div>
-        <div class="settings-toggle" id="s-show-hidden-default" onclick="settingsToggle(this)"></div>
-      </div>
-    </div>
-
-    <!-- ── PERFORMANCE ── -->
-    <div class="settings-section">
-      <div class="settings-section-title">Performance</div>
-
-      <div class="settings-row">
-        <div class="settings-label">Lazy load batch size <span class="settings-hint">cards per scroll batch</span></div>
-        <input class="settings-input" id="s-lazy-load-batch" type="number" min="10" max="200" step="10">
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Media page size <span class="settings-hint">items per API page</span></div>
-        <input class="settings-input" id="s-media-page-size" type="number" min="50" max="2000" step="50">
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Thumbnail size <span class="settings-hint">px max-side</span></div>
-        <input class="settings-input" id="s-thumbnail-size" type="number" min="100" max="800" step="50">
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Thumbnail quality <span class="settings-hint">JPEG 1–95</span></div>
-        <input class="settings-input" id="s-thumbnail-quality" type="number" min="1" max="95" step="5">
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Thumbnail cache path <span class="settings-hint">relative to project root, or absolute</span></div>
-        <input class="settings-input settings-input-wide" id="s-thumbnail-cache-path" type="text" placeholder="e.g. thumb  or  /mnt/ssd/thumbs">
-      </div>
-    </div>
-
-    <!-- ── MEDIA TYPES ── -->
-    <div class="settings-section">
-      <div class="settings-section-title">Media Types</div>
-
-      <div class="settings-row settings-row-top">
-        <div class="settings-label">Image formats</div>
-        <div class="settings-chips" id="s-image-formats"></div>
-      </div>
-      <div class="settings-row settings-row-top">
-        <div class="settings-label">Video formats</div>
-        <div class="settings-chips" id="s-video-formats"></div>
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Auto-play video in lightbox</div>
-        <div class="settings-toggle" id="s-video-autoplay" onclick="settingsToggle(this)"></div>
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Video preload</div>
-        <select class="settings-select" id="s-video-preload">
-          <option value="none">None</option>
-          <option value="metadata">Metadata only</option>
-          <option value="auto">Auto</option>
-        </select>
-      </div>
-    </div>
-
-    <!-- ── SYNC BEHAVIOUR ── -->
-    <div class="settings-section">
-      <div class="settings-section-title">Sync Behaviour</div>
-
-      <div class="settings-row">
-        <div class="settings-label">Follow symlinks</div>
-        <div class="settings-toggle" id="s-follow-symlinks" onclick="settingsToggle(this)"></div>
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Skip hidden directories <span class="settings-hint">folders starting with .</span></div>
-        <div class="settings-toggle" id="s-skip-hidden-dirs" onclick="settingsToggle(this)"></div>
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Max scan depth <span class="settings-hint">0 = unlimited</span></div>
-        <input class="settings-input" id="s-max-scan-depth" type="number" min="0" max="20" step="1">
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Duplicate detection</div>
-        <select class="settings-select" id="s-dedup-method">
-          <option value="both">Path + Hash (safest)</option>
-          <option value="path">Path only (faster)</option>
-          <option value="hash">Hash only (cross-dir)</option>
-        </select>
-      </div>
-    </div>
-
-    <!-- ── METADATA ── -->
-    <div class="settings-section">
-      <div class="settings-section-title">Metadata</div>
-
-      <div class="settings-row">
-        <div class="settings-label">Show GPS coordinates in metadata panel</div>
-        <div class="settings-toggle" id="s-show-gps" onclick="settingsToggle(this)"></div>
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Extract video metadata via ffprobe</div>
-        <div class="settings-toggle" id="s-extract-video-meta" onclick="settingsToggle(this)"></div>
-      </div>
-    </div>
-
-    <!-- ── SERVER ── -->
-    <div class="settings-section">
-      <div class="settings-section-title">Server</div>
-
-      <div class="settings-row">
-        <div class="settings-label">API port <span class="settings-hint">requires restart</span></div>
-        <input class="settings-input" id="s-api-port" type="number" min="1024" max="65535">
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Log level</div>
-        <select class="settings-select" id="s-log-level">
-          <option value="DEBUG">Debug</option>
-          <option value="INFO">Info</option>
-          <option value="WARNING">Warning</option>
-          <option value="ERROR">Error</option>
-        </select>
-      </div>
-      <div class="settings-row">
-        <div class="settings-label">Log retention days</div>
-        <input class="settings-input" id="s-log-retention" type="number" min="1" max="365">
-      </div>
-    </div>
-
-    <div class="modal-actions" style="position:sticky;bottom:0;background:var(--surface);padding:16px 0 4px;margin-top:8px;border-top:1px solid var(--border)">
-      <div id="settings-status" style="font-size:11px;color:var(--text-muted);flex:1;line-height:1.6"></div>
-      <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
-      <button class="btn btn-accent" onclick="saveSettings()">Save Settings</button>
-    </div>
-  </div>
-</div>
-
-<!-- SYNC OVERLAY -->
-<div id="sync-overlay">
-  <div class="sync-card">
-    <div class="sync-card-header">
-      <div class="sync-spinner" id="sync-spinner"></div>
-      <span id="sync-title">Synchronising media library…</span>
-    </div>
-    <div id="sync-source"></div>
-    <div id="sync-counters">
-      <div class="sync-counter">
-        <span class="sync-counter-val" id="sync-added">0</span>
-        <span class="sync-counter-label">Added</span>
-      </div>
-      <div class="sync-counter">
-        <span class="sync-counter-val" id="sync-scanned">0</span>
-        <span class="sync-counter-label">Scanned</span>
-      </div>
-    </div>
-    <div id="sync-file"></div>
-    <div id="sync-log"></div>
-    <button class="btn btn-ghost" id="sync-close-btn" onclick="closeSyncOverlay()">✓ Done</button>
-  </div>
-</div>
-
-<!-- TOAST CONTAINER -->
-<div id="toast-container"></div>
-
-<script>
 // ─────────────────────────────────────────────
 //  CONFIG
 // ─────────────────────────────────────────────
@@ -2442,13 +554,39 @@ async function addAllFromLocation() {
 //  VIEW SWITCHING
 // ─────────────────────────────────────────────
 function setView(view, el) {
-  currentView = view;
-  currentAlbumId = (view !== 'all' && view !== 'hidden') ? view : null;
+  currentView    = view;
+  currentAlbumId = (view !== 'all' && view !== 'hidden' && view !== 'map') ? view : null;
 
   document.querySelectorAll('.nav-item, .album-nav-item').forEach(n => n.classList.remove('active'));
   if (el) el.classList.add('active');
 
   const albumHeader = document.getElementById('album-header');
+  const galleryGrid = document.getElementById('gallery-grid');
+  const loadMore    = document.getElementById('load-more-trigger');
+  const filterbar   = document.getElementById('filterbar');
+  const statsBar    = document.getElementById('stats-bar');
+  const mapView     = document.getElementById('map-view');
+
+  if (view === 'map') {
+    // Show map, hide gallery elements
+    albumHeader.style.display = 'none';
+    galleryGrid.style.display = 'none';
+    loadMore.style.display    = 'none';
+    filterbar.style.display   = 'none';
+    statsBar.style.display    = 'none';
+    mapView.classList.add('active');
+    document.getElementById('topbar-title').textContent = 'Map';
+    openMapView();
+    return;
+  }
+
+  // Restore gallery elements when leaving map
+  galleryGrid.style.display = '';
+  loadMore.style.display    = '';
+  filterbar.style.display   = '';
+  statsBar.style.display    = '';
+  mapView.classList.remove('active');
+
   if (currentAlbumId) {
     const album = db.albums.find(a => a.id === currentAlbumId);
     if (album) {
@@ -3226,6 +1364,7 @@ function openSyncOverlay() {
   document.getElementById('sync-close-btn').classList.remove('visible');
   document.getElementById('sync-added').textContent   = '0';
   document.getElementById('sync-scanned').textContent = '0';
+  document.getElementById('sync-removed').textContent = '0';
   document.getElementById('sync-source').textContent  = '';
   document.getElementById('sync-file').textContent    = '';
   document.getElementById('sync-log').innerHTML       = '';
@@ -3257,10 +1396,12 @@ async function _syncOnComplete(data) {
     _syncAppendLog('Error: ' + data.error);
     toast('Sync failed: ' + data.error, 'error');
   } else {
-    const added = data.result?.added ?? data.added ?? 0;
-    const total = data.result?.total ?? 0;
+    const added   = data.result?.added   ?? data.added   ?? 0;
+    const removed = data.result?.removed ?? 0;
+    const total   = data.result?.total   ?? 0;
+    document.getElementById('sync-removed').textContent = removed;
     document.getElementById('sync-title').textContent = `✓ Sync complete — ${added} new`;
-    toast(`Sync complete — ${added} new, ${total} total`, 'success');
+    toast(`Sync complete — ${added} new, ${removed} removed, ${total} total`, 'success');
   }
   document.getElementById('sync-close-btn').classList.add('visible');
   // Reload gallery with fresh data
@@ -3885,9 +2026,286 @@ document.getElementById('photo-picker').addEventListener('click', function(e) {
 });
 
 // ─────────────────────────────────────────────
+//  MAP VIEW
+// ─────────────────────────────────────────────
+let _leafletMap     = null;
+let _clusterGroup   = null;
+let _mapLoaded      = false;
+
+async function openMapView() {
+  if (!_leafletMap) {
+    _leafletMap = L.map('map-container', {
+      center:      [20, 0],
+      zoom:        3,
+      zoomControl: true,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19,
+    }).addTo(_leafletMap);
+
+    // Close panel when clicking the map background
+    _leafletMap.on('click', () => closeMapClusterPanel());
+  }
+
+  setTimeout(() => _leafletMap.invalidateSize(), 50);
+
+  if (_mapLoaded) return;
+  _mapLoaded = true;
+
+  try {
+    const r    = await fetch(`${API_BASE}/api/media/gps`);
+    const data = await r.json();
+    const total = data.total ?? data.total_count ?? 0;
+    _renderMapMarkers(data.items || [], data.gps_count ?? 0, total);
+  } catch {
+    document.getElementById('map-gps-banner').classList.add('visible');
+    document.getElementById('map-gps-text').textContent = 'Could not load GPS data — is app.py running?';
+  }
+}
+
+function _renderMapMarkers(items, gpsCount, total) {
+  // GPS coverage banner
+  const banner  = document.getElementById('map-gps-banner');
+  const bannerT = document.getElementById('map-gps-text');
+  if (items.length === 0) {
+    bannerT.textContent = 'No photos with GPS coordinates found.';
+    banner.classList.add('visible');
+    return;
+  }
+  if (gpsCount < total) {
+    bannerT.textContent =
+      `⊙  ${gpsCount.toLocaleString()} of ${total.toLocaleString()} photos have GPS coordinates`;
+    banner.classList.add('visible');
+  } else {
+    banner.classList.remove('visible');
+  }
+
+  if (_clusterGroup) _leafletMap.removeLayer(_clusterGroup);
+
+  _clusterGroup = L.markerClusterGroup({
+    maxClusterRadius:        80,
+    disableClusteringAtZoom: 50,
+    spiderfyOnMaxZoom:       false,
+    showCoverageOnHover:     false,
+    zoomToBoundsOnClick:     false,  // we handle click ourselves
+
+    iconCreateFunction(cluster) {
+      // Single most-recent thumbnail + compact count badge
+      const children = cluster.getAllChildMarkers();
+      const newest   = children.reduce((best, m) =>
+        (!best || (m.options._date || '') > (best.options._date || '')) ? m : best, null);
+      const thumbUrl = newest?.options._thumbUrl || '';
+      const count    = cluster.getChildCount();
+      const badge    = count > 9999 ? '9999+' : String(count);
+
+      const html = `
+        <div class="map-cluster-wrap">
+          <div class="map-cluster-thumb">
+            ${thumbUrl
+              ? `<img src="${thumbUrl}" loading="lazy" alt="">`
+              : `<div style="width:100%;height:100%;background:var(--surface2)"></div>`}
+          </div>
+          <div class="map-cluster-badge">${badge}</div>
+        </div>`;
+
+      return L.divIcon({
+        html,
+        className: '',
+        iconSize:  [52, 52],
+        iconAnchor:[26, 26],
+      });
+    },
+  });
+
+  // Cluster click → open side panel, sorted newest first
+  _clusterGroup.on('clusterclick', e => {
+    e.originalEvent?.stopPropagation();
+    const markers     = e.layer.getAllChildMarkers();
+    markers.sort((a, b) => (b.options._date || '').localeCompare(a.options._date || ''));
+    const clusterItems = markers.map(m => m.options._item);
+    const title = markers.length === 1 ? clusterItems[0].name : `${markers.length} Photos`;
+    openMapClusterPanel(clusterItems, title);
+  });
+
+  // Build individual markers — small thumbnail, single item
+  items.forEach(item => {
+    // Use a small thumbnail (80px) to keep network load minimal
+    const thumbUrl = `${API_BASE}/api/thumb/${encodeURIComponent(item.uniqueName)}?size=80&quality=65`;
+
+    const icon = L.divIcon({
+      html:      `<div class="map-thumb-marker"><img src="${thumbUrl}" loading="lazy" alt=""></div>`,
+      className: '',
+      iconSize:  [44, 44],
+      iconAnchor:[22, 22],
+    });
+
+    const marker = L.marker([item.lat, item.lng], {
+      icon,
+      title:     item.name,
+      _thumbUrl: thumbUrl,
+      _date:     item.date || '',
+      _item:     item,
+    });
+
+    // Single marker click → fetch full record then open lightbox directly
+    marker.on('click', e => {
+      e.originalEvent?.stopPropagation();
+      closeMapClusterPanel();
+      _openMapItem(item, 0, [item]);
+    });
+
+    _clusterGroup.addLayer(marker);
+  });
+
+  _leafletMap.addLayer(_clusterGroup);
+
+  // Fit to all markers on first load
+  const bounds = L.latLngBounds(items.map(i => [i.lat, i.lng]));
+  _leafletMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+}
+
+// ── Cluster side panel ────────────────────────────────────────────────────────
+let _panelItems    = [];
+let _panelRendered = 0;
+let _panelObserver = null;   // lazy IMAGE loader
+let _panelSentinel = null;   // scroll sentinel for incremental card rendering
+
+const PANEL_BATCH = 24;      // cards per scroll batch (3-column × 8 rows)
+
+function openMapClusterPanel(items, title) {
+  const panel = document.getElementById('map-cluster-panel');
+  const grid  = document.getElementById('map-cluster-panel-grid');
+  document.getElementById('map-cluster-panel-title').textContent =
+    `${title}${items.length > 1 ? ' · ' + items.length + ' photos' : ''}`;
+
+  // Disconnect previous observers
+  if (_panelObserver) { _panelObserver.disconnect(); _panelObserver = null; }
+  grid.innerHTML = '';
+
+  // Sort newest first
+  _panelItems = items.slice().sort((a, b) =>
+    (b.date || '').localeCompare(a.date || ''));
+  _panelRendered = 0;
+
+  // IntersectionObserver for lazy IMAGE loading — fires when each card enters the grid viewport
+  _panelObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const img = entry.target.querySelector('img[data-src]');
+      if (img) {
+        img.src = img.dataset.src;
+        img.removeAttribute('data-src');
+        img.onload  = () => img.classList.add('loaded');
+        img.onerror = () => img.classList.add('loaded');  // show even on error
+      }
+      _panelObserver.unobserve(entry.target);
+    });
+  }, { root: grid, rootMargin: '160px' });
+
+  _panelRenderBatch();
+  panel.classList.add('open');
+}
+
+function _panelRenderBatch() {
+  const grid = document.getElementById('map-cluster-panel-grid');
+
+  // Remove old scroll sentinel
+  if (_panelSentinel?.parentNode) {
+    _panelSentinel.parentNode.removeChild(_panelSentinel);
+    _panelSentinel = null;
+  }
+
+  const end = Math.min(_panelRendered + PANEL_BATCH, _panelItems.length);
+
+  for (let i = _panelRendered; i < end; i++) {
+    const item     = _panelItems[i];
+    const thumbSrc = `${API_BASE}/api/thumb/${encodeURIComponent(item.uniqueName)}?size=160&quality=70`;
+    const card     = document.createElement('div');
+    card.className = 'map-panel-thumb';
+
+    // Use data-src so the image only loads when the card enters the viewport
+    card.innerHTML = `
+      <img data-src="${thumbSrc}" src="" alt="${escHtml(item.name)}">
+      ${item.type === 'video' ? '<div class="map-panel-play">▶</div>' : ''}`;
+
+    card.addEventListener('click', () => _openMapItem(item, i, _panelItems));
+    grid.appendChild(card);
+    _panelObserver.observe(card);   // trigger lazy load when this card is visible
+  }
+
+  _panelRendered = end;
+
+  // Attach a sentinel at the bottom to trigger the next batch
+  if (_panelRendered < _panelItems.length) {
+    _panelSentinel = document.createElement('div');
+    _panelSentinel.style.cssText = 'grid-column:1/-1;height:1px';
+
+    const sentinelObs = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        sentinelObs.disconnect();
+        _panelRenderBatch();
+      }
+    }, { root: grid, rootMargin: '80px' });
+
+    grid.appendChild(_panelSentinel);
+    sentinelObs.observe(_panelSentinel);
+  }
+}
+
+function closeMapClusterPanel() {
+  document.getElementById('map-cluster-panel').classList.remove('open');
+  if (_panelObserver) { _panelObserver.disconnect(); _panelObserver = null; }
+  _panelItems    = [];
+  _panelRendered = 0;
+  _panelSentinel = null;
+}
+
+// Open a map item in the lightbox.
+// Fetches the full media record on demand if not already in memory.
+function _openMapItem(item, panelIdx, panelList) {
+  // Build filteredMedia from panelList so ← → navigation works in lightbox
+  const list = panelList || [item];
+
+  // Check in-memory first — may already be a full record
+  const resolve = (it) =>
+    db.media.find(m => m.uniqueName === it.uniqueName) || { ...it, metadata: {} };
+
+  const tryOpen = () => {
+    filteredMedia = list.map(resolve);
+    lbIndex = panelIdx;
+    openLightbox(panelIdx);
+  };
+
+  // If the item's full record is not in memory, fetch it first so metadata panel works
+  const inMemory = db.media.find(m => m.uniqueName === item.uniqueName);
+  if (inMemory) {
+    tryOpen();
+    return;
+  }
+
+  fetch(`${API_BASE}/api/media/by-id/${encodeURIComponent(item.uniqueName)}`)
+    .then(r => r.ok ? r.json() : null)
+    .then(full => {
+      if (full && !db.media.find(m => m.uniqueName === full.uniqueName)) {
+        db.media.push(full);
+      }
+      tryOpen();
+    })
+    .catch(() => tryOpen());  // open with stub on network error
+}
+
+// Reset map when media is re-synced so it reloads fresh GPS data
+function _resetMap() {
+  _mapLoaded = false;
+  closeMapClusterPanel();
+  if (_clusterGroup) {
+    _leafletMap?.removeLayer(_clusterGroup);
+    _clusterGroup = null;
+  }
+}
+
+// ─────────────────────────────────────────────
 //  BOOT
 // ─────────────────────────────────────────────
 init();
-</script>
-</body>
-</html>
