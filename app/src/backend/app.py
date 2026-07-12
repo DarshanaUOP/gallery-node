@@ -2038,10 +2038,14 @@ if FLASK_AVAILABLE:
     def run_server(port: int = 5000):
         if WAITRESS_AVAILABLE:
             log.info("Starting Luminary backend (Waitress) on http://0.0.0.0:%d", port)
-            # threads=4: Waitress's own worker pool. The shared SQLite connection is
-            # thread-local (see get_db_conn) and writes are serialised via _db_lock,
-            # so concurrent Waitress workers are safe.
-            _waitress_serve(app, host="0.0.0.0", port=port, threads=4)
+            # threads=16: a media gallery fires many concurrent thumbnail/image
+            # requests per page load (browsers open several connections at once),
+            # and /api/sync/stream holds one thread open for its entire duration
+            # while a sync is running. 4 threads queued up almost immediately
+            # ("Task queue depth" warnings) — 16 gives real headroom. The shared
+            # SQLite connection is thread-local (see get_db_conn) and writes are
+            # serialised via _db_lock, so more worker threads is safe.
+            _waitress_serve(app, host="0.0.0.0", port=port, threads=16)
         else:
             log.warning("Waitress not installed — using Flask's development server "
                         "(not recommended for production). Run: pip install waitress")
