@@ -19,10 +19,10 @@ A lightweight, local-first photo and video gallery. Index media from your filesy
 cd luminary
 
 # 2. Install Python dependencies
-pip install flask flask-cors Pillow pillow-heif
+pip install -r requirements.txt
 ```
 
-`pillow-heif` is optional but strongly recommended for HEIC/HEIF support. Without it, Luminary falls back to system ImageMagick or ffmpeg for HEIC decoding.
+`requirements.txt` includes `pillow-heif` for HEIC/HEIF support. It's optional but strongly recommended — without it, Luminary falls back to system ImageMagick or ffmpeg for HEIC decoding.
 
 ---
 
@@ -36,10 +36,10 @@ chmod +x run.sh
 Then open **http://localhost:5000** in your browser.
 
 ```bash
-./run.sh --sync             # run a sync pass then start the server
-python3 app.py              # start server on port 5000
-python3 app.py --port 8080  # custom port
-python3 app.py --sync-only  # scan directories and exit, no server
+./run.sh --sync                            # run a sync pass then start the server
+python3 app/src/backend/app.py              # start server on port 5000
+python3 app/src/backend/app.py --port 8080  # custom port
+python3 app/src/backend/app.py --sync-only  # scan directories and exit, no server
 ```
 
 ---
@@ -48,22 +48,33 @@ python3 app.py --sync-only  # scan directories and exit, no server
 
 ```
 luminary/
-├── app.py                  # Flask backend — API, scanner, metadata extractor
-├── index.html              # Frontend single-page app
-├── run.sh                  # Startup script
-├── config/                 # App settings — tracked in git
-│   └── configuration.json  # All configurable settings (edit this)
-├── data/                   # Runtime data — auto-created, git-ignored
-│   ├── media.json          # Source directory list
-│   ├── luminary.db         # Media + albums — SQLite database
-│   ├── luminary.db-wal     # SQLite write-ahead log (transient)
-│   └── luminary.db-shm     # SQLite shared memory (transient)
-├── thumb/                  # Thumbnail cache — auto-created, git-ignored
-└── logs/                   # Daily rotating logs — git-ignored
-    └── log-YYYY-MM-DD.log
+├── README.md
+├── requirements.txt              # Python dependencies
+├── run.sh                        # Startup script
+└── app/
+    └── src/
+        ├── backend/
+        │   ├── app.py                 # Flask backend — API, scanner, metadata extractor
+        │   ├── config/                # App settings — tracked in git
+        │   │   └── configuration.json # All configurable settings (edit this)
+        │   ├── data/                  # Runtime data — auto-created, git-ignored
+        │   │   ├── media.json         # Source directory list
+        │   │   ├── luminary.db        # Media + albums — SQLite database
+        │   │   ├── luminary.db-wal    # SQLite write-ahead log (transient)
+        │   │   └── luminary.db-shm    # SQLite shared memory (transient)
+        │   ├── logs/                  # Daily rotating logs — git-ignored
+        │   │   └── log-YYYY-MM-DD.log
+        │   └── thumb/                 # Thumbnail cache — auto-created, git-ignored
+        └── frontend/
+            ├── index.html             # Frontend markup
+            └── static/
+                ├── app.js             # Frontend logic
+                └── style.css          # Frontend styles
 ```
 
-On first run `app.py` automatically creates `data/media.json` with a default entry pointing at `~/Pictures`. `config/configuration.json` is shipped with the project and tracked in git — edit it directly to change settings.
+On first run `app.py` automatically creates `backend/data/media.json` with a default entry pointing at `~/Pictures`. `backend/config/configuration.json` is shipped with the project and tracked in git — edit it directly to change settings.
+
+`index.html` is served from `app/src/frontend/`, with `app.js` and `style.css` served from `app/src/frontend/static/` — no build step or bundler required, just edit and refresh.
 
 ### Why SQLite
 
@@ -364,7 +375,7 @@ All media endpoints support server-side filtering via query parameters.
 | `data/media.json` | ✗ | Source directory list — auto-created with `~/Pictures` entry on first run |
 | `data/luminary.db` | ✗ | SQLite database — media records + albums |
 | `data/luminary.db-wal` / `-shm` | ✗ | SQLite WAL files — transient, safe to delete when server is stopped |
-| `thumb/` | ✗ (contents) | Thumbnail cache — directory tracked via `.gitkeep`, contents ignored |
+| `thumb/` | ✗ | Thumbnail cache — auto-created on first run, fully git-ignored |
 | `logs/log-YYYY-MM-DD.log` | ✗ | Daily rotating log files |
 
 ---

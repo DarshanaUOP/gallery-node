@@ -1290,7 +1290,8 @@ def sync_library(progress=None) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 if FLASK_AVAILABLE:
-    app = Flask(__name__, static_folder=".", static_url_path="")
+    frontend_dir = BASE_DIR.parent / "frontend"
+    app = Flask(__name__, static_folder=str(frontend_dir), static_url_path="")
     CORS(app, expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"])
 
     @app.route("/")

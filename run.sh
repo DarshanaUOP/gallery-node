@@ -27,7 +27,7 @@ echo "  Dependencies OK."
 # ── optional initial sync ─────────────────────────────────────────────────────
 if [ "$1" == "--sync" ]; then
   echo "▸ Running initial sync…"
-  $PYTHON app.py --sync-only
+  $PYTHON app/src/backend/app.py --sync-only
 fi
 
 # ── start server ─────────────────────────────────────────────────────────────
@@ -41,4 +41,4 @@ echo "  → API:   http://localhost:$PORT/api/media"
 echo "  → Press  Ctrl+C  to stop"
 echo ""
 
-exec $PYTHON app.py --port "$PORT"
+exec $PYTHON app/src/backend/app.py --port "$PORT"
