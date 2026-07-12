@@ -21,3 +21,6 @@ python-dateutil>=2.8
 #   macOS:          brew install ffmpeg
 #   Ubuntu/Debian:  sudo apt install ffmpeg
 #   Windows:        https://ffmpeg.org/download.html
+
+# ── Required for building the application
+pyinstaller
