@@ -25,13 +25,13 @@ We will use `pyinstaller` to create executable application for this app.
 
 - [optional] delete dist directory
 
-    `rmdir /s /q dist\windows\portable\`
+    `rmdir /s /q app\build\windows\portable\`
 
 
 - build aplication using pyinstaller
 
     ```
-    pyinstaller --clean --onedir --add-data "app\src\frontend\index.html;." --add-data "app\src\frontend\static;static" --distpath "dist\windows\portable" --name "Luminary" app\src\backend\app.py
+    pyinstaller --clean --onedir --add-data "app\src\frontend\index.html;." --add-data "app\src\frontend\static;static" --distpath "app\build\windows\portable" --name "Luminary" app\src\backend\app.py
     ```
 - deactivate `venv-win`
 
@@ -53,13 +53,13 @@ We will use `pyinstaller` to create executable application for this app.
 
 - [optional] delete dist directory
 
-    `rm -rf dist/linux/portable/`
+    `rm -rf app/build/linux/portable/`
 
 
 - build aplication using pyinstaller
 
     ```
-    pyinstaller --clean --onedir --add-data "app/src/frontend/index.html:." --add-data "app/src/frontend/static:static" --distpath "dist/linux/portable" --name "Luminary" app/src/backend/app.py
+    pyinstaller --clean --onedir --add-data "app/src/frontend/index.html:." --add-data "app/src/frontend/static:static" --distpath "app/build/linux/portable" --name "Luminary" app/src/backend/app.py
     ```
 
 - deactivate `venv-linux`
