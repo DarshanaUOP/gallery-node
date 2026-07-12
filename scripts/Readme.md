@@ -7,6 +7,7 @@ We will use `pyinstaller` to create executable application for this app.
 ## How to build
 
 - Assumes that the relevent venv have been enabled
+- All commands below are run from the project root (the folder containing `app/`, `requirements.txt`, `run.sh`)
 
 ### Windows
 
@@ -20,7 +21,7 @@ We will use `pyinstaller` to create executable application for this app.
 
 - install pyinstaller
 
-    `pip install pyinstaller`
+    `pip install -r requirements.txt`
 
 - [optional] delete dist directory
 
@@ -30,7 +31,7 @@ We will use `pyinstaller` to create executable application for this app.
 - build aplication using pyinstaller
 
     ```
-    pyinstaller --clean --onedir --add-data "index.html;." --distpath "dist\windows\portable" --name "Luminary" app.py
+    pyinstaller --clean --onedir --add-data "app\src\frontend\index.html;." --add-data "app\src\frontend\static;static" --distpath "dist\windows\portable" --name "Luminary" app\src\backend\app.py
     ```
 - deactivate `venv-win`
 
@@ -48,17 +49,17 @@ We will use `pyinstaller` to create executable application for this app.
 
 - install pyinstaller
 
-    `pip install pyinstaller`
+    `pip install -r requirements.txt`
 
 - [optional] delete dist directory
 
-    `rmdir /s /q dist/linux/portable/`
+    `rm -rf dist/linux/portable/`
 
 
 - build aplication using pyinstaller
 
     ```
-    pyinstaller --clean --onedir --add-data "index.html:." --distpath "dist/linux/portable" --name "Luminary" app.py
+    pyinstaller --clean --onedir --add-data "app/src/frontend/index.html:." --add-data "app/src/frontend/static:static" --distpath "dist/linux/portable" --name "Luminary" app/src/backend/app.py
     ```
 
 - deactivate `venv-linux`
