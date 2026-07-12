@@ -35,11 +35,19 @@ if exist "%DIST_DIR%" (
 echo.
 echo === Building application with PyInstaller ===
 pyinstaller --clean --onedir ^
-    --add-data "app\src\frontend\index.html;." ^
-    --add-data "app\src\frontend\static;static" ^
     --distpath "%DIST_DIR%" ^
     --name "Luminary" ^
     app\src\backend\app.py
+if errorlevel 1 goto :error
+
+echo.
+echo === Copying frontend (html/css/js) into the built app ===
+rem app.py resolves frontend_dir as BASE_DIR.parent / "frontend" — frontend
+rem must live inside the "Luminary" output folder, alongside Luminary.exe.
+if exist "%DIST_DIR%\Luminary\frontend" (
+    rmdir /s /q "%DIST_DIR%\Luminary\frontend"
+)
+xcopy /E /I /Y "app\src\frontend" "%DIST_DIR%\Luminary\frontend" >nul
 if errorlevel 1 goto :error
 
 echo.
@@ -47,7 +55,7 @@ echo === Deactivating virtual environment ===
 call deactivate
 
 echo.
-echo Build complete: %DIST_DIR%\Luminary
+echo Build complete: %DIST_DIR%\Luminary  (frontend at %DIST_DIR%\Luminary\frontend)
 goto :eof
 
 :error
