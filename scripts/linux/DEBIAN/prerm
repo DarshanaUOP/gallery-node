@@ -1,0 +1,18 @@
+#!/bin/sh
+# Luminary — prerm
+# Runs before the package's files are removed (on both upgrade and removal).
+set -e
+
+# Nothing to stop here — Luminary is a manually launched desktop app, not a
+# system service, so there's no daemon to shut down first.
+#
+# USER DATA: intentionally not touched by this script, or by postrm, or by
+# `dpkg --purge`. Per-user data lives in ~/.local/share/Luminary for
+# whichever user(s) ran the app — a root-run postrm script can't reliably
+# enumerate every user's home directory, and silently deleting a user's
+# photo library metadata/thumbnail cache on uninstall would be a bad
+# surprise anyway. This matches the Windows installer's behavior (see
+# scripts/windows/Luminary.iss) and standard OS convention: user data
+# survives uninstall unless the user removes it themselves.
+
+exit 0

@@ -1,0 +1,13 @@
+Package: luminary
+Version: @VERSION@
+Section: graphics
+Priority: optional
+Architecture: @ARCH@
+Depends: libc6 (>= 2.31)
+Maintainer: Luminary Maintainers <maintainers@example.com>
+Homepage: https://example.com/luminary
+Description: Luminary — Local Media Gallery
+ A self-hosted local media gallery and browser for photos and videos.
+ .
+ This package bundles its own Python runtime (PyInstaller onedir build) —
+ no system Python or pip dependencies are required at runtime.

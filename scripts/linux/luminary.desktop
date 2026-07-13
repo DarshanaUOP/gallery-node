@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Luminary
+Comment=Local Media Gallery
+Exec=/usr/bin/luminary
+Icon=luminary
+Terminal=false
+Categories=Graphics;Photography;
+StartupWMClass=Luminary
