@@ -33,6 +33,13 @@ except ImportError:
     FLASK_AVAILABLE = False
     print("[WARN] Flask/flask-cors not installed. Run: pip install flask flask-cors")
 
+try:
+    from waitress import serve as _waitress_serve
+    WAITRESS_AVAILABLE = True
+except ImportError:
+    WAITRESS_AVAILABLE = False
+    print("[WARN] Waitress not installed — falling back to Flask's dev server. Run: pip install waitress")
+
 # ── config ─────────────────────────────────────────────────────────────────────
 BASE_DIR       = Path(__file__).parent
 DATA_DIR       = BASE_DIR / "data"
@@ -2029,13 +2036,25 @@ if FLASK_AVAILABLE:
         return jsonify({"error": "Not found"}), 404
 
     def run_server(port: int = 5000):
-        log.info("Starting Luminary backend on http://0.0.0.0:%d", port)
-        # threaded=False: serialises all requests through one thread so the single
-        # shared SQLite connection is never accessed concurrently. The sync runs in
-        # its own daemon thread but only writes between request cycles. WAL mode
-        # means reads (most requests) never block on the sync write thread.
-        app.run(host="0.0.0.0", port=port, debug=False, threaded=True,
-                use_reloader=False)
+        if WAITRESS_AVAILABLE:
+            log.info("Starting Luminary backend (Waitress) on http://0.0.0.0:%d", port)
+            # threads=16: a media gallery fires many concurrent thumbnail/image
+            # requests per page load (browsers open several connections at once),
+            # and /api/sync/stream holds one thread open for its entire duration
+            # while a sync is running. 4 threads queued up almost immediately
+            # ("Task queue depth" warnings) — 16 gives real headroom. The shared
+            # SQLite connection is thread-local (see get_db_conn) and writes are
+            # serialised via _db_lock, so more worker threads is safe.
+            _waitress_serve(app, host="0.0.0.0", port=port, threads=16)
+        else:
+            log.warning("Waitress not installed — using Flask's development server "
+                        "(not recommended for production). Run: pip install waitress")
+            # threaded=False: serialises all requests through one thread so the single
+            # shared SQLite connection is never accessed concurrently. The sync runs in
+            # its own daemon thread but only writes between request cycles. WAL mode
+            # means reads (most requests) never block on the sync write thread.
+            app.run(host="0.0.0.0", port=port, debug=False, threaded=True,
+                    use_reloader=False)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

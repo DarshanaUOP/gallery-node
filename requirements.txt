@@ -5,6 +5,7 @@
 Flask>=2.3
 flask-cors>=4.0
 Pillow>=10.0          # image handling + EXIF extraction
+waitress>=2.1         # production WSGI server (replaces Flask's dev server)
 
 # ── Optional — enable extra format support if installed ────────────────────
 # HEIC/HEIF (iPhone photos): without this, app.py falls back to pyheif, then
