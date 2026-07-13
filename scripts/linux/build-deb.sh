@@ -16,7 +16,6 @@ VERSION="${1:-1.0.0}"
 ARCH="${2:-amd64}"
 
 SRC_DIR="app/build/linux/portable/Luminary"
-PKG_ROOT="app/build/linux/deb-pkg"
 DEB_OUT="app/build/linux/luminary_${VERSION}_${ARCH}.deb"
 SCRIPTS_DIR="scripts/linux"
 
@@ -30,6 +29,16 @@ if ! command -v dpkg-deb >/dev/null 2>&1; then
     exit 1
 fi
 
+# Stage the package tree under /tmp rather than inside the project checkout.
+# dpkg-deb requires the DEBIAN control directory to be mode 0755-0775, and
+# chmod can silently fail to stick on filesystems that don't support real
+# Unix permission bits — most commonly a Windows-mounted path under WSL
+# (/mnt/c/...), a network share, or an exFAT/NTFS drive. Building in /tmp
+# sidesteps that regardless of where the project source itself lives.
+WORK_ROOT="$(mktemp -d /tmp/luminary-deb-XXXXXX)"
+trap 'rm -rf "$WORK_ROOT"' EXIT
+PKG_ROOT="$WORK_ROOT/deb-pkg"
+
 echo
 echo "=== Assembling package tree ($PKG_ROOT) ==="
 rm -rf "$PKG_ROOT"
@@ -38,6 +47,7 @@ mkdir -p "$PKG_ROOT/opt/luminary"
 mkdir -p "$PKG_ROOT/usr/bin"
 mkdir -p "$PKG_ROOT/usr/share/applications"
 mkdir -p "$PKG_ROOT/usr/share/icons/hicolor/256x256/apps"
+mkdir -p "$PKG_ROOT/usr/lib/systemd/user"
 
 echo
 echo "=== Copying built app into /opt/luminary ==="
@@ -45,6 +55,12 @@ echo "=== Copying built app into /opt/luminary ==="
 # and run-luminary.sh if bundled — goes under /opt, the standard FHS location
 # for self-contained third-party applications with their own bundled runtime.
 cp -r "$SRC_DIR/." "$PKG_ROOT/opt/luminary/"
+# cp "$SCRIPTS_DIR/cleanup-thumbnails.sh" "$PKG_ROOT/opt/luminary/cleanup-thumbnails.sh"
+
+# echo
+# echo "=== Installing thumbnail/cache cleanup timer (systemd --user) ==="
+# cp "$SCRIPTS_DIR/luminary-cleanup.service" "$PKG_ROOT/usr/lib/systemd/user/luminary-cleanup.service"
+# cp "$SCRIPTS_DIR/luminary-cleanup.timer" "$PKG_ROOT/usr/lib/systemd/user/luminary-cleanup.timer"
 
 echo
 echo "=== Installing launcher, desktop entry, icon ==="
@@ -72,9 +88,24 @@ chmod 755 "$PKG_ROOT/usr/bin/luminary"
 [ -f "$PKG_ROOT/opt/luminary/run-luminary.sh" ] && chmod 755 "$PKG_ROOT/opt/luminary/run-luminary.sh"
 [ -f "$PKG_ROOT/opt/luminary/ffmpeg" ]          && chmod 755 "$PKG_ROOT/opt/luminary/ffmpeg" "$PKG_ROOT/opt/luminary/ffprobe"
 
+# Verify the chmod actually stuck. If it didn't, even /tmp is behaving oddly
+# (e.g. mounted with unusual options) — fail with a clear diagnosis instead
+# of letting dpkg-deb's more cryptic error surface.
+ACTUAL_MODE="$(stat -c '%a' "$PKG_ROOT/DEBIAN")"
+if [ "$ACTUAL_MODE" != "755" ]; then
+    echo "ERROR: $PKG_ROOT/DEBIAN is mode $ACTUAL_MODE after chmod 755 — this" >&2
+    echo "  filesystem isn't honoring Unix permissions (seen with WSL /mnt/c" >&2
+    echo "  paths, network shares, and exFAT/NTFS mounts). Try running this" >&2
+    echo "  script with \$TMPDIR pointed at a native Linux filesystem, e.g.:" >&2
+    echo "    TMPDIR=/var/tmp scripts/linux/build-deb.sh $VERSION $ARCH" >&2
+    exit 1
+fi
+
 echo
 echo "=== Building .deb ==="
-dpkg-deb --build --root-owner-group "$PKG_ROOT" "$DEB_OUT"
+dpkg-deb --build --root-owner-group "$PKG_ROOT" "$WORK_ROOT/luminary.deb"
+mkdir -p "$(dirname "$DEB_OUT")"
+cp "$WORK_ROOT/luminary.deb" "$DEB_OUT"
 
 echo
 echo "Package built: $DEB_OUT"
