@@ -16,7 +16,7 @@ VERSION="${1:-1.0.0}"
 ARCH="${2:-amd64}"
 
 SRC_DIR="app/build/linux/portable/Luminary"
-DEB_OUT="app/build/linux/luminary_${VERSION}_${ARCH}.deb"
+DEB_OUT="app/build/linux/installer/luminary_${VERSION}_${ARCH}.deb"
 SCRIPTS_DIR="scripts/linux"
 
 if [ ! -d "$SRC_DIR" ]; then
