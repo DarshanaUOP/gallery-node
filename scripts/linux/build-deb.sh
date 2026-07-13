@@ -57,7 +57,13 @@ cp -r "$SRC_DIR/." "$PKG_ROOT/opt/luminary/"
 
 echo
 echo "=== Installing launcher, desktop entry, icon ==="
-cp "$SCRIPTS_DIR/usr-bin-luminary" "$PKG_ROOT/usr/bin/luminary"
+# sed strips any CRLF line endings unconditionally, regardless of how these
+# source files were last saved. This matters specifically for scripts with a
+# shebang line: "#!/bin/sh\r" makes the kernel look for an interpreter
+# literally named "/bin/sh<CR>", which doesn't exist — dpkg then fails with
+# a confusing "unable to execute ... No such file or directory" when it
+# tries to run postinst/prerm during install or removal.
+sed 's/\r$//' "$SCRIPTS_DIR/usr-bin-luminary" > "$PKG_ROOT/usr/bin/luminary"
 cp "$SCRIPTS_DIR/luminary.desktop" "$PKG_ROOT/usr/share/applications/luminary.desktop"
 if [ -f "$SCRIPTS_DIR/luminary.png" ]; then
     cp "$SCRIPTS_DIR/luminary.png" "$PKG_ROOT/usr/share/icons/hicolor/256x256/apps/luminary.png"
@@ -67,10 +73,10 @@ fi
 
 echo
 echo "=== Writing DEBIAN/control (version $VERSION, arch $ARCH) ==="
-sed -e "s/@VERSION@/$VERSION/" -e "s/@ARCH@/$ARCH/" \
+sed -e "s/@VERSION@/$VERSION/" -e "s/@ARCH@/$ARCH/" -e 's/\r$//' \
     "$SCRIPTS_DIR/debian/control" > "$PKG_ROOT/DEBIAN/control"
-cp "$SCRIPTS_DIR/debian/postinst" "$PKG_ROOT/DEBIAN/postinst"
-cp "$SCRIPTS_DIR/debian/prerm" "$PKG_ROOT/DEBIAN/prerm"
+sed 's/\r$//' "$SCRIPTS_DIR/debian/postinst" > "$PKG_ROOT/DEBIAN/postinst"
+sed 's/\r$//' "$SCRIPTS_DIR/debian/prerm" > "$PKG_ROOT/DEBIAN/prerm"
 
 echo
 echo "=== Setting permissions ==="
@@ -80,6 +86,18 @@ chmod 755 "$PKG_ROOT/usr/bin/luminary"
 [ -f "$PKG_ROOT/opt/luminary/Luminary" ]        && chmod 755 "$PKG_ROOT/opt/luminary/Luminary"
 [ -f "$PKG_ROOT/opt/luminary/run-luminary.sh" ] && chmod 755 "$PKG_ROOT/opt/luminary/run-luminary.sh"
 [ -f "$PKG_ROOT/opt/luminary/ffmpeg" ]          && chmod 755 "$PKG_ROOT/opt/luminary/ffmpeg" "$PKG_ROOT/opt/luminary/ffprobe"
+
+# Verify no CRLF slipped into any executable script — belt-and-suspenders on
+# top of the sed stripping above, in case this script is ever edited to add
+# another script source without going through the same sed step.
+for f in "$PKG_ROOT/DEBIAN/postinst" "$PKG_ROOT/DEBIAN/prerm" "$PKG_ROOT/usr/bin/luminary"; do
+    if grep -qP '\r$' "$f" 2>/dev/null; then
+        echo "ERROR: $f contains CRLF line endings — dpkg will fail to execute" >&2
+        echo "  it (shebang becomes '#!/bin/sh<CR>', an interpreter that doesn't" >&2
+        echo "  exist). Run: sed -i 's/\\r\$//' $f" >&2
+        exit 1
+    fi
+done
 
 # Verify the chmod actually stuck. If it didn't, even /tmp is behaving oddly
 # (e.g. mounted with unusual options) — fail with a clear diagnosis instead
