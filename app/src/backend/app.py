@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import uuid
+import shutil
 import hashlib
 import logging
 import sqlite3
@@ -1563,6 +1564,76 @@ if FLASK_AVAILABLE:
 
     def _thumb_cache_path(unique_name, size, quality):
         return _get_thumb_cache_dir() / f"{unique_name}_{size}q{quality}.jpg"
+
+    # ── cache/thumbnail size + clear ──────────────────────────────────────────
+    def _dir_size_bytes(path: Path) -> int:
+        """Recursively sum file sizes under path. Missing dir → 0."""
+        if not path.is_dir():
+            return 0
+        total = 0
+        for item in path.rglob("*"):
+            if item.is_file():
+                try:
+                    total += item.stat().st_size
+                except OSError:
+                    pass  # file vanished mid-scan or unreadable — skip it
+        return total
+
+    def _clear_dir_contents(path: Path) -> int:
+        """
+        Delete every file/subdirectory inside path, leaving path itself in
+        place (so the app doesn't have to recreate it before the next write).
+        Best-effort — an item that fails to delete (e.g. currently in use)
+        is skipped rather than aborting the whole clear. Returns bytes freed.
+        """
+        if not path.is_dir():
+            return 0
+        freed = 0
+        for item in path.iterdir():
+            try:
+                if item.is_dir():
+                    freed += _dir_size_bytes(item)  # measure before rmtree
+                    shutil.rmtree(item, ignore_errors=True)
+                else:
+                    freed += item.stat().st_size
+                    item.unlink()
+            except OSError as e:
+                log.warning("Could not delete %s: %s", item, e)
+        return freed
+
+    @app.route("/api/cache/size", methods=["GET"])
+    def api_cache_size():
+        """
+        Total on-disk size of the thumbnail cache + temp cache directories,
+        in bytes and MB. Used by the Settings panel's "Clear Cache" section.
+        Uses the *configured* thumbnail cache dir (which may differ from
+        app_paths.THUMB_DIR if the user set a custom thumbnail_cache_path).
+        """
+        thumb_bytes = _dir_size_bytes(_get_thumb_cache_dir())
+        cache_bytes = _dir_size_bytes(app_paths.CACHE_DIR)
+        total_bytes = thumb_bytes + cache_bytes
+        return jsonify({
+            "total_bytes": total_bytes,
+            "total_mb":    round(total_bytes / (1024 * 1024), 2),
+        })
+
+    @app.route("/api/cache/clear", methods=["POST"])
+    def api_cache_clear():
+        """
+        Delete all contents of the thumbnail cache + temp cache directories.
+        Safe to call any time — thumbnails and temp files are regenerated
+        on demand the next time they're needed. Does not touch the SQLite
+        DB, config, logs, or the user's original media files.
+        """
+        freed = 0
+        freed += _clear_dir_contents(_get_thumb_cache_dir())
+        freed += _clear_dir_contents(app_paths.CACHE_DIR)
+        log.info("Cache cleared via /api/cache/clear — freed %d bytes", freed)
+        return jsonify({
+            "ok":         True,
+            "freed_bytes": freed,
+            "freed_mb":    round(freed / (1024 * 1024), 2),
+        })
 
     # ── /api/thumb/<unique_name>  — small, cached, for grid ──────────────────
     @app.route("/api/thumb/<unique_name>", methods=["GET"])

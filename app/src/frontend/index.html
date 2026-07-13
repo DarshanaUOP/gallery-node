@@ -480,6 +480,23 @@
       </div>
     </div>
 
+    <!-- ── STORAGE ── -->
+    <div class="settings-section">
+      <div class="settings-section-title">Storage</div>
+
+      <div class="settings-row">
+        <div class="settings-label">
+          Thumbnail &amp; cache data
+          <span class="settings-hint">Regenerated automatically as needed — safe to clear anytime</span>
+        </div>
+        <div style="font-size:12px;color:var(--text-dim);white-space:nowrap" id="s-cache-size">Calculating…</div>
+      </div>
+      <div class="settings-row" style="border-bottom:none">
+        <div class="settings-label">Free up space by deleting all cached thumbnails and temporary files</div>
+        <button class="btn btn-danger" id="s-clear-cache-btn" onclick="clearCache()">Clear Cache</button>
+      </div>
+    </div>
+
     <div class="modal-actions" style="position:sticky;bottom:0;background:var(--surface);padding:16px 0 4px;margin-top:8px;border-top:1px solid var(--border)">
       <div id="settings-status" style="font-size:11px;color:var(--text-muted);flex:1;line-height:1.6"></div>
       <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>

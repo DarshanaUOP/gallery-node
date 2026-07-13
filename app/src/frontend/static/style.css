@@ -208,6 +208,7 @@
     color: var(--danger);
   }
   .btn-danger:hover { background: rgba(200,126,126,0.2); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
 
   .toggle-wrap {
     display: flex;

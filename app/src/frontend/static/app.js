@@ -1516,6 +1516,40 @@ async function openSettings() {
   _settingsPopulate(_settingsCurrent);
   document.getElementById('settings-status').textContent = '';
   document.getElementById('settings-overlay').classList.add('open');
+  _refreshCacheSize();
+}
+
+async function _refreshCacheSize() {
+  const el = document.getElementById('s-cache-size');
+  el.textContent = 'Calculating…';
+  try {
+    const r = await fetch(`${API_BASE}/api/cache/size`);
+    if (!r.ok) throw new Error('Server returned ' + r.status);
+    const data = await r.json();
+    el.textContent = `${data.total_mb} MB used`;
+  } catch {
+    el.textContent = '—';
+  }
+}
+
+async function clearCache() {
+  if (!confirm('Delete all cached thumbnails and temporary files?\n\nThis will not affect your original photos/videos — thumbnails are regenerated automatically the next time they\'re needed.')) return;
+
+  const btn = document.getElementById('s-clear-cache-btn');
+  btn.disabled = true;
+  btn.textContent = 'Clearing…';
+  try {
+    const r = await fetch(`${API_BASE}/api/cache/clear`, { method: 'POST' });
+    if (!r.ok) throw new Error('Server returned ' + r.status);
+    const data = await r.json();
+    toast(`Cleared ${data.freed_mb} MB`, 'success');
+    _refreshCacheSize();
+  } catch {
+    toast('Could not clear cache — is app.py running?', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Clear Cache';
+  }
 }
 
 function closeSettings() {
