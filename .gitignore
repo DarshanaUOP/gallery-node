@@ -10,7 +10,7 @@ app/src/backend/data
 # app/src/backend/logs/*
 
 # Thumbnail cache — directory tracked, contents ignored
-app/src/backend/thumb/*
+app/src/backend/thumb*/*
 !thumb/.gitkeep
 
 # Python
