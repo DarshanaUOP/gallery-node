@@ -16,6 +16,13 @@ from pathlib import Path
 from datetime import datetime
 from collections import deque
 
+import app_paths
+
+# ── resolve every filesystem location up front, before any file is read or
+#    written (see app_paths.py for the full frozen-vs-dev / migration logic) ──
+app_paths.ensure_dirs()
+app_paths.migrate_legacy_internal_data()  # no-op unless this is a frozen build's first launch
+
 # ── optional deps (graceful degradation) ──────────────────────────────────────
 try:
     from PIL import Image
@@ -41,15 +48,17 @@ except ImportError:
     print("[WARN] Waitress not installed — falling back to Flask's dev server. Run: pip install waitress")
 
 # ── config ─────────────────────────────────────────────────────────────────────
-BASE_DIR       = Path(__file__).parent
-DATA_DIR       = BASE_DIR / "data"
-CONFIG_DIR     = BASE_DIR / "config"
-THUMB_DIR      = BASE_DIR / "thumb"
-LOGS_DIR       = BASE_DIR / "logs"
-DATA_DIR.mkdir(exist_ok=True)
-CONFIG_DIR.mkdir(exist_ok=True)
-THUMB_DIR.mkdir(exist_ok=True)
-LOGS_DIR.mkdir(exist_ok=True)
+# All of these now come from app_paths.py: DATA_DIR/CONFIG_DIR/LOGS_DIR/THUMB_DIR
+# resolve to an OS-appropriate per-user location in frozen builds (surviving
+# installer upgrades), or to project-relative paths in dev mode (unchanged
+# from before). BASE_DIR is kept as an alias for anything below still using
+# it for non-user-data purposes (e.g. resolving the frontend static folder).
+BASE_DIR       = app_paths.INSTALL_DIR
+DATA_DIR       = app_paths.DATA_DIR
+CONFIG_DIR     = app_paths.CONFIG_DIR
+THUMB_DIR      = app_paths.THUMB_DIR
+LOGS_DIR       = app_paths.LOGS_DIR
+# directories already created by app_paths.ensure_dirs() above
 
 MEDIA_JSON     = DATA_DIR / "media.json"          # source directory config — stays JSON (small, human-edited)
 CONFIG_JSON    = CONFIG_DIR / "configuration.json" # app settings — tracked in git, not gitignored
@@ -958,7 +967,7 @@ def open_image_any_format(filepath: str):
             lambda s, d: ["ffmpeg", "-y", "-i", s, d],
         ]:
             try:
-                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False, dir=str(app_paths.CACHE_DIR)) as tmp:
                     tmp_path = tmp.name
                 r = subprocess.run(cmd_fn(filepath, tmp_path),
                                    capture_output=True, timeout=30)
@@ -1297,7 +1306,7 @@ def sync_library(progress=None) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 if FLASK_AVAILABLE:
-    frontend_dir = BASE_DIR.parent / "frontend"
+    frontend_dir = app_paths.RESOURCES_DIR
     app = Flask(__name__, static_folder=str(frontend_dir), static_url_path="")
     CORS(app, expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"])
 
@@ -1526,22 +1535,28 @@ if FLASK_AVAILABLE:
     def _get_thumb_cache_dir() -> Path:
         """
         Resolve thumbnail_cache_path from configuration.json.
-        - Relative paths (e.g. "thumb") are resolved relative to BASE_DIR
-        - Absolute paths are used as-is (supports custom mounts like /mnt/ssd/cache)
-        - Falls back to BASE_DIR / "thumb" if the configured path can't be created
+        - "thumb" or "thumbnails" (the historical and current defaults) always
+          resolve to THUMB_DIR itself — this avoids creating a stray empty
+          folder if an existing config still has the old literal default value.
+        - Other relative paths are resolved relative to the user data root
+          (app_paths.USER_DATA_ROOT), not the install dir — the install dir
+          may not even be writable (e.g. Program Files), and per-user data
+          belongs next to the rest of it.
+        - Absolute paths are used as-is (supports custom mounts like /mnt/ssd/cache).
+        - Falls back to THUMB_DIR if the configured path can't be created.
         """
         cfg = load_config()
         raw = cfg.get("thumbnail_cache_path", "thumb").strip()
-        if not raw:
-            raw = "thumb"
+        if not raw or raw in ("thumb", "thumbnails"):
+            return THUMB_DIR
         p = Path(raw)
         if not p.is_absolute():
-            p = BASE_DIR / p       # resolve relative to project root
+            p = app_paths.USER_DATA_ROOT / p
         p = p.expanduser()
         try:
             p.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            log.warning("Cannot create thumbnail cache dir %s: %s — falling back to thumb/", p, e)
+            log.warning("Cannot create thumbnail cache dir %s: %s — falling back to thumbnails/", p, e)
             p = THUMB_DIR
             p.mkdir(parents=True, exist_ok=True)
         return p
@@ -1580,7 +1595,7 @@ if FLASK_AVAILABLE:
                 duration = item.get("metadata", {}).get("video", {}).get("duration", 10)
                 seek_sec = max(1.0, round(float(duration) * 0.10, 2))
 
-                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False, dir=str(app_paths.CACHE_DIR)) as tmp:
                     tmp_path = tmp.name
 
                 cmd = [

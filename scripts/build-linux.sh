@@ -36,10 +36,13 @@ pyinstaller --clean --onedir \
 
 echo
 echo "=== Copying frontend (html/css/js) into the built app ==="
-# app.py resolves frontend_dir as BASE_DIR.parent / "frontend" — frontend
-# must live inside the "Luminary" output folder, alongside the Luminary binary.
-rm -rf "$DIST_DIR/Luminary/frontend"
-cp -r "app/src/frontend" "$DIST_DIR/Luminary/frontend"
+# app_paths.get_resources_dir() resolves bundled resources to <install_dir>/resources
+# for frozen builds — a sibling of PyInstaller's own _internal/ folder, kept
+# separate so it's clear which parts are our assets vs. PyInstaller's runtime
+# bundle, and so user data (which now lives outside the install dir entirely)
+# is never confused with either.
+rm -rf "$DIST_DIR/Luminary/resources"
+cp -r "app/src/frontend" "$DIST_DIR/Luminary/resources"
 
 echo
 echo "=== Deactivating virtual environment ==="
@@ -115,4 +118,4 @@ else
 fi
 
 echo
-echo "Build complete: $DIST_DIR/Luminary (frontend at $DIST_DIR/Luminary/frontend)"
+echo "Build complete: $DIST_DIR/Luminary (resources at $DIST_DIR/Luminary/resources)"

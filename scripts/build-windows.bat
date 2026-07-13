@@ -42,12 +42,15 @@ if errorlevel 1 goto :error
 
 echo.
 echo === Copying frontend (html/css/js) into the built app ===
-rem app.py resolves frontend_dir as BASE_DIR.parent / "frontend" — frontend
-rem must live inside the "Luminary" output folder, alongside Luminary.exe.
-if exist "%DIST_DIR%\Luminary\frontend" (
-    rmdir /s /q "%DIST_DIR%\Luminary\frontend"
+rem app_paths.get_resources_dir() resolves bundled resources to <install_dir>\resources
+rem for frozen builds — a sibling of PyInstaller's own _internal\ folder, kept
+rem separate so it's clear which parts are our assets vs. PyInstaller's runtime
+rem bundle, and so user data (which now lives outside the install dir entirely)
+rem is never confused with either.
+if exist "%DIST_DIR%\Luminary\resources" (
+    rmdir /s /q "%DIST_DIR%\Luminary\resources"
 )
-xcopy /E /I /Y "app\src\frontend" "%DIST_DIR%\Luminary\frontend" >nul
+xcopy /E /I /Y "app\src\frontend" "%DIST_DIR%\Luminary\resources" >nul
 if errorlevel 1 goto :error
 
 echo.
@@ -103,7 +106,7 @@ echo limited. Re-run this script with internet access to bundle it.
 
 :ffmpeg_done
 echo.
-echo Build complete: %DIST_DIR%\Luminary  (frontend at %DIST_DIR%\Luminary\frontend)
+echo Build complete: %DIST_DIR%\Luminary  (resources at %DIST_DIR%\Luminary\resources)
 goto :eof
 
 :error
