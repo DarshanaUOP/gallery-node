@@ -47,7 +47,6 @@ mkdir -p "$PKG_ROOT/opt/luminary"
 mkdir -p "$PKG_ROOT/usr/bin"
 mkdir -p "$PKG_ROOT/usr/share/applications"
 mkdir -p "$PKG_ROOT/usr/share/icons/hicolor/256x256/apps"
-mkdir -p "$PKG_ROOT/usr/lib/systemd/user"
 
 echo
 echo "=== Copying built app into /opt/luminary ==="
@@ -55,12 +54,6 @@ echo "=== Copying built app into /opt/luminary ==="
 # and run-luminary.sh if bundled — goes under /opt, the standard FHS location
 # for self-contained third-party applications with their own bundled runtime.
 cp -r "$SRC_DIR/." "$PKG_ROOT/opt/luminary/"
-# cp "$SCRIPTS_DIR/cleanup-thumbnails.sh" "$PKG_ROOT/opt/luminary/cleanup-thumbnails.sh"
-
-# echo
-# echo "=== Installing thumbnail/cache cleanup timer (systemd --user) ==="
-# cp "$SCRIPTS_DIR/luminary-cleanup.service" "$PKG_ROOT/usr/lib/systemd/user/luminary-cleanup.service"
-# cp "$SCRIPTS_DIR/luminary-cleanup.timer" "$PKG_ROOT/usr/lib/systemd/user/luminary-cleanup.timer"
 
 echo
 echo "=== Installing launcher, desktop entry, icon ==="
