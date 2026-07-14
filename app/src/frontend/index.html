@@ -240,6 +240,32 @@
   </div>
 </div>
 
+<!-- RENAME ALBUM MODAL -->
+<div class="modal-overlay" id="rename-album-modal">
+  <div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeModal('rename-album-modal')">✕</button>
+    <h2>Rename Album</h2>
+    <input type="text" id="rename-album-name" placeholder="Album name…">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('rename-album-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="confirmRenameAlbum()">Rename</button>
+    </div>
+  </div>
+</div>
+
+<!-- RENAME FOLDER MODAL -->
+<div class="modal-overlay" id="rename-folder-modal">
+  <div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeModal('rename-folder-modal')">✕</button>
+    <h2>Rename Folder</h2>
+    <input type="text" id="rename-folder-name" placeholder="Folder name…">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('rename-folder-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="confirmRenameFolder()">Rename</button>
+    </div>
+  </div>
+</div>
+
 <!-- MOVE ALBUM TO FOLDER MODAL -->
 <div class="modal-overlay" id="move-album-modal">
   <div class="modal" style="position:relative">

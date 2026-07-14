@@ -223,7 +223,7 @@ function renderAlbumNav() {
       <span class="folder-icon">⛁</span>
       <span class="folder-name">${escHtml(folder.name)}</span>
       <span class="folder-actions">
-        <span class="album-rename-icon" title="Rename folder" onclick="event.stopPropagation();promptRenameFolder('${folder.id}')">✎</span>
+        <span class="album-rename-icon" title="Rename folder" onclick="event.stopPropagation();openRenameFolder('${folder.id}')">✎</span>
         <span class="album-rename-icon" title="Delete folder" onclick="event.stopPropagation();deleteFolder('${folder.id}')">✕</span>
       </span>
       <span class="album-count">${folderAlbums.length}</span>`;
@@ -250,7 +250,7 @@ function _albumNavItem(album, nested) {
   d.innerHTML = `
     <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(album.name)}</span>
     <span class="album-rename-icon" title="Move to folder" onclick="event.stopPropagation();openMoveAlbum('${album.id}')">⇄</span>
-    <span class="album-rename-icon" title="Rename" onclick="event.stopPropagation();promptRenameAlbum('${album.id}')">✎</span>
+    <span class="album-rename-icon" title="Rename" onclick="event.stopPropagation();openRenameAlbum('${album.id}')">✎</span>
     <span class="album-count">${album.media.length}</span>`;
   d.onclick = () => setView(album.id, d);
   return d;
@@ -1365,19 +1365,36 @@ function startInlineRename() {
 }
 
 // ── Rename from sidebar pencil icon ───────────────────────────────────────────
-function promptRenameAlbum(albumId) {
+let pendingRenameAlbumId = null;
+
+function openRenameAlbum(albumId) {
   const album = db.albums.find(a => a.id === albumId);
   if (!album) return;
-  const newName = window.prompt('Rename album:', album.name);
-  if (newName === null) return;          // cancelled
-  const trimmed = newName.trim();
-  if (!trimmed) { toast('Name cannot be empty', 'error'); return; }
-  if (trimmed === album.name) return;
-  album.name = trimmed;
-  saveDB();
-  softRefresh();
-  toast(`Renamed to "${trimmed}"`, 'success');
+  pendingRenameAlbumId = albumId;
+  const input = document.getElementById('rename-album-name');
+  input.value = album.name;
+  document.getElementById('rename-album-modal').classList.add('open');
+  setTimeout(() => { input.focus(); input.select(); }, 100);
 }
+
+function confirmRenameAlbum() {
+  if (!pendingRenameAlbumId) return;
+  const album = db.albums.find(a => a.id === pendingRenameAlbumId);
+  if (!album) return;
+  const trimmed = document.getElementById('rename-album-name').value.trim();
+  if (!trimmed) { toast('Name cannot be empty', 'error'); return; }
+  if (trimmed !== album.name) {
+    album.name = trimmed;
+    saveDB();
+    softRefresh();
+    toast(`Renamed to "${trimmed}"`, 'success');
+  }
+  closeModal('rename-album-modal');
+}
+
+document.getElementById('rename-album-name')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmRenameAlbum();
+});
 
 // ─────────────────────────────────────────────
 //  FOLDERS
@@ -1412,28 +1429,44 @@ document.getElementById('new-folder-name')?.addEventListener('keydown', e => {
   if (e.key === 'Enter') confirmCreateFolder();
 });
 
-async function promptRenameFolder(folderId) {
+let pendingRenameFolderId = null;
+
+function openRenameFolder(folderId) {
   const folder = db.folders.find(f => f.id === folderId);
   if (!folder) return;
-  const newName = window.prompt('Rename folder:', folder.name);
-  if (newName === null) return;                 // cancelled
-  const trimmed = newName.trim();
+  pendingRenameFolderId = folderId;
+  const input = document.getElementById('rename-folder-name');
+  input.value = folder.name;
+  document.getElementById('rename-folder-modal').classList.add('open');
+  setTimeout(() => { input.focus(); input.select(); }, 100);
+}
+
+async function confirmRenameFolder() {
+  if (!pendingRenameFolderId) return;
+  const folder = db.folders.find(f => f.id === pendingRenameFolderId);
+  if (!folder) return;
+  const trimmed = document.getElementById('rename-folder-name').value.trim();
   if (!trimmed) { toast('Name cannot be empty', 'error'); return; }
-  if (trimmed === folder.name) return;
+  if (trimmed === folder.name) { closeModal('rename-folder-modal'); return; }
   try {
     const r = await fetch(`${API_BASE}/api/folder/rename`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ folderId, name: trimmed })
+      body:    JSON.stringify({ folderId: pendingRenameFolderId, name: trimmed })
     });
     if (!r.ok) throw new Error();
     folder.name = trimmed;
     renderAlbumNav();
+    closeModal('rename-folder-modal');
     toast(`Renamed to "${trimmed}"`, 'success');
   } catch {
     toast('Failed to rename folder', 'error');
   }
 }
+
+document.getElementById('rename-folder-name')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmRenameFolder();
+});
 
 // Deletes a folder. If it still contains albums, the backend refuses (409)
 // and tells us how many — we surface that as a confirm() warning explaining
