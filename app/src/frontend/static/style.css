@@ -1242,8 +1242,12 @@
   }
 
   /* ── SETTINGS PANEL ── */
+  #settings-panel {
+    overflow-x: hidden;   /* only a vertical scrollbar should ever appear here */
+  }
   .settings-section {
     margin-bottom: 28px;
+    min-width: 0;
   }
   .settings-section-title {
     font-size: 9px;
@@ -1262,6 +1266,7 @@
     padding: 8px 0;
     border-bottom: 1px solid rgba(255,255,255,0.03);
     min-height: 38px;
+    min-width: 0;
   }
   .settings-row-top { align-items: flex-start; padding-top: 10px; }
   .settings-label {
@@ -1269,6 +1274,7 @@
     color: var(--text-dim);
     flex: 1;
     line-height: 1.5;
+    min-width: 0;
   }
   .settings-hint {
     display: block;
@@ -1287,7 +1293,9 @@
     outline: none;
     cursor: pointer;
     flex-shrink: 0;
-    min-width: 140px;
+    width: 180px;
+    max-width: 50%;
+    text-overflow: ellipsis;
     transition: border-color 0.2s;
   }
   .settings-select:focus { border-color: var(--accent); }
@@ -1301,10 +1309,11 @@
     padding: 5px 10px;
     outline: none;
     width: 90px;
+    max-width: 50%;
     flex-shrink: 0;
     transition: border-color 0.2s;
   }
-  .settings-input-wide { width: 200px; }
+  .settings-input-wide { width: 200px; max-width: 60%; }
   .settings-input:focus { border-color: var(--accent); }
   .settings-toggle {
     width: 36px; height: 20px;
