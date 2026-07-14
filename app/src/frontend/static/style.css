@@ -116,6 +116,58 @@
     border-radius: 10px;
   }
 
+  /* Folders — collapsible containers that group albums in the sidebar */
+  .folder-block { margin-bottom: 1px; }
+
+  .folder-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px 7px 20px;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 11px;
+    border-left: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .folder-nav-item:hover { color: var(--text); background: var(--accent-glow); }
+  .folder-toggle {
+    width: 10px;
+    font-size: 9px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    text-align: center;
+  }
+  .folder-icon { font-size: 12px; flex-shrink: 0; }
+  .folder-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .folder-actions {
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .folder-nav-item:hover .folder-actions { opacity: 1; }
+
+  .folder-albums {
+    max-height: 2000px;
+    overflow: hidden;
+    transition: max-height 0.2s ease;
+  }
+  .folder-albums.collapsed { max-height: 0; }
+
+  .album-nav-item.nested { padding-left: 40px; }
+
+  .album-nav-empty {
+    padding: 8px 24px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
   .sidebar-footer {
     padding: 16px 24px;
     border-top: 1px solid var(--border);

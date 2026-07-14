@@ -14,7 +14,7 @@ function thumbUrl(uniqueName) {
 // ─────────────────────────────────────────────
 //  STATE
 // ─────────────────────────────────────────────
-let db = { media: [], albums: [] };
+let db = { media: [], albums: [], folders: [] };
 let config = {};
 let currentView = 'all';      // 'all' | 'hidden' | album id
 let currentSort = 'date-desc';
@@ -24,6 +24,12 @@ let currentAlbumId = null;
 let filteredMedia = [];
 let renderedCount = 0;
 let lbIndex = 0;
+
+// Which folders are collapsed in the sidebar — persisted across reloads.
+let collapsedFolders = new Set();
+try {
+  collapsedFolders = new Set(JSON.parse(localStorage.getItem('luminary_collapsed_folders') || '[]'));
+} catch { collapsedFolders = new Set(); }
 
 // ─────────────────────────────────────────────
 //  BOOT
@@ -65,15 +71,16 @@ async function loadDB() {
     });
     const r    = await fetch(`${API_BASE}/api/db?${p.toString()}`);
     const data = await r.json();
-    db.media     = data.media  || [];
-    db.albums    = data.albums || [];
+    db.media     = data.media   || [];
+    db.albums    = data.albums  || [];
+    db.folders   = data.folders || [];
     db._total    = data.total    || db.media.length;
     db._hasMore  = data.has_more || false;
     db._offset   = db.media.length;
     db._sort     = sort;
     db._fetching = false;
   } catch {
-    db = { media: [], albums: [], _total: 0, _hasMore: false, _offset: 0,
+    db = { media: [], albums: [], folders: [], _total: 0, _hasMore: false, _offset: 0,
            _sort: 'date-desc', _fetching: false };
   }
 }
@@ -190,22 +197,70 @@ function softRefresh() {
 }
 
 function renderAlbumNav() {
-  const nav = document.getElementById('album-nav');
+  const nav     = document.getElementById('album-nav');
+  const folders = db.folders || [];
+  const albums  = db.albums  || [];
   nav.innerHTML = '';
-  if (db.albums.length === 0) {
-    nav.innerHTML = '<div style="padding:8px 24px;font-size:11px;color:var(--text-muted)">No albums yet</div>';
+
+  if (folders.length === 0 && albums.length === 0) {
+    nav.innerHTML = '<div class="album-nav-empty">No albums yet</div>';
     return;
   }
-  db.albums.forEach(album => {
-    const d = document.createElement('div');
-    d.className = 'album-nav-item' + (currentAlbumId === album.id ? ' active' : '');
-    d.innerHTML = `
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(album.name)}</span>
-      <span class="album-rename-icon" title="Rename" onclick="event.stopPropagation();promptRenameAlbum('${album.id}')">✎</span>
-      <span class="album-count">${album.media.length}</span>`;
-    d.onclick = () => setView(album.id, d);
-    nav.appendChild(d);
+
+  // Folders first (each showing the albums filed inside it), then any
+  // albums that aren't in a folder.
+  folders.forEach(folder => {
+    const folderAlbums = albums.filter(a => a.folder_id === folder.id);
+    const collapsed    = collapsedFolders.has(folder.id);
+
+    const block = document.createElement('div');
+    block.className = 'folder-block';
+
+    const head = document.createElement('div');
+    head.className = 'folder-nav-item';
+    head.innerHTML = `
+      <span class="folder-toggle">${collapsed ? '▸' : '▾'}</span>
+      <span class="folder-icon">⛁</span>
+      <span class="folder-name">${escHtml(folder.name)}</span>
+      <span class="folder-actions">
+        <span class="album-rename-icon" title="Rename folder" onclick="event.stopPropagation();promptRenameFolder('${folder.id}')">✎</span>
+        <span class="album-rename-icon" title="Delete folder" onclick="event.stopPropagation();deleteFolder('${folder.id}')">✕</span>
+      </span>
+      <span class="album-count">${folderAlbums.length}</span>`;
+    head.onclick = () => toggleFolder(folder.id);
+    block.appendChild(head);
+
+    const albumsWrap = document.createElement('div');
+    albumsWrap.className = 'folder-albums' + (collapsed ? ' collapsed' : '');
+    folderAlbums.forEach(album => albumsWrap.appendChild(_albumNavItem(album, true)));
+    block.appendChild(albumsWrap);
+
+    nav.appendChild(block);
   });
+
+  albums.filter(a => !a.folder_id).forEach(album => {
+    nav.appendChild(_albumNavItem(album, false));
+  });
+}
+
+// Builds one album row for the sidebar tree (nested = indented under a folder)
+function _albumNavItem(album, nested) {
+  const d = document.createElement('div');
+  d.className = 'album-nav-item' + (nested ? ' nested' : '') + (currentAlbumId === album.id ? ' active' : '');
+  d.innerHTML = `
+    <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(album.name)}</span>
+    <span class="album-rename-icon" title="Move to folder" onclick="event.stopPropagation();openMoveAlbum('${album.id}')">⇄</span>
+    <span class="album-rename-icon" title="Rename" onclick="event.stopPropagation();promptRenameAlbum('${album.id}')">✎</span>
+    <span class="album-count">${album.media.length}</span>`;
+  d.onclick = () => setView(album.id, d);
+  return d;
+}
+
+function toggleFolder(folderId) {
+  if (collapsedFolders.has(folderId)) collapsedFolders.delete(folderId);
+  else collapsedFolders.add(folderId);
+  try { localStorage.setItem('luminary_collapsed_folders', JSON.stringify([...collapsedFolders])); } catch {}
+  renderAlbumNav();
 }
 
 function applyFilters() {
@@ -1231,6 +1286,12 @@ function confirmAddToAlbum() {
 
 function openCreateAlbum() {
   document.getElementById('new-album-name').value = '';
+  const sel = document.getElementById('new-album-folder');
+  if (sel) {
+    sel.innerHTML = ['<option value="">No folder</option>']
+      .concat((db.folders || []).map(f => `<option value="${f.id}">${escHtml(f.name)}</option>`))
+      .join('');
+  }
   document.getElementById('create-album-modal').classList.add('open');
   setTimeout(() => document.getElementById('new-album-name').focus(), 100);
 }
@@ -1238,8 +1299,10 @@ function openCreateAlbum() {
 function confirmCreateAlbum() {
   const name = document.getElementById('new-album-name').value.trim();
   if (!name) { toast('Enter an album name', 'error'); return; }
+  const folderSel  = document.getElementById('new-album-folder');
+  const folder_id  = folderSel ? (folderSel.value || null) : null;
   const id = 'album_' + Date.now();
-  db.albums.push({ name, id, media: [] });
+  db.albums.push({ name, id, media: [], folder_id });
   saveDB();
   renderAll();
   closeModal('create-album-modal');
@@ -1314,6 +1377,153 @@ function promptRenameAlbum(albumId) {
   saveDB();
   softRefresh();
   toast(`Renamed to "${trimmed}"`, 'success');
+}
+
+// ─────────────────────────────────────────────
+//  FOLDERS
+// ─────────────────────────────────────────────
+function openCreateFolder() {
+  document.getElementById('new-folder-name').value = '';
+  document.getElementById('create-folder-modal').classList.add('open');
+  setTimeout(() => document.getElementById('new-folder-name').focus(), 100);
+}
+
+async function confirmCreateFolder() {
+  const name = document.getElementById('new-folder-name').value.trim();
+  if (!name) { toast('Enter a folder name', 'error'); return; }
+  try {
+    const r = await fetch(`${API_BASE}/api/folder/create`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ name })
+    });
+    if (!r.ok) throw new Error();
+    const folder = await r.json();
+    db.folders.push(folder);
+    renderAlbumNav();
+    closeModal('create-folder-modal');
+    toast(`Folder "${name}" created`, 'success');
+  } catch {
+    toast('Failed to create folder', 'error');
+  }
+}
+
+document.getElementById('new-folder-name')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmCreateFolder();
+});
+
+async function promptRenameFolder(folderId) {
+  const folder = db.folders.find(f => f.id === folderId);
+  if (!folder) return;
+  const newName = window.prompt('Rename folder:', folder.name);
+  if (newName === null) return;                 // cancelled
+  const trimmed = newName.trim();
+  if (!trimmed) { toast('Name cannot be empty', 'error'); return; }
+  if (trimmed === folder.name) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/folder/rename`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ folderId, name: trimmed })
+    });
+    if (!r.ok) throw new Error();
+    folder.name = trimmed;
+    renderAlbumNav();
+    toast(`Renamed to "${trimmed}"`, 'success');
+  } catch {
+    toast('Failed to rename folder', 'error');
+  }
+}
+
+// Deletes a folder. If it still contains albums, the backend refuses (409)
+// and tells us how many — we surface that as a confirm() warning explaining
+// the albums (not the media files) will be deleted, then retry with force.
+async function deleteFolder(folderId, force = false) {
+  const folder = db.folders.find(f => f.id === folderId);
+  if (!folder) return;
+  try {
+    const r    = await fetch(`${API_BASE}/api/folder/delete`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ folderId, force })
+    });
+    const data = await r.json().catch(() => ({}));
+
+    if (r.status === 409 && data.needs_confirmation) {
+      const names = (data.album_names || []).join(', ');
+      const plural = data.album_count !== 1;
+      const msg = `Folder "${folder.name}" contains ${data.album_count} album${plural ? 's' : ''}` +
+        (names ? ` (${names})` : '') +
+        `.\n\nDeleting the folder will also delete ${plural ? 'these albums' : 'this album'}. ` +
+        `Media files themselves will NOT be deleted.\n\nContinue?`;
+      if (window.confirm(msg)) await deleteFolder(folderId, true);
+      return;
+    }
+
+    if (!r.ok) { toast(data.error || 'Failed to delete folder', 'error'); return; }
+
+    const removedAlbumIds = new Set(db.albums.filter(a => a.folder_id === folderId).map(a => a.id));
+    db.folders = db.folders.filter(f => f.id !== folderId);
+    db.albums  = db.albums.filter(a => !removedAlbumIds.has(a.id));
+
+    if (currentAlbumId && removedAlbumIds.has(currentAlbumId)) {
+      currentAlbumId = null;
+      setView('all', document.querySelector('[data-view="all"]'));
+    }
+
+    renderAll();
+    toast(
+      data.deleted_albums
+        ? `Folder deleted along with ${data.deleted_albums} album${data.deleted_albums !== 1 ? 's' : ''}`
+        : 'Folder deleted',
+      'info'
+    );
+  } catch {
+    toast('Failed to delete folder', 'error');
+  }
+}
+
+// ── Move an album into (or out of) a folder ───────────────────────────────
+let pendingMoveAlbumId = null;
+
+function openMoveAlbum(albumId) {
+  const album = db.albums.find(a => a.id === albumId);
+  if (!album) return;
+  pendingMoveAlbumId = albumId;
+
+  const sel = document.getElementById('move-album-folder-select');
+  const options = ['<option value="">No folder</option>']
+    .concat((db.folders || []).map(f =>
+      `<option value="${f.id}" ${album.folder_id === f.id ? 'selected' : ''}>${escHtml(f.name)}</option>`
+    ));
+  sel.innerHTML = options.join('');
+  document.getElementById('move-album-modal').classList.add('open');
+}
+
+async function confirmMoveAlbum() {
+  if (!pendingMoveAlbumId) return;
+  const album = db.albums.find(a => a.id === pendingMoveAlbumId);
+  if (!album) return;
+  const folderId = document.getElementById('move-album-folder-select').value || null;
+
+  try {
+    const r = await fetch(`${API_BASE}/api/album/move`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ albumId: pendingMoveAlbumId, folderId })
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      toast(d.error || 'Failed to move album', 'error');
+      return;
+    }
+    album.folder_id = folderId;
+    renderAlbumNav();
+    closeModal('move-album-modal');
+    toast(folderId ? 'Album moved to folder' : 'Album removed from folder', 'success');
+  } catch {
+    toast('Failed to move album', 'error');
+  }
 }
 
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
