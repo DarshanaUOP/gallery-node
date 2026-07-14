@@ -238,6 +238,11 @@ def _init_schema():
         CREATE INDEX IF NOT EXISTS idx_media_name           ON media(name);
         CREATE INDEX IF NOT EXISTS idx_media_hash           ON media(hash);
 
+        CREATE TABLE IF NOT EXISTS folders (
+            id    TEXT PRIMARY KEY,
+            name  TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS albums (
             id    TEXT PRIMARY KEY,
             name  TEXT NOT NULL
@@ -251,6 +256,23 @@ def _init_schema():
         );
         CREATE INDEX IF NOT EXISTS idx_album_media_album ON album_media(album_id);
     """)
+    conn.commit()
+
+    # An album belongs to at most one folder (a folder can hold many albums).
+    # Added via a post-hoc ALTER TABLE (rather than in the CREATE TABLE above)
+    # so upgrading installs with an existing albums table pick it up too —
+    # SQLite has no "ADD COLUMN IF NOT EXISTS", so we check pragma table_info
+    # first and only add it once. ON DELETE CASCADE means deleting a folder
+    # automatically deletes the albums that were inside it (which in turn
+    # cascades to album_media, i.e. only membership rows — never the media
+    # table itself, so the underlying files/records are never touched).
+    existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(albums)").fetchall()}
+    if "folder_id" not in existing_cols:
+        conn.execute(
+            "ALTER TABLE albums ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE CASCADE"
+        )
+        conn.commit()
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_albums_folder ON albums(folder_id)")
     conn.commit()
 
 # Initialize SQLite schema on module load (creates tables/indexes if missing)
@@ -685,9 +707,10 @@ def get_media_count() -> int:
 # ── Albums ──────────────────────────────────────────────────────────────────
 
 def load_albums() -> list:
-    """Return all albums as list[dict] — same shape as the old albums.json array."""
+    """Return all albums as list[dict] — same shape as the old albums.json array,
+    plus a 'folder_id' field (None when the album isn't inside a folder)."""
     conn  = get_db_conn()
-    rows  = conn.execute("SELECT id, name FROM albums").fetchall()
+    rows  = conn.execute("SELECT id, name, folder_id FROM albums").fetchall()
     out   = []
     for a in rows:
         media_rows = conn.execute(
@@ -695,14 +718,16 @@ def load_albums() -> list:
             (a["id"],)
         ).fetchall()
         out.append({
-            "id":    a["id"],
-            "name":  a["name"],
-            "media": [m["uniqueName"] for m in media_rows],
+            "id":        a["id"],
+            "name":      a["name"],
+            "folder_id": a["folder_id"],
+            "media":     [m["uniqueName"] for m in media_rows],
         })
     return out
 
 def save_albums(albums: list):
-    """Replace all albums + their membership atomically under _db_lock."""
+    """Replace all albums + their membership atomically under _db_lock.
+    Preserves 'folder_id' on each album dict (None/absent = no folder)."""
     conn = get_db_conn()
     with _db_lock:
         with conn:
@@ -710,8 +735,8 @@ def save_albums(albums: list):
             conn.execute("DELETE FROM albums")
             for a in albums:
                 conn.execute(
-                    "INSERT INTO albums (id, name) VALUES (?, ?)",
-                    (a.get("id"), a.get("name", "Untitled"))
+                    "INSERT INTO albums (id, name, folder_id) VALUES (?, ?, ?)",
+                    (a.get("id"), a.get("name", "Untitled"), a.get("folder_id"))
                 )
                 for pos, un in enumerate(a.get("media", [])):
                     conn.execute(
@@ -720,11 +745,14 @@ def save_albums(albums: list):
                     )
     log.info("Saved %d albums to SQLite", len(albums))
 
-def create_album(name: str) -> dict:
+def create_album(name: str, folder_id: str = None) -> dict:
     conn  = get_db_conn()
-    album = {"name": name, "id": "album_" + str(uuid.uuid4())[:8], "media": []}
+    album = {"name": name, "id": "album_" + str(uuid.uuid4())[:8], "media": [], "folder_id": folder_id}
     with conn:
-        conn.execute("INSERT INTO albums (id, name) VALUES (?, ?)", (album["id"], album["name"]))
+        conn.execute(
+            "INSERT INTO albums (id, name, folder_id) VALUES (?, ?, ?)",
+            (album["id"], album["name"], folder_id)
+        )
     return album
 
 def add_media_to_album(album_id: str, unique_name: str) -> bool:
@@ -741,6 +769,82 @@ def add_media_to_album(album_id: str, unique_name: str) -> bool:
             (album_id, unique_name, max_pos + 1)
         )
     return True
+
+def move_album_to_folder(album_id: str, folder_id: str = None):
+    """
+    Move an album into a folder, or out of any folder if folder_id is None.
+    Returns 'ok', 'album_not_found', or 'folder_not_found'.
+    """
+    conn = get_db_conn()
+    if not conn.execute("SELECT 1 FROM albums WHERE id = ?", (album_id,)).fetchone():
+        return "album_not_found"
+    if folder_id and not conn.execute("SELECT 1 FROM folders WHERE id = ?", (folder_id,)).fetchone():
+        return "folder_not_found"
+    with _db_lock:
+        with conn:
+            conn.execute("UPDATE albums SET folder_id = ? WHERE id = ?", (folder_id, album_id))
+    return "ok"
+
+
+# ── Folders ─────────────────────────────────────────────────────────────────
+# A folder is a simple named container that groups albums for display in the
+# sidebar (collapsible tree). An album can belong to at most one folder;
+# a folder can hold any number of albums. Deleting a folder cascades (via the
+# albums.folder_id FK) to delete the albums inside it and their album_media
+# membership rows — the media table itself is never touched, so the actual
+# files/records always survive a folder deletion.
+
+def load_folders() -> list:
+    """Return all folders as list[dict] {id, name}, ordered by name."""
+    conn = get_db_conn()
+    rows = conn.execute("SELECT id, name FROM folders ORDER BY name COLLATE NOCASE").fetchall()
+    return [{"id": r["id"], "name": r["name"]} for r in rows]
+
+def create_folder(name: str) -> dict:
+    conn   = get_db_conn()
+    folder = {"id": "folder_" + str(uuid.uuid4())[:8], "name": name}
+    with conn:
+        conn.execute("INSERT INTO folders (id, name) VALUES (?, ?)", (folder["id"], folder["name"]))
+    return folder
+
+def rename_folder(folder_id: str, name: str) -> bool:
+    conn = get_db_conn()
+    if not conn.execute("SELECT 1 FROM folders WHERE id = ?", (folder_id,)).fetchone():
+        return False
+    with conn:
+        conn.execute("UPDATE folders SET name = ? WHERE id = ?", (name, folder_id))
+    return True
+
+def delete_folder(folder_id: str, force: bool = False) -> dict:
+    """
+    Delete a folder. If it still contains albums and force isn't set, don't
+    delete anything — instead return the info the frontend needs to show a
+    confirmation ("these N albums will also be deleted, media files won't be").
+    Pass force=True to proceed anyway (albums + their album_media rows cascade
+    automatically; the media table is never touched).
+    """
+    conn = get_db_conn()
+    folder = conn.execute("SELECT id, name FROM folders WHERE id = ?", (folder_id,)).fetchone()
+    if not folder:
+        return {"ok": False, "error": "Folder not found"}
+
+    albums_inside = conn.execute(
+        "SELECT id, name FROM albums WHERE folder_id = ?", (folder_id,)
+    ).fetchall()
+
+    if albums_inside and not force:
+        return {
+            "ok": False,
+            "needs_confirmation": True,
+            "album_count": len(albums_inside),
+            "album_names": [a["name"] for a in albums_inside],
+        }
+
+    with _db_lock:
+        with conn:
+            conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))  # cascades to albums → album_media
+
+    return {"ok": True, "deleted_albums": len(albums_inside)}
 
 # Run legacy JSON → SQLite migration now that save_media/save_albums exist
 _migrate_legacy_json_if_present()
@@ -1853,6 +1957,10 @@ if FLASK_AVAILABLE:
     def api_albums():
         return jsonify(load_albums())
 
+    @app.route("/api/folders", methods=["GET"])
+    def api_folders():
+        return jsonify(load_folders())
+
     @app.route("/api/locations", methods=["GET"])
     def api_locations_get():
         """
@@ -2033,10 +2141,12 @@ if FLASK_AVAILABLE:
         offset = max(0, int(request.args.get("offset", 0)))
         limit  = min(2000, max(1, int(request.args.get("limit", 500))))
         items, total = query_media(request.args, sort, offset, limit)
-        albums = load_albums()
+        albums  = load_albums()
+        folders = load_folders()
         return jsonify({
             "media":    items,
             "albums":   albums,
+            "folders":  folders,
             "total":    total,
             "offset":   offset,
             "has_more": (offset + limit) < total,
@@ -2079,6 +2189,64 @@ if FLASK_AVAILABLE:
         if ok:
             return jsonify({"ok": True})
         return jsonify({"error": "Album not found"}), 404
+
+    @app.route("/api/album/move", methods=["POST"])
+    def api_album_move():
+        """
+        Move an album into a folder, or out of any folder.
+        Body: { albumId: str, folderId: str|None }
+        """
+        body      = request.get_json(force=True) or {}
+        album_id  = body.get("albumId")
+        folder_id = body.get("folderId") or None
+        if not album_id:
+            return jsonify({"error": "albumId required"}), 400
+        result = move_album_to_folder(album_id, folder_id)
+        if result == "album_not_found":
+            return jsonify({"error": "Album not found"}), 404
+        if result == "folder_not_found":
+            return jsonify({"error": "Folder not found"}), 404
+        return jsonify({"ok": True})
+
+    @app.route("/api/folder/create", methods=["POST"])
+    def api_folder_create():
+        body   = request.get_json(force=True) or {}
+        name   = (body.get("name") or "Untitled").strip() or "Untitled"
+        folder = create_folder(name)
+        return jsonify(folder)
+
+    @app.route("/api/folder/rename", methods=["POST"])
+    def api_folder_rename():
+        body      = request.get_json(force=True) or {}
+        folder_id = body.get("folderId")
+        name      = (body.get("name") or "").strip()
+        if not folder_id or not name:
+            return jsonify({"error": "folderId and name required"}), 400
+        ok = rename_folder(folder_id, name)
+        if not ok:
+            return jsonify({"error": "Folder not found"}), 404
+        return jsonify({"ok": True})
+
+    @app.route("/api/folder/delete", methods=["POST"])
+    def api_folder_delete():
+        """
+        Delete a folder. Body: { folderId: str, force: bool }
+        Without force, if the folder still contains albums, returns 409 with
+        {needs_confirmation: true, album_count, album_names} instead of
+        deleting anything — the frontend shows a warning and re-calls with
+        force:true to proceed. Media files are never affected either way.
+        """
+        body      = request.get_json(force=True) or {}
+        folder_id = body.get("folderId")
+        force     = bool(body.get("force", False))
+        if not folder_id:
+            return jsonify({"error": "folderId required"}), 400
+        result = delete_folder(folder_id, force=force)
+        if not result.get("ok"):
+            if result.get("needs_confirmation"):
+                return jsonify(result), 409
+            return jsonify({"error": result.get("error", "Delete failed")}), 404
+        return jsonify(result)
 
     @app.route("/api/album/add-bulk", methods=["POST"])
     def api_album_add_bulk():

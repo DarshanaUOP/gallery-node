@@ -116,6 +116,58 @@
     border-radius: 10px;
   }
 
+  /* Folders — collapsible containers that group albums in the sidebar */
+  .folder-block { margin-bottom: 1px; }
+
+  .folder-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px 7px 20px;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 11px;
+    border-left: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .folder-nav-item:hover { color: var(--text); background: var(--accent-glow); }
+  .folder-toggle {
+    width: 10px;
+    font-size: 9px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    text-align: center;
+  }
+  .folder-icon { font-size: 12px; flex-shrink: 0; }
+  .folder-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .folder-actions {
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .folder-nav-item:hover .folder-actions { opacity: 1; }
+
+  .folder-albums {
+    max-height: 2000px;
+    overflow: hidden;
+    transition: max-height 0.2s ease;
+  }
+  .folder-albums.collapsed { max-height: 0; }
+
+  .album-nav-item.nested { padding-left: 40px; }
+
+  .album-nav-empty {
+    padding: 8px 24px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
   .sidebar-footer {
     padding: 16px 24px;
     border-top: 1px solid var(--border);
@@ -535,6 +587,20 @@
 
   /* Metadata modal wider */
   #meta-modal .modal { width: 560px; }
+
+  /* Danger-themed modal — delete album / delete folder confirmations */
+  .modal-danger {
+    border-color: rgba(200,126,126,0.35);
+    box-shadow: 0 0 0 1px rgba(200,126,126,0.08), 0 12px 40px rgba(0,0,0,0.4);
+  }
+  .modal-danger h2 { color: var(--danger); }
+  #danger-confirm-message {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-dim);
+    white-space: pre-line;
+  }
+  #danger-confirm-message strong { color: var(--text); }
 
   .meta-grid {
     display: grid;
@@ -1176,8 +1242,12 @@
   }
 
   /* ── SETTINGS PANEL ── */
+  #settings-panel {
+    overflow-x: hidden;   /* only a vertical scrollbar should ever appear here */
+  }
   .settings-section {
     margin-bottom: 28px;
+    min-width: 0;
   }
   .settings-section-title {
     font-size: 9px;
@@ -1196,6 +1266,7 @@
     padding: 8px 0;
     border-bottom: 1px solid rgba(255,255,255,0.03);
     min-height: 38px;
+    min-width: 0;
   }
   .settings-row-top { align-items: flex-start; padding-top: 10px; }
   .settings-label {
@@ -1203,6 +1274,7 @@
     color: var(--text-dim);
     flex: 1;
     line-height: 1.5;
+    min-width: 0;
   }
   .settings-hint {
     display: block;
@@ -1221,7 +1293,9 @@
     outline: none;
     cursor: pointer;
     flex-shrink: 0;
-    min-width: 140px;
+    width: 180px;
+    max-width: 50%;
+    text-overflow: ellipsis;
     transition: border-color 0.2s;
   }
   .settings-select:focus { border-color: var(--accent); }
@@ -1235,10 +1309,11 @@
     padding: 5px 10px;
     outline: none;
     width: 90px;
+    max-width: 50%;
     flex-shrink: 0;
     transition: border-color 0.2s;
   }
-  .settings-input-wide { width: 200px; }
+  .settings-input-wide { width: 200px; max-width: 60%; }
   .settings-input:focus { border-color: var(--accent); }
   .settings-toggle {
     width: 36px; height: 20px;

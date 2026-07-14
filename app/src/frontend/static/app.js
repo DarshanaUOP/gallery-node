@@ -14,7 +14,7 @@ function thumbUrl(uniqueName) {
 // ─────────────────────────────────────────────
 //  STATE
 // ─────────────────────────────────────────────
-let db = { media: [], albums: [] };
+let db = { media: [], albums: [], folders: [] };
 let config = {};
 let currentView = 'all';      // 'all' | 'hidden' | album id
 let currentSort = 'date-desc';
@@ -24,6 +24,12 @@ let currentAlbumId = null;
 let filteredMedia = [];
 let renderedCount = 0;
 let lbIndex = 0;
+
+// Which folders are collapsed in the sidebar — persisted across reloads.
+let collapsedFolders = new Set();
+try {
+  collapsedFolders = new Set(JSON.parse(localStorage.getItem('luminary_collapsed_folders') || '[]'));
+} catch { collapsedFolders = new Set(); }
 
 // ─────────────────────────────────────────────
 //  BOOT
@@ -65,15 +71,16 @@ async function loadDB() {
     });
     const r    = await fetch(`${API_BASE}/api/db?${p.toString()}`);
     const data = await r.json();
-    db.media     = data.media  || [];
-    db.albums    = data.albums || [];
+    db.media     = data.media   || [];
+    db.albums    = data.albums  || [];
+    db.folders   = data.folders || [];
     db._total    = data.total    || db.media.length;
     db._hasMore  = data.has_more || false;
     db._offset   = db.media.length;
     db._sort     = sort;
     db._fetching = false;
   } catch {
-    db = { media: [], albums: [], _total: 0, _hasMore: false, _offset: 0,
+    db = { media: [], albums: [], folders: [], _total: 0, _hasMore: false, _offset: 0,
            _sort: 'date-desc', _fetching: false };
   }
 }
@@ -190,22 +197,70 @@ function softRefresh() {
 }
 
 function renderAlbumNav() {
-  const nav = document.getElementById('album-nav');
+  const nav     = document.getElementById('album-nav');
+  const folders = db.folders || [];
+  const albums  = db.albums  || [];
   nav.innerHTML = '';
-  if (db.albums.length === 0) {
-    nav.innerHTML = '<div style="padding:8px 24px;font-size:11px;color:var(--text-muted)">No albums yet</div>';
+
+  if (folders.length === 0 && albums.length === 0) {
+    nav.innerHTML = '<div class="album-nav-empty">No albums yet</div>';
     return;
   }
-  db.albums.forEach(album => {
-    const d = document.createElement('div');
-    d.className = 'album-nav-item' + (currentAlbumId === album.id ? ' active' : '');
-    d.innerHTML = `
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(album.name)}</span>
-      <span class="album-rename-icon" title="Rename" onclick="event.stopPropagation();promptRenameAlbum('${album.id}')">✎</span>
-      <span class="album-count">${album.media.length}</span>`;
-    d.onclick = () => setView(album.id, d);
-    nav.appendChild(d);
+
+  // Folders first (each showing the albums filed inside it), then any
+  // albums that aren't in a folder.
+  folders.forEach(folder => {
+    const folderAlbums = albums.filter(a => a.folder_id === folder.id);
+    const collapsed    = collapsedFolders.has(folder.id);
+
+    const block = document.createElement('div');
+    block.className = 'folder-block';
+
+    const head = document.createElement('div');
+    head.className = 'folder-nav-item';
+    head.innerHTML = `
+      <span class="folder-toggle">${collapsed ? '▸' : '▾'}</span>
+      <span class="folder-icon">⛁</span>
+      <span class="folder-name">${escHtml(folder.name)}</span>
+      <span class="folder-actions">
+        <span class="album-rename-icon" title="Rename folder" onclick="event.stopPropagation();openRenameFolder('${folder.id}')">✎</span>
+        <span class="album-rename-icon" title="Delete folder" onclick="event.stopPropagation();deleteFolder('${folder.id}')">✕</span>
+      </span>
+      <span class="album-count">${folderAlbums.length}</span>`;
+    head.onclick = () => toggleFolder(folder.id);
+    block.appendChild(head);
+
+    const albumsWrap = document.createElement('div');
+    albumsWrap.className = 'folder-albums' + (collapsed ? ' collapsed' : '');
+    folderAlbums.forEach(album => albumsWrap.appendChild(_albumNavItem(album, true)));
+    block.appendChild(albumsWrap);
+
+    nav.appendChild(block);
   });
+
+  albums.filter(a => !a.folder_id).forEach(album => {
+    nav.appendChild(_albumNavItem(album, false));
+  });
+}
+
+// Builds one album row for the sidebar tree (nested = indented under a folder)
+function _albumNavItem(album, nested) {
+  const d = document.createElement('div');
+  d.className = 'album-nav-item' + (nested ? ' nested' : '') + (currentAlbumId === album.id ? ' active' : '');
+  d.innerHTML = `
+    <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(album.name)}</span>
+    <span class="album-rename-icon" title="Move to folder" onclick="event.stopPropagation();openMoveAlbum('${album.id}')">⇄</span>
+    <span class="album-rename-icon" title="Rename" onclick="event.stopPropagation();openRenameAlbum('${album.id}')">✎</span>
+    <span class="album-count">${album.media.length}</span>`;
+  d.onclick = () => setView(album.id, d);
+  return d;
+}
+
+function toggleFolder(folderId) {
+  if (collapsedFolders.has(folderId)) collapsedFolders.delete(folderId);
+  else collapsedFolders.add(folderId);
+  try { localStorage.setItem('luminary_collapsed_folders', JSON.stringify([...collapsedFolders])); } catch {}
+  renderAlbumNav();
 }
 
 function applyFilters() {
@@ -1231,6 +1286,12 @@ function confirmAddToAlbum() {
 
 function openCreateAlbum() {
   document.getElementById('new-album-name').value = '';
+  const sel = document.getElementById('new-album-folder');
+  if (sel) {
+    sel.innerHTML = ['<option value="">No folder</option>']
+      .concat((db.folders || []).map(f => `<option value="${f.id}">${escHtml(f.name)}</option>`))
+      .join('');
+  }
   document.getElementById('create-album-modal').classList.add('open');
   setTimeout(() => document.getElementById('new-album-name').focus(), 100);
 }
@@ -1238,8 +1299,10 @@ function openCreateAlbum() {
 function confirmCreateAlbum() {
   const name = document.getElementById('new-album-name').value.trim();
   if (!name) { toast('Enter an album name', 'error'); return; }
+  const folderSel  = document.getElementById('new-album-folder');
+  const folder_id  = folderSel ? (folderSel.value || null) : null;
   const id = 'album_' + Date.now();
-  db.albums.push({ name, id, media: [] });
+  db.albums.push({ name, id, media: [], folder_id });
   saveDB();
   renderAll();
   closeModal('create-album-modal');
@@ -1253,13 +1316,20 @@ document.getElementById('new-album-name').addEventListener('keydown', e => {
 function deleteCurrentAlbum() {
   if (!currentAlbumId) return;
   const album = db.albums.find(a => a.id === currentAlbumId);
-  if (!confirm(`Delete album "${album?.name}"? Media files are not affected.`)) return;
-  db.albums = db.albums.filter(a => a.id !== currentAlbumId);
-  saveDB();
-  currentAlbumId = null;
-  setView('all', document.querySelector('[data-view="all"]'));
-  renderAll();
-  toast('Album deleted', 'info');
+  if (!album) return;
+  _openDangerConfirm(
+    'Delete Album',
+    `Delete album <strong>"${escHtml(album.name)}"</strong>?<br><br>` +
+    `Media files are not affected — only the album itself will be removed.`,
+    () => {
+      db.albums = db.albums.filter(a => a.id !== currentAlbumId);
+      saveDB();
+      currentAlbumId = null;
+      setView('all', document.querySelector('[data-view="all"]'));
+      renderAll();
+      toast('Album deleted', 'info');
+    }
+  );
 }
 
 // ── Inline rename from album header ───────────────────────────────────────────
@@ -1302,23 +1372,250 @@ function startInlineRename() {
 }
 
 // ── Rename from sidebar pencil icon ───────────────────────────────────────────
-function promptRenameAlbum(albumId) {
+let pendingRenameAlbumId = null;
+
+function openRenameAlbum(albumId) {
   const album = db.albums.find(a => a.id === albumId);
   if (!album) return;
-  const newName = window.prompt('Rename album:', album.name);
-  if (newName === null) return;          // cancelled
-  const trimmed = newName.trim();
-  if (!trimmed) { toast('Name cannot be empty', 'error'); return; }
-  if (trimmed === album.name) return;
-  album.name = trimmed;
-  saveDB();
-  softRefresh();
-  toast(`Renamed to "${trimmed}"`, 'success');
+  pendingRenameAlbumId = albumId;
+  const input = document.getElementById('rename-album-name');
+  input.value = album.name;
+  document.getElementById('rename-album-modal').classList.add('open');
+  setTimeout(() => { input.focus(); input.select(); }, 100);
 }
 
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+function confirmRenameAlbum() {
+  if (!pendingRenameAlbumId) return;
+  const album = db.albums.find(a => a.id === pendingRenameAlbumId);
+  if (!album) return;
+  const trimmed = document.getElementById('rename-album-name').value.trim();
+  if (!trimmed) { toast('Name cannot be empty', 'error'); return; }
+  if (trimmed !== album.name) {
+    album.name = trimmed;
+    saveDB();
+    softRefresh();
+    toast(`Renamed to "${trimmed}"`, 'success');
+  }
+  closeModal('rename-album-modal');
+}
+
+document.getElementById('rename-album-name')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmRenameAlbum();
+});
+
+// ─────────────────────────────────────────────
+//  FOLDERS
+// ─────────────────────────────────────────────
+function openCreateFolder() {
+  document.getElementById('new-folder-name').value = '';
+  document.getElementById('create-folder-modal').classList.add('open');
+  setTimeout(() => document.getElementById('new-folder-name').focus(), 100);
+}
+
+async function confirmCreateFolder() {
+  const name = document.getElementById('new-folder-name').value.trim();
+  if (!name) { toast('Enter a folder name', 'error'); return; }
+  try {
+    const r = await fetch(`${API_BASE}/api/folder/create`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ name })
+    });
+    if (!r.ok) throw new Error();
+    const folder = await r.json();
+    db.folders.push(folder);
+    renderAlbumNav();
+    closeModal('create-folder-modal');
+    toast(`Folder "${name}" created`, 'success');
+  } catch {
+    toast('Failed to create folder', 'error');
+  }
+}
+
+document.getElementById('new-folder-name')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmCreateFolder();
+});
+
+let pendingRenameFolderId = null;
+
+function openRenameFolder(folderId) {
+  const folder = db.folders.find(f => f.id === folderId);
+  if (!folder) return;
+  pendingRenameFolderId = folderId;
+  const input = document.getElementById('rename-folder-name');
+  input.value = folder.name;
+  document.getElementById('rename-folder-modal').classList.add('open');
+  setTimeout(() => { input.focus(); input.select(); }, 100);
+}
+
+async function confirmRenameFolder() {
+  if (!pendingRenameFolderId) return;
+  const folder = db.folders.find(f => f.id === pendingRenameFolderId);
+  if (!folder) return;
+  const trimmed = document.getElementById('rename-folder-name').value.trim();
+  if (!trimmed) { toast('Name cannot be empty', 'error'); return; }
+  if (trimmed === folder.name) { closeModal('rename-folder-modal'); return; }
+  try {
+    const r = await fetch(`${API_BASE}/api/folder/rename`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ folderId: pendingRenameFolderId, name: trimmed })
+    });
+    if (!r.ok) throw new Error();
+    folder.name = trimmed;
+    renderAlbumNav();
+    closeModal('rename-folder-modal');
+    toast(`Renamed to "${trimmed}"`, 'success');
+  } catch {
+    toast('Failed to rename folder', 'error');
+  }
+}
+
+document.getElementById('rename-folder-name')?.addEventListener('keydown', e => {
+  if (e.key === 'Enter') confirmRenameFolder();
+});
+
+// Deletes a folder. Always confirms via the danger modal first. If the
+// folder still contains albums, the backend refuses the initial (unforced)
+// request with 409 — we surface that as a second, more specific danger-modal
+// warning naming the albums, then retry with force. Media files are never
+// affected either way.
+function deleteFolder(folderId, force = false) {
+  const folder = db.folders.find(f => f.id === folderId);
+  if (!folder) return;
+
+  if (!force) {
+    _openDangerConfirm(
+      'Delete Folder',
+      `Delete folder <strong>"${escHtml(folder.name)}"</strong>?<br><br>` +
+      `If it contains albums, those albums will be deleted too. ` +
+      `Media files themselves will NOT be affected.`,
+      () => _deleteFolderRequest(folderId, false)
+    );
+    return;
+  }
+  _deleteFolderRequest(folderId, force);
+}
+
+async function _deleteFolderRequest(folderId, force) {
+  const folder = db.folders.find(f => f.id === folderId);
+  if (!folder) return;
+  try {
+    const r    = await fetch(`${API_BASE}/api/folder/delete`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ folderId, force })
+    });
+    const data = await r.json().catch(() => ({}));
+
+    if (r.status === 409 && data.needs_confirmation) {
+      const names  = (data.album_names || []).map(escHtml).join(', ');
+      const plural = data.album_count !== 1;
+      const msg = `Folder <strong>"${escHtml(folder.name)}"</strong> contains ${data.album_count} ` +
+        `album${plural ? 's' : ''}${names ? ` (${names})` : ''}.<br><br>` +
+        `Deleting the folder will also delete ${plural ? 'these albums' : 'this album'}. ` +
+        `Media files themselves will NOT be deleted.`;
+      _openDangerConfirm('Delete Folder', msg, () => _deleteFolderRequest(folderId, true));
+      return;
+    }
+
+    if (!r.ok) { toast(data.error || 'Failed to delete folder', 'error'); return; }
+
+    const removedAlbumIds = new Set(db.albums.filter(a => a.folder_id === folderId).map(a => a.id));
+    db.folders = db.folders.filter(f => f.id !== folderId);
+    db.albums  = db.albums.filter(a => !removedAlbumIds.has(a.id));
+
+    if (currentAlbumId && removedAlbumIds.has(currentAlbumId)) {
+      currentAlbumId = null;
+      setView('all', document.querySelector('[data-view="all"]'));
+    }
+
+    renderAll();
+    toast(
+      data.deleted_albums
+        ? `Folder deleted along with ${data.deleted_albums} album${data.deleted_albums !== 1 ? 's' : ''}`
+        : 'Folder deleted',
+      'info'
+    );
+  } catch {
+    toast('Failed to delete folder', 'error');
+  }
+}
+
+// ── Move an album into (or out of) a folder ───────────────────────────────
+let pendingMoveAlbumId = null;
+
+function openMoveAlbum(albumId) {
+  const album = db.albums.find(a => a.id === albumId);
+  if (!album) return;
+  pendingMoveAlbumId = albumId;
+
+  const sel = document.getElementById('move-album-folder-select');
+  const options = ['<option value="">No folder</option>']
+    .concat((db.folders || []).map(f =>
+      `<option value="${f.id}" ${album.folder_id === f.id ? 'selected' : ''}>${escHtml(f.name)}</option>`
+    ));
+  sel.innerHTML = options.join('');
+  document.getElementById('move-album-modal').classList.add('open');
+}
+
+async function confirmMoveAlbum() {
+  if (!pendingMoveAlbumId) return;
+  const album = db.albums.find(a => a.id === pendingMoveAlbumId);
+  if (!album) return;
+  const folderId = document.getElementById('move-album-folder-select').value || null;
+
+  try {
+    const r = await fetch(`${API_BASE}/api/album/move`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ albumId: pendingMoveAlbumId, folderId })
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      toast(d.error || 'Failed to move album', 'error');
+      return;
+    }
+    album.folder_id = folderId;
+    renderAlbumNav();
+    closeModal('move-album-modal');
+    toast(folderId ? 'Album moved to folder' : 'Album removed from folder', 'success');
+  } catch {
+    toast('Failed to move album', 'error');
+  }
+}
+
+// ── Shared "danger" confirmation modal (delete album / delete folder) ─────
+// A single reusable popup styled in the danger/red palette, replacing
+// window.confirm() for destructive actions. Call _openDangerConfirm with a
+// title, an HTML message, and a callback to run only if the user confirms.
+let _dangerConfirmCallback = null;
+
+function _openDangerConfirm(title, messageHtml, onConfirm) {
+  document.getElementById('danger-confirm-title').textContent = title;
+  document.getElementById('danger-confirm-message').innerHTML = messageHtml;
+  _dangerConfirmCallback = onConfirm;
+  document.getElementById('danger-confirm-modal').classList.add('open');
+}
+
+function _runDangerConfirm() {
+  const cb = _dangerConfirmCallback;
+  _dangerConfirmCallback = null;
+  closeModal('danger-confirm-modal');
+  if (cb) cb();
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+  if (id === 'danger-confirm-modal') _dangerConfirmCallback = null;
+}
 document.querySelectorAll('.modal-overlay').forEach(m => {
-  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+  m.addEventListener('click', e => {
+    if (e.target === m) {
+      m.classList.remove('open');
+      if (m.id === 'danger-confirm-modal') _dangerConfirmCallback = null;
+    }
+  });
 });
 
 // ─────────────────────────────────────────────
