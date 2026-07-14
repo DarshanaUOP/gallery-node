@@ -588,6 +588,20 @@
   /* Metadata modal wider */
   #meta-modal .modal { width: 560px; }
 
+  /* Danger-themed modal — delete album / delete folder confirmations */
+  .modal-danger {
+    border-color: rgba(200,126,126,0.35);
+    box-shadow: 0 0 0 1px rgba(200,126,126,0.08), 0 12px 40px rgba(0,0,0,0.4);
+  }
+  .modal-danger h2 { color: var(--danger); }
+  #danger-confirm-message {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-dim);
+    white-space: pre-line;
+  }
+  #danger-confirm-message strong { color: var(--text); }
+
   .meta-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;

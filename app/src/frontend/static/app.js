@@ -1316,13 +1316,20 @@ document.getElementById('new-album-name').addEventListener('keydown', e => {
 function deleteCurrentAlbum() {
   if (!currentAlbumId) return;
   const album = db.albums.find(a => a.id === currentAlbumId);
-  if (!confirm(`Delete album "${album?.name}"? Media files are not affected.`)) return;
-  db.albums = db.albums.filter(a => a.id !== currentAlbumId);
-  saveDB();
-  currentAlbumId = null;
-  setView('all', document.querySelector('[data-view="all"]'));
-  renderAll();
-  toast('Album deleted', 'info');
+  if (!album) return;
+  _openDangerConfirm(
+    'Delete Album',
+    `Delete album <strong>"${escHtml(album.name)}"</strong>?<br><br>` +
+    `Media files are not affected — only the album itself will be removed.`,
+    () => {
+      db.albums = db.albums.filter(a => a.id !== currentAlbumId);
+      saveDB();
+      currentAlbumId = null;
+      setView('all', document.querySelector('[data-view="all"]'));
+      renderAll();
+      toast('Album deleted', 'info');
+    }
+  );
 }
 
 // ── Inline rename from album header ───────────────────────────────────────────
@@ -1468,10 +1475,29 @@ document.getElementById('rename-folder-name')?.addEventListener('keydown', e => 
   if (e.key === 'Enter') confirmRenameFolder();
 });
 
-// Deletes a folder. If it still contains albums, the backend refuses (409)
-// and tells us how many — we surface that as a confirm() warning explaining
-// the albums (not the media files) will be deleted, then retry with force.
-async function deleteFolder(folderId, force = false) {
+// Deletes a folder. Always confirms via the danger modal first. If the
+// folder still contains albums, the backend refuses the initial (unforced)
+// request with 409 — we surface that as a second, more specific danger-modal
+// warning naming the albums, then retry with force. Media files are never
+// affected either way.
+function deleteFolder(folderId, force = false) {
+  const folder = db.folders.find(f => f.id === folderId);
+  if (!folder) return;
+
+  if (!force) {
+    _openDangerConfirm(
+      'Delete Folder',
+      `Delete folder <strong>"${escHtml(folder.name)}"</strong>?<br><br>` +
+      `If it contains albums, those albums will be deleted too. ` +
+      `Media files themselves will NOT be affected.`,
+      () => _deleteFolderRequest(folderId, false)
+    );
+    return;
+  }
+  _deleteFolderRequest(folderId, force);
+}
+
+async function _deleteFolderRequest(folderId, force) {
   const folder = db.folders.find(f => f.id === folderId);
   if (!folder) return;
   try {
@@ -1483,13 +1509,13 @@ async function deleteFolder(folderId, force = false) {
     const data = await r.json().catch(() => ({}));
 
     if (r.status === 409 && data.needs_confirmation) {
-      const names = (data.album_names || []).join(', ');
+      const names  = (data.album_names || []).map(escHtml).join(', ');
       const plural = data.album_count !== 1;
-      const msg = `Folder "${folder.name}" contains ${data.album_count} album${plural ? 's' : ''}` +
-        (names ? ` (${names})` : '') +
-        `.\n\nDeleting the folder will also delete ${plural ? 'these albums' : 'this album'}. ` +
-        `Media files themselves will NOT be deleted.\n\nContinue?`;
-      if (window.confirm(msg)) await deleteFolder(folderId, true);
+      const msg = `Folder <strong>"${escHtml(folder.name)}"</strong> contains ${data.album_count} ` +
+        `album${plural ? 's' : ''}${names ? ` (${names})` : ''}.<br><br>` +
+        `Deleting the folder will also delete ${plural ? 'these albums' : 'this album'}. ` +
+        `Media files themselves will NOT be deleted.`;
+      _openDangerConfirm('Delete Folder', msg, () => _deleteFolderRequest(folderId, true));
       return;
     }
 
@@ -1559,9 +1585,37 @@ async function confirmMoveAlbum() {
   }
 }
 
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+// ── Shared "danger" confirmation modal (delete album / delete folder) ─────
+// A single reusable popup styled in the danger/red palette, replacing
+// window.confirm() for destructive actions. Call _openDangerConfirm with a
+// title, an HTML message, and a callback to run only if the user confirms.
+let _dangerConfirmCallback = null;
+
+function _openDangerConfirm(title, messageHtml, onConfirm) {
+  document.getElementById('danger-confirm-title').textContent = title;
+  document.getElementById('danger-confirm-message').innerHTML = messageHtml;
+  _dangerConfirmCallback = onConfirm;
+  document.getElementById('danger-confirm-modal').classList.add('open');
+}
+
+function _runDangerConfirm() {
+  const cb = _dangerConfirmCallback;
+  _dangerConfirmCallback = null;
+  closeModal('danger-confirm-modal');
+  if (cb) cb();
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+  if (id === 'danger-confirm-modal') _dangerConfirmCallback = null;
+}
 document.querySelectorAll('.modal-overlay').forEach(m => {
-  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+  m.addEventListener('click', e => {
+    if (e.target === m) {
+      m.classList.remove('open');
+      if (m.id === 'danger-confirm-modal') _dangerConfirmCallback = null;
+    }
+  });
 });
 
 // ─────────────────────────────────────────────

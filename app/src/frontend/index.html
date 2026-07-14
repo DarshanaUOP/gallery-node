@@ -266,6 +266,19 @@
   </div>
 </div>
 
+<!-- DANGER CONFIRM MODAL — shared by Delete Album / Delete Folder -->
+<div class="modal-overlay" id="danger-confirm-modal">
+  <div class="modal modal-danger" style="position:relative">
+    <button class="modal-close" onclick="closeModal('danger-confirm-modal')">✕</button>
+    <h2 id="danger-confirm-title">Delete</h2>
+    <p id="danger-confirm-message"></p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('danger-confirm-modal')">Cancel</button>
+      <button class="btn btn-danger" id="danger-confirm-btn" onclick="_runDangerConfirm()">✕ Delete</button>
+    </div>
+  </div>
+</div>
+
 <!-- MOVE ALBUM TO FOLDER MODAL -->
 <div class="modal-overlay" id="move-album-modal">
   <div class="modal" style="position:relative">
