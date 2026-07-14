@@ -2140,6 +2140,77 @@ async function saveLocations() {
 }
 
 // ─────────────────────────────────────────────
+//  FOLDER BROWSER  (Browse… next to Absolute path)
+// ─────────────────────────────────────────────
+let folderBrowserPath = null;   // currently listed directory (null = start screen, e.g. Windows drive list)
+
+function openFolderBrowser() {
+  // Start from whatever's already typed in the path field, if it looks
+  // like something worth listing; otherwise let the backend pick a default
+  // (home directory, or the drive list on Windows).
+  const typed = document.getElementById('loc-new-path').value.trim();
+  document.getElementById('folder-browser-modal').classList.add('open');
+  loadFolderBrowser(typed || null);
+}
+
+async function loadFolderBrowser(path) {
+  const listEl = document.getElementById('folder-browser-list');
+  const pathEl = document.getElementById('folder-browser-path');
+  listEl.innerHTML = '<div class="folder-browser-msg">Loading…</div>';
+
+  try {
+    const url = path ? `${API_BASE}/api/browse?path=${encodeURIComponent(path)}`
+                      : `${API_BASE}/api/browse`;
+    const r = await fetch(url);
+    const data = await r.json();
+
+    if (!r.ok) {
+      listEl.innerHTML = `<div class="folder-browser-msg">${escHtml(data.error || 'Could not list that folder')}</div>`;
+      return;
+    }
+
+    folderBrowserPath = data.path || null;
+    pathEl.textContent = data.path || 'Select a starting point';
+
+    listEl.innerHTML = '';
+
+    if (data.parent !== null && data.parent !== undefined) {
+      const up = document.createElement('div');
+      up.className = 'folder-browser-item folder-browser-up';
+      up.textContent = '⬆ .. (up a level)';
+      up.onclick = () => loadFolderBrowser(data.parent);
+      listEl.appendChild(up);
+    }
+
+    if (data.dirs.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'folder-browser-msg';
+      empty.textContent = 'No subfolders here';
+      listEl.appendChild(empty);
+    } else {
+      data.dirs.forEach(d => {
+        const item = document.createElement('div');
+        item.className = 'folder-browser-item';
+        item.textContent = '📁 ' + d.name;
+        item.onclick = () => loadFolderBrowser(d.path);
+        listEl.appendChild(item);
+      });
+    }
+  } catch {
+    listEl.innerHTML = '<div class="folder-browser-msg">Could not reach the backend — is app.py running?</div>';
+  }
+}
+
+function confirmFolderBrowser() {
+  if (!folderBrowserPath) {
+    toast('Choose a folder first', 'error');
+    return;
+  }
+  document.getElementById('loc-new-path').value = folderBrowserPath;
+  closeModal('folder-browser-modal');
+}
+
+// ─────────────────────────────────────────────
 //  PHOTO PICKER
 // ─────────────────────────────────────────────
 let pickerSelected = new Set();
