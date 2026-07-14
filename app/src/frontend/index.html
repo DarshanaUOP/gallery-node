@@ -39,7 +39,10 @@
   <div class="sidebar-section">
     <div class="sidebar-label" style="display:flex;justify-content:space-between;align-items:center;padding-right:12px">
       Albums
-      <span style="cursor:pointer;color:var(--accent);font-size:16px" onclick="openCreateAlbum()" title="New album">+</span>
+      <span style="display:flex;gap:10px;align-items:center">
+        <span style="cursor:pointer;color:var(--text-dim);font-size:13px" onclick="openCreateFolder()" title="New folder">⛁+</span>
+        <span style="cursor:pointer;color:var(--accent);font-size:16px" onclick="openCreateAlbum()" title="New album">+</span>
+      </span>
     </div>
     <div id="album-nav" class="sidebar-albums"></div>
   </div>
@@ -102,6 +105,7 @@
       </div>
       <div style="margin-left:auto;display:flex;gap:8px">
         <button class="btn btn-ghost" onclick="startInlineRename()" title="Rename album">✎ Rename</button>
+        <button class="btn btn-ghost" onclick="openMoveAlbum(currentAlbumId)" title="Move to folder">⇄ Move to Folder</button>
         <button class="btn btn-accent" id="add-photos-btn" onclick="openPhotoPicker()">＋ Add Photos</button>
         <button class="btn btn-danger" id="delete-album-btn" onclick="deleteCurrentAlbum()">✕ Delete Album</button>
       </div>
@@ -215,9 +219,75 @@
     <button class="modal-close" onclick="closeModal('create-album-modal')">✕</button>
     <h2>New Album</h2>
     <input type="text" id="new-album-name" placeholder="Album name…">
+    <select id="new-album-folder"></select>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('create-album-modal')">Cancel</button>
       <button class="btn btn-accent" onclick="confirmCreateAlbum()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- CREATE FOLDER MODAL -->
+<div class="modal-overlay" id="create-folder-modal">
+  <div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeModal('create-folder-modal')">✕</button>
+    <h2>New Folder</h2>
+    <input type="text" id="new-folder-name" placeholder="Folder name…">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('create-folder-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="confirmCreateFolder()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- RENAME ALBUM MODAL -->
+<div class="modal-overlay" id="rename-album-modal">
+  <div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeModal('rename-album-modal')">✕</button>
+    <h2>Rename Album</h2>
+    <input type="text" id="rename-album-name" placeholder="Album name…">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('rename-album-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="confirmRenameAlbum()">Rename</button>
+    </div>
+  </div>
+</div>
+
+<!-- RENAME FOLDER MODAL -->
+<div class="modal-overlay" id="rename-folder-modal">
+  <div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeModal('rename-folder-modal')">✕</button>
+    <h2>Rename Folder</h2>
+    <input type="text" id="rename-folder-name" placeholder="Folder name…">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('rename-folder-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="confirmRenameFolder()">Rename</button>
+    </div>
+  </div>
+</div>
+
+<!-- DANGER CONFIRM MODAL — shared by Delete Album / Delete Folder -->
+<div class="modal-overlay" id="danger-confirm-modal">
+  <div class="modal modal-danger" style="position:relative">
+    <button class="modal-close" onclick="closeModal('danger-confirm-modal')">✕</button>
+    <h2 id="danger-confirm-title">Delete</h2>
+    <p id="danger-confirm-message"></p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('danger-confirm-modal')">Cancel</button>
+      <button class="btn btn-danger" id="danger-confirm-btn" onclick="_runDangerConfirm()">✕ Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- MOVE ALBUM TO FOLDER MODAL -->
+<div class="modal-overlay" id="move-album-modal">
+  <div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeModal('move-album-modal')">✕</button>
+    <h2>Move Album to Folder</h2>
+    <select id="move-album-folder-select"></select>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('move-album-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="confirmMoveAlbum()">Move</button>
     </div>
   </div>
 </div>

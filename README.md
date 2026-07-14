@@ -369,7 +369,7 @@ All media endpoints support server-side filtering via query parameters.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/db` | `{media, albums, total, offset, has_more}` — same filter params as `/api/media`; used by the frontend on initial load |
+| GET | `/api/db` | `{media, albums, folders, total, offset, has_more}` — same filter params as `/api/media`; used by the frontend on initial load |
 | POST | `/api/db` | Save `{media, albums}` — replaces both tables in SQLite |
 
 ### Config
@@ -395,6 +395,18 @@ All media endpoints support server-side filtering via query parameters.
 | POST | `/api/album/create` | `{"name": "…"}` — returns created album with generated `id` |
 | POST | `/api/album/add` | `{"albumId": "…", "uniqueName": "…"}` |
 | POST | `/api/album/add-bulk` | `{"albumId": "…", "uniqueNames": ["…", …]}` — adds many photos to an album in one transaction. Returns `{ok: true, added: N}` where `N` is the number newly inserted (duplicates skipped) |
+| POST | `/api/album/move` | `{"albumId": "…", "folderId": "…"|null}` — moves an album into a folder, or out of any folder if `folderId` is `null` |
+
+### Folders
+
+Folders group albums for display in the sidebar (collapsible tree). A folder can hold any number of albums; an album belongs to at most one folder.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/folders` | All folders as `[{id, name}]` |
+| POST | `/api/folder/create` | `{"name": "…"}` — returns created folder |
+| POST | `/api/folder/rename` | `{"folderId": "…", "name": "…"}` |
+| POST | `/api/folder/delete` | `{"folderId": "…", "force": false}` — if the folder still has albums inside and `force` isn't set, returns `409 {needs_confirmation: true, album_count, album_names}` instead of deleting anything. Call again with `force: true` to proceed. Deleting a folder deletes the albums inside it (and their album-membership rows) but never touches the underlying media files/records |
 
 ### Locations (media.json)
 
@@ -419,7 +431,7 @@ All media endpoints support server-side filtering via query parameters.
 |---|---|---|
 | `config/configuration.json` | ✓ | App settings — shipped with the project, tracked in git, edit directly |
 | `data/media.json` | ✗ | Source directory list — auto-created with `~/Pictures` entry on first run |
-| `data/luminary.db` | ✗ | SQLite database — media records + albums |
+| `data/luminary.db` | ✗ | SQLite database — media records + albums + folders |
 | `data/luminary.db-wal` / `-shm` | ✗ | SQLite WAL files — transient, safe to delete when server is stopped |
 | `thumbnails/` | ✗ | Thumbnail cache — auto-created on first run, fully git-ignored |
 | `cache/` | ✗ | Scratch cache for temp video frame extraction — auto-created, fully git-ignored |
