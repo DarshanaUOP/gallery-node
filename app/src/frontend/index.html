@@ -338,7 +338,10 @@
       <div style="font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-muted);margin-bottom:10px">Add New Location</div>
       <div style="display:flex;flex-direction:column;gap:8px">
         <input type="text" id="loc-new-name" placeholder="Label  (e.g. Travel Photos)">
-        <input type="text" id="loc-new-path" placeholder="Absolute path  (e.g. /home/user/photos/travel)">
+        <div class="path-input-row">
+          <input type="text" id="loc-new-path" placeholder="Absolute path  (e.g. /home/user/photos/travel)">
+          <button type="button" class="btn btn-ghost" id="loc-new-browse-btn" onclick="openFolderBrowser()" title="Browse for a folder">Browse…</button>
+        </div>
         <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-dim)">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
             <input type="checkbox" id="loc-new-vis" checked style="accent-color:var(--accent)">
@@ -351,6 +354,20 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('locations-modal')">Cancel</button>
       <button class="btn btn-accent" onclick="saveLocations()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- FOLDER BROWSER MODAL -->
+<div class="modal-overlay" id="folder-browser-modal">
+  <div class="modal" id="folder-browser-inner" style="position:relative;width:520px;max-width:96vw">
+    <button class="modal-close" onclick="closeModal('folder-browser-modal')">✕</button>
+    <h2>Choose a Folder</h2>
+    <div id="folder-browser-path" class="folder-browser-path"></div>
+    <div id="folder-browser-list" class="folder-browser-list"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('folder-browser-modal')">Cancel</button>
+      <button class="btn btn-accent" onclick="confirmFolderBrowser()">Select This Folder</button>
     </div>
   </div>
 </div>

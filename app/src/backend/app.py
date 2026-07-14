@@ -9,9 +9,11 @@ import sys
 import json
 import uuid
 import shutil
+import string
 import hashlib
 import logging
 import sqlite3
+import platform
 import threading
 from pathlib import Path
 from datetime import datetime
@@ -2002,6 +2004,69 @@ if FLASK_AVAILABLE:
         save_json(MEDIA_JSON, cleaned)
         log.info("media.json updated — %d locations", len(cleaned))
         return jsonify({"ok": True, "count": len(cleaned)})
+
+    @app.route("/api/browse", methods=["GET"])
+    def api_browse():
+        """
+        List the subdirectories of a given path — powers the folder-browser
+        popup next to the "Absolute path" field in Media Locations. Only
+        directories are returned; files are irrelevant when picking a
+        media root.
+
+        Query params:
+          path — absolute directory to list. Omitted/blank starts at the
+                 user's home directory (or, on Windows, returns the drive
+                 list so the user has somewhere to start from).
+        """
+        raw = request.args.get("path", "").strip()
+
+        if not raw:
+            if platform.system() == "Windows":
+                drives = [f"{d}:\\" for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
+                return jsonify({
+                    "path":   "",
+                    "parent": None,
+                    "dirs":   [{"name": d, "path": d} for d in drives],
+                })
+            raw = str(Path.home())
+
+        try:
+            target = Path(raw).resolve(strict=False)
+        except (OSError, RuntimeError):
+            return jsonify({"error": f"Invalid path: {raw}"}), 400
+
+        if not target.exists():
+            return jsonify({"error": f"Path does not exist: {target}"}), 404
+        if not target.is_dir():
+            return jsonify({"error": f"Not a directory: {target}"}), 400
+
+        names = []
+        try:
+            with os.scandir(target) as it:
+                for entry in it:
+                    if entry.name.startswith("."):
+                        continue  # hidden dirs clutter the picker without adding value
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            names.append(entry.name)
+                    except OSError:
+                        continue  # broken symlink or a stat we can't do — skip it
+        except PermissionError:
+            return jsonify({"error": f"Permission denied: {target}"}), 403
+
+        names.sort(key=str.lower)
+
+        parent = target.parent
+        # No "Up" once we're at a filesystem root: POSIX '/' is its own
+        # parent, and a Windows drive root (e.g. 'C:\\') has no useful parent.
+        at_root = (parent == target) or (
+            platform.system() == "Windows" and str(target).rstrip("\\").endswith(":")
+        )
+        return jsonify({
+            "path":   str(target),
+            "parent": None if at_root else str(parent),
+            "dirs":   [{"name": name, "path": str(target / name)} for name in names],
+        })
 
     @app.route("/api/sync", methods=["POST"])
     def api_sync():
