@@ -867,6 +867,13 @@
   }
   .modal-overlay.open { opacity: 1; pointer-events: all; }
 
+  /* The danger-confirm modal can be opened from inside another already-open
+     modal (e.g. removing a location from within Media Locations, or
+     deleting an album/folder). It needs to sit strictly above whatever
+     opened it, not just tie on DOM order — otherwise it can render behind
+     the parent modal, unreachable to click. */
+  #danger-confirm-modal { z-index: 550; }
+
   .modal {
     background: var(--surface);
     border: 1px solid var(--border-hover);
@@ -1828,6 +1835,16 @@
     margin-top: 4px;
   }
   .loc-vis-toggle input { accent-color: var(--accent); cursor: pointer; }
+
+  .loc-synced-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: calc(10px * var(--font-scale));
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .loc-synced-badge strong { color: var(--text-dim); }
 
   .loc-delete-btn {
     background: none;
