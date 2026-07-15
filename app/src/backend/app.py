@@ -85,6 +85,8 @@ def _bootstrap():
         import json as _json
         CONFIG_JSON.write_text(_json.dumps({
             "theme":                    "dark",
+            "style":                    "classic",
+            "font_size":                "small",
             "grid_columns":             4,
             "card_size":                "medium",
             "show_filename_on_card":    True,
@@ -1232,6 +1234,8 @@ def load_config() -> dict:
     defaults = {
         # Appearance
         "theme":                    "dark",       # dark | light | system
+        "style":                    "classic",    # classic | modern
+        "font_size":                "small",      # small | medium | large
         "grid_columns":             4,            # 2 | 3 | 4 | auto
         "card_size":                "medium",     # small | medium | large
         "show_filename_on_card":    True,

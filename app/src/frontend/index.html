@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-style="classic" data-mode="dark">
+<html lang="en" data-style="classic" data-mode="dark" data-font-size="small">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -36,7 +36,7 @@
     </div>
   </div>
 
-  <div class="sidebar-section">
+  <div class="sidebar-section sidebar-section-albums">
     <div class="sidebar-label" style="display:flex;justify-content:space-between;align-items:center;padding-right:12px">
       Albums
       <span style="display:flex;gap:10px;align-items:center">
@@ -165,6 +165,11 @@
 <div id="scroll-date-pill">
   <span id="scroll-date-text"></span>
 </div>
+
+<!-- SCROLL TO TOP -->
+<button id="scroll-top-btn" onclick="scrollToTop()" title="Scroll to top" aria-label="Scroll to top">
+  <span>↑</span>
+</button>
 
 <!-- CONTEXT MENU -->
 <div id="ctx-menu">
@@ -407,6 +412,15 @@
           <option value="terminal">Terminal — monospace console, sharp &amp; green</option>
           <option value="sunset">Sunset — warm terracotta, rounded &amp; cozy</option>
           <option value="nordic">Nordic — cool slate-teal, understated serif</option>
+        </select>
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">Font Size</div>
+        <select class="settings-select" id="s-font-size">
+          <option value="small">Small</option>
+          <option value="medium">Medium</option>
+          <option value="large">Large</option>
         </select>
       </div>
 

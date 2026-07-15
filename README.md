@@ -172,6 +172,7 @@ All fields with their defaults:
 {
   "theme": "dark",
   "style": "classic",
+  "font_size": "small",
   "grid_columns": 4,
   "card_size": "medium",
   "show_filename_on_card": true,
@@ -213,6 +214,7 @@ All fields with their defaults:
 |---|---|---|
 | `theme` | `dark` | `dark` \| `light` \| `system` — light/dark mode |
 | `style` | `classic` | `classic` \| `modern` \| `terminal` \| `sunset` \| `nordic` — see below |
+| `font_size` | `small` | `small` \| `medium` \| `large` — `small` matches the app's original sizing; `medium` and `large` scale every font size in the UI proportionally (1.125× and 1.25×) while preserving each style's relative type scale |
 
 **Style options**
 

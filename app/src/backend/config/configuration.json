@@ -47,5 +47,7 @@
   "extract_video_metadata": true,
   "api_port": 5000,
   "log_level": "INFO",
-  "log_retention_days": 30
+  "log_retention_days": 30,
+  "style": "modern",
+  "font_size": "medium"
 }
