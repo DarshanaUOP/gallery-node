@@ -931,6 +931,17 @@
   .meta-key { color: var(--text-muted); }
   .meta-val { color: var(--text); text-align: right; max-width: 60%; word-break: break-all; }
 
+  .meta-minimap {
+    width: 100%;
+    height: 140px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+  .meta-minimap .leaflet-control-attribution { display: none; }
+
   /* ══ LIGHTBOX — two-column layout ══════════════════════════════════════════ */
   #lightbox {
     position: fixed; inset: 0;
@@ -1158,6 +1169,17 @@
     word-break: break-all;
     max-width: 60%;
   }
+
+  .lb-detail-minimap {
+    width: 100%;
+    height: 120px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+  .lb-detail-minimap .leaflet-control-attribution { display: none; }
 
   /* ── TOAST ── */
   #toast-container {
