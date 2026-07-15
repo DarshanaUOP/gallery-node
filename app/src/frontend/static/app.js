@@ -1022,6 +1022,47 @@ function renderLightbox() {
   _renderLbDetails(item);
 }
 
+// ─────────────────────────────────────────────
+//  MINI MAP PREVIEWS (lightbox details + metadata modal)
+// ─────────────────────────────────────────────
+// Small, non-interactive Leaflet maps embedded inline wherever we show a
+// Location section. Keyed by container id since more than one could
+// theoretically exist (lightbox panel + metadata modal).
+let _miniMaps = {};
+
+function _destroyMiniMap(containerId) {
+  if (_miniMaps[containerId]) {
+    try { _miniMaps[containerId].remove(); } catch {}
+    delete _miniMaps[containerId];
+  }
+}
+
+function _renderMiniMap(containerId, lat, lng) {
+  _destroyMiniMap(containerId);
+  const el = document.getElementById(containerId);
+  if (!el || lat == null || lng == null || isNaN(lat) || isNaN(lng)) return;
+
+  const map = L.map(containerId, {
+    center:            [lat, lng],
+    zoom:              13,
+    zoomControl:       false,
+    dragging:          false,
+    scrollWheelZoom:   false,
+    doubleClickZoom:   false,
+    boxZoom:           false,
+    keyboard:          false,
+    touchZoom:         false,
+    attributionControl:false,
+  });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  L.marker([lat, lng]).addTo(map);
+  _miniMaps[containerId] = map;
+
+  // Container may be inside a panel that was display:none at insert time —
+  // recompute tile layout once it's actually visible.
+  setTimeout(() => { try { map.invalidateSize(); } catch {} }, 60);
+}
+
 function _renderLbDetails(item) {
   const m   = item.metadata || {};
   const det = document.getElementById('lb-details');
@@ -1098,7 +1139,13 @@ function _renderLbDetails(item) {
       row('Modified', fmtDate(m.date?.modified)),
     ]);
     if (m.location?.latitude) {
+      const lat = parseFloat(m.location.latitude);
+      const lng = parseFloat(m.location.longitude);
+      const mapHtml = (!isNaN(lat) && !isNaN(lng))
+        ? `<div class="lb-detail-minimap" id="lb-detail-minimap"></div>`
+        : '';
       html += section('Location', [
+        mapHtml,
         row('Latitude',  m.location?.latitude),
         row('Longitude', m.location?.longitude),
         row('City',      m.location?.city),
@@ -1114,6 +1161,11 @@ function _renderLbDetails(item) {
   }
 
   det.innerHTML = html || '<p style="font-size:11px;color:var(--text-muted)">No metadata available.</p>';
+
+  _destroyMiniMap('lb-detail-minimap');
+  if (m.location?.latitude) {
+    _renderMiniMap('lb-detail-minimap', parseFloat(m.location.latitude), parseFloat(m.location.longitude));
+  }
 }
 
 // Guess MIME type for video src attribute
@@ -1293,6 +1345,7 @@ function closeLightbox() {
   const vid = document.getElementById('lb-content')?.querySelector('video');
   if (vid) { vid.pause(); vid.src = ''; vid.load(); }
   document.getElementById('lightbox').classList.remove('open');
+  _destroyMiniMap('lb-detail-minimap');
 }
 
 function lbNav(dir) {
@@ -1364,6 +1417,9 @@ function openMetaModal(item) {
     const rows = sec.rows.filter(r => r[1] != null && r[1] !== '');
     if (rows.length === 0) return;
     html += `<div class="meta-section"><div class="meta-section-title">${sec.title}</div>`;
+    if (sec.title === 'Location' && !isNaN(parseFloat(m.location?.latitude)) && !isNaN(parseFloat(m.location?.longitude))) {
+      html += `<div class="meta-minimap" id="meta-minimap"></div>`;
+    }
     rows.forEach(([k, v]) => {
       html += `<div class="meta-row"><span class="meta-key">${k}</span><span class="meta-val">${escHtml(String(v))}</span></div>`;
     });
@@ -1372,6 +1428,11 @@ function openMetaModal(item) {
 
   document.getElementById('meta-content').innerHTML = html || '<p style="color:var(--text-muted);font-size:12px">No metadata available.</p>';
   document.getElementById('meta-modal').classList.add('open');
+
+  _destroyMiniMap('meta-minimap');
+  if (m.location?.latitude) {
+    _renderMiniMap('meta-minimap', parseFloat(m.location.latitude), parseFloat(m.location.longitude));
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -1748,12 +1809,14 @@ function _runDangerConfirm() {
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
   if (id === 'danger-confirm-modal') _dangerConfirmCallback = null;
+  if (id === 'meta-modal') _destroyMiniMap('meta-minimap');
 }
 document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('click', e => {
     if (e.target === m) {
       m.classList.remove('open');
       if (m.id === 'danger-confirm-modal') _dangerConfirmCallback = null;
+      if (m.id === 'meta-modal') _destroyMiniMap('meta-minimap');
     }
   });
 });
