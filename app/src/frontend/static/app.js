@@ -2351,6 +2351,9 @@ function renderLocationsList() {
                  onchange="locationsData[${idx}].visibility = this.checked; this.closest('.loc-row').classList.toggle('loc-hidden-row', !this.checked)">
           Scan during Sync
         </label>
+        ${(loc.synced_count || 0) > 0
+          ? `<span class="loc-synced-badge">⬡ <strong>${loc.synced_count}</strong> synced file${loc.synced_count !== 1 ? 's' : ''}</span>`
+          : ''}
       </div>
       <div class="loc-actions">
         <button class="loc-delete-btn" onclick="deleteLocation(${idx})">✕ Remove</button>
@@ -2362,9 +2365,62 @@ function renderLocationsList() {
 
 function deleteLocation(idx) {
   const loc = locationsData[idx];
-  if (!confirm(`Remove "${loc.name || loc.path}"?\n\nThis only removes it from the scan list — your files are not affected.`)) return;
-  locationsData.splice(idx, 1);
-  renderLocationsList();
+  if (!loc) return;
+
+  const count = loc.synced_count || 0;
+
+  if (count === 0) {
+    // Nothing indexed yet for this location — safe to just drop it from
+    // the working list. Still needs "Save Changes" to persist.
+    _openDangerConfirm(
+      'Remove Location',
+      `Remove <strong>"${escHtml(loc.name || loc.path)}"</strong> from the scan list?<br><br>` +
+      `Nothing has been indexed from it yet, so no data will be discarded — your files are not affected.`,
+      () => {
+        locationsData.splice(idx, 1);
+        renderLocationsList();
+      }
+    );
+    return;
+  }
+
+  const plural = count !== 1;
+  _openDangerConfirm(
+    'Remove Location',
+    `<strong>"${escHtml(loc.name || loc.path)}"</strong> already has <strong>${count}</strong> ` +
+    `indexed file${plural ? 's' : ''} in your library.<br><br>` +
+    `Removing this location will discard ${plural ? 'those files' : 'that file'} from the database — ` +
+    `they will no longer be tracked, and this location will not be scanned for new media on future syncs. ` +
+    `Your original files on disk are <strong>not</strong> deleted, only Luminary's index of them.<br><br>` +
+    `Do you want to continue?`,
+    () => _deleteLocationRequest(idx)
+  );
+}
+
+async function _deleteLocationRequest(idx) {
+  const loc = locationsData[idx];
+  if (!loc) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/location/delete`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ path: loc.path }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(data.error || 'Failed to remove location', 'error'); return; }
+
+    locationsData.splice(idx, 1);
+    renderLocationsList();
+    populateLocationFilter();
+    toast(
+      data.deleted
+        ? `Location removed — discarded ${data.deleted} indexed file${data.deleted !== 1 ? 's' : ''}`
+        : 'Location removed',
+      'info'
+    );
+  } catch {
+    toast('Could not remove location — is app.py running?', 'error');
+  }
 }
 
 function addLocation() {

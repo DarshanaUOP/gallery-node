@@ -660,6 +660,43 @@ def get_distinct_source_roots() -> list:
     ).fetchall()
     return [r["source_root"] for r in rows]
 
+def count_media_by_source_root(path: str) -> int:
+    """
+    How many media rows currently belong to a given location root — i.e.
+    how many indexed files would be discarded if this location were removed.
+    Matches the same (exact OR prefix) rule used everywhere else a location
+    path is compared against source_root, so counts here always agree with
+    what the location filter dropdown would show.
+    """
+    root = (path or "").rstrip("/\\")
+    if not root:
+        return 0
+    conn = get_db_conn()
+    row = conn.execute(
+        "SELECT COUNT(*) FROM media WHERE source_root = ? OR source_root LIKE ?",
+        (root, root + "/%"),
+    ).fetchone()
+    return row[0] if row else 0
+
+def delete_media_by_source_root(path: str) -> int:
+    """
+    Permanently remove every media row (and cached thumbnails) belonging to
+    a location that's being removed from the scan list — keeps the DB from
+    holding onto records for files we've explicitly told Luminary to stop
+    tracking. The original files on disk are never touched; this only
+    discards Luminary's own index of them. Returns the number of rows removed.
+    """
+    root = (path or "").rstrip("/\\")
+    if not root:
+        return 0
+    conn = get_db_conn()
+    rows = conn.execute(
+        "SELECT uniqueName FROM media WHERE source_root = ? OR source_root LIKE ?",
+        (root, root + "/%"),
+    ).fetchall()
+    unique_names = [r["uniqueName"] for r in rows]
+    return delete_media_records(unique_names)
+
 def get_distinct_subdirs() -> list:
     """
     Return all unique directory paths including source roots and every
@@ -1984,9 +2021,13 @@ if FLASK_AVAILABLE:
     def api_locations_get():
         """
         Return current contents of media.json.
-        Each entry: { name, path, visibility, root, label }
+        Each entry: { name, path, visibility, root, label, synced_count }
         'root' and 'label' aliases are included so this endpoint can be used
         directly by the location filter dropdowns without a separate /api/media/locations call.
+        'synced_count' is how many media rows are currently indexed under
+        that path — the frontend uses it to decide whether removing the
+        location needs the stronger "this will discard indexed files"
+        confirmation, and to show the count inside that message.
         """
         sources = load_json(MEDIA_JSON, [])
         result  = []
@@ -1995,11 +2036,12 @@ if FLASK_AVAILABLE:
             name  = (s.get("name") or "").strip()
             label = name or (path.split("/")[-1] if path else path)
             result.append({
-                "name":       name,
-                "path":       s.get("path", ""),
-                "visibility": s.get("visibility", True),
-                "root":       path,
-                "label":      label,
+                "name":         name,
+                "path":         s.get("path", ""),
+                "visibility":   s.get("visibility", True),
+                "root":         path,
+                "label":        label,
+                "synced_count": count_media_by_source_root(path),
             })
         return jsonify(result)
 
@@ -2021,6 +2063,37 @@ if FLASK_AVAILABLE:
         save_json(MEDIA_JSON, cleaned)
         log.info("media.json updated — %d locations", len(cleaned))
         return jsonify({"ok": True, "count": len(cleaned)})
+
+    @app.route("/api/location/delete", methods=["POST"])
+    def api_location_delete():
+        """
+        Remove one media location for good. Body: { path: str }
+
+        Unlike /api/locations (POST), which just overwrites the whole list
+        with whatever the frontend currently has, this endpoint does the two
+        things a location removal actually needs to guarantee together, in
+        one atomic step:
+          1. Discards every already-indexed media row under that path from
+             the DB (and their cached thumbnails) — nothing is left behind
+             pointing at a location the user just said to stop tracking.
+          2. Removes the entry from media.json so it's never scanned again.
+        The original files on disk are never touched — only Luminary's own
+        index of them. Returns { ok: true, deleted: N }.
+        """
+        body = request.get_json(force=True) or {}
+        path = (body.get("path") or "").strip()
+        if not path:
+            return jsonify({"error": "path required"}), 400
+
+        deleted = delete_media_by_source_root(path)
+
+        sources  = load_json(MEDIA_JSON, [])
+        root     = path.rstrip("/\\")
+        remaining = [s for s in sources if (s.get("path") or "").rstrip("/\\") != root]
+        save_json(MEDIA_JSON, remaining)
+
+        log.info("Location removed: %s — discarded %d indexed record(s)", path, deleted)
+        return jsonify({"ok": True, "deleted": deleted})
 
     @app.route("/api/browse", methods=["GET"])
     def api_browse():

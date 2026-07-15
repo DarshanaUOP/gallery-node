@@ -1829,6 +1829,16 @@
   }
   .loc-vis-toggle input { accent-color: var(--accent); cursor: pointer; }
 
+  .loc-synced-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: calc(10px * var(--font-scale));
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .loc-synced-badge strong { color: var(--text-dim); }
+
   .loc-delete-btn {
     background: none;
     border: 1px solid rgba(200,126,126,0.3);
