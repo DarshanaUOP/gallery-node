@@ -311,6 +311,18 @@
   .sidebar-section {
     padding: 16px 0 8px;
   }
+  /* The Albums section sits between the fixed Library nav above and the
+     fixed Settings footer below. It needs to be the one flexible region
+     that absorbs extra height and scrolls internally once the album list
+     grows taller than the available space — otherwise the list just
+     overflows the fixed-height sidebar and pushes Settings past the
+     bottom of the screen with no way to reach it. */
+  .sidebar-section-albums {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
   .sidebar-label {
     padding: 0 24px 8px;
     font-size: calc(9px * var(--font-scale));
