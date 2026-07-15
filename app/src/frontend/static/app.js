@@ -2010,11 +2010,51 @@ function _applyImmediateSettings(s) {
   }
 }
 
+const KNOWN_STYLES = ['classic', 'modern', 'terminal', 'sunset', 'nordic'];
+
 function _applyTheme(theme, style) {
   const root = document.documentElement;
   const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   root.setAttribute('data-mode', isDark ? 'dark' : 'light');
-  root.setAttribute('data-style', style === 'modern' ? 'modern' : 'classic');
+  root.setAttribute('data-style', KNOWN_STYLES.includes(style) ? style : 'classic');
+  _updateThemeModeToggleIcon(isDark);
+}
+
+function _updateThemeModeToggleIcon(isDark) {
+  const btn = document.getElementById('theme-mode-toggle-btn');
+  if (!btn) return;
+  // Icon shows the mode a click will switch TO.
+  btn.textContent = isDark ? '☀️' : '🌙';
+  btn.title = isDark ? 'Switch to light theme' : 'Switch to dark theme';
+}
+
+// Quick dark/light toggle for the current style — no settings panel, updates
+// configuration.json directly via a partial PATCH-style save.
+async function toggleThemeMode() {
+  const btn = document.getElementById('theme-mode-toggle-btn');
+  const currentlyDark = document.documentElement.getAttribute('data-mode') === 'dark';
+  const newTheme = currentlyDark ? 'light' : 'dark';
+  const previousTheme = config.theme;
+
+  // Apply immediately for a snappy UI, before the save round-trip completes.
+  _applyTheme(newTheme, config.style);
+  if (btn) btn.disabled = true;
+
+  try {
+    const r = await fetch(`${API_BASE}/api/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme: newTheme }),
+    });
+    if (!r.ok) throw new Error('Server returned ' + r.status);
+    config.theme = newTheme;
+  } catch {
+    // Revert on failure so the UI doesn't silently disagree with configuration.json
+    _applyTheme(previousTheme, config.style);
+    toast('Could not save theme — is app.py running?', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 // Apply settings on boot from loaded config
