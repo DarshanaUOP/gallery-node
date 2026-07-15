@@ -98,6 +98,141 @@ html[data-style="classic"][data-mode="dark"] {
     --font-size-base: 14px;
   }
 
+  /* ── TERMINAL — monospace hacker console, sharp corners, phosphor green ── */
+  html[data-style="terminal"][data-mode="dark"] {
+    --bg: #0a0f0a;
+    --bg-rgb: 10,15,10;
+    --surface: #0f160f;
+    --surface2: #16201a;
+    --border: rgba(74,222,128,0.15);
+    --border-hover: rgba(74,222,128,0.35);
+    --text: #d1f5d3;
+    --text-muted: #4f7a58;
+    --text-dim: #8fc99a;
+    --accent: #4ade80;
+    --accent-rgb: 74,222,128;
+    --accent-dim: rgba(74,222,128,0.15);
+    --accent-glow: rgba(74,222,128,0.08);
+    --danger: #ff5c5c;
+    --success: #4ade80;
+    --radius: 2px;
+    --font-display: 'JetBrains Mono', monospace;
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-size-base: 12px;
+  }
+
+  html[data-style="terminal"][data-mode="light"] {
+    --bg: #f4faf5;
+    --bg-rgb: 244,250,245;
+    --surface: #ffffff;
+    --surface2: #e6f2e8;
+    --border: rgba(22,101,52,0.12);
+    --border-hover: rgba(22,101,52,0.25);
+    --text: #0f2e17;
+    --text-muted: #6b8f74;
+    --text-dim: #2f5c3a;
+    --accent: #16a34a;
+    --accent-rgb: 22,163,74;
+    --accent-dim: rgba(22,163,74,0.13);
+    --accent-glow: rgba(22,163,74,0.07);
+    --danger: #dc2626;
+    --success: #16a34a;
+    --radius: 2px;
+    --font-display: 'JetBrains Mono', monospace;
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-size-base: 12px;
+  }
+
+  /* ── SUNSET — warm terracotta, generously rounded, cozy serif + rounded sans ── */
+  html[data-style="sunset"][data-mode="dark"] {
+    --bg: #201512;
+    --bg-rgb: 32,21,18;
+    --surface: #2b1c17;
+    --surface2: #3a271f;
+    --border: rgba(255,255,255,0.08);
+    --border-hover: rgba(255,255,255,0.18);
+    --text: #f7ece2;
+    --text-muted: #a3897c;
+    --text-dim: #d3b8a8;
+    --accent: #e8734a;
+    --accent-rgb: 232,115,74;
+    --accent-dim: rgba(232,115,74,0.18);
+    --accent-glow: rgba(232,115,74,0.1);
+    --danger: #ff6b6b;
+    --success: #6fbf8b;
+    --radius: 16px;
+    --font-display: 'Fraunces', serif;
+    --font-mono: 'Nunito Sans', sans-serif;
+    --font-size-base: 14px;
+  }
+
+  html[data-style="sunset"][data-mode="light"] {
+    --bg: #fdf6f0;
+    --bg-rgb: 253,246,240;
+    --surface: #ffffff;
+    --surface2: #faece1;
+    --border: rgba(120,60,30,0.1);
+    --border-hover: rgba(120,60,30,0.2);
+    --text: #3a2418;
+    --text-muted: #9c8272;
+    --text-dim: #6b4d3a;
+    --accent: #d9612f;
+    --accent-rgb: 217,97,47;
+    --accent-dim: rgba(217,97,47,0.14);
+    --accent-glow: rgba(217,97,47,0.08);
+    --danger: #d9432f;
+    --success: #4f9c6e;
+    --radius: 16px;
+    --font-display: 'Fraunces', serif;
+    --font-mono: 'Nunito Sans', sans-serif;
+    --font-size-base: 14px;
+  }
+
+  /* ── NORDIC — cool minimal slate-teal, serif display, understated ── */
+  html[data-style="nordic"][data-mode="dark"] {
+    --bg: #10161c;
+    --bg-rgb: 16,22,28;
+    --surface: #161e26;
+    --surface2: #1e2a34;
+    --border: rgba(255,255,255,0.07);
+    --border-hover: rgba(255,255,255,0.15);
+    --text: #e4ebf0;
+    --text-muted: #63737f;
+    --text-dim: #9fb0ba;
+    --accent: #6fa3a0;
+    --accent-rgb: 111,163,160;
+    --accent-dim: rgba(111,163,160,0.16);
+    --accent-glow: rgba(111,163,160,0.08);
+    --danger: #d17b7b;
+    --success: #7fbfa0;
+    --radius: 6px;
+    --font-display: 'Merriweather', serif;
+    --font-mono: 'system-ui', -apple-system, sans-serif;
+    --font-size-base: 13px;
+  }
+
+  html[data-style="nordic"][data-mode="light"] {
+    --bg: #f4f6f7;
+    --bg-rgb: 244,246,247;
+    --surface: #ffffff;
+    --surface2: #e8ecee;
+    --border: rgba(15,30,40,0.08);
+    --border-hover: rgba(15,30,40,0.16);
+    --text: #1c2b33;
+    --text-muted: #8697a0;
+    --text-dim: #4b5f68;
+    --accent: #3d7d78;
+    --accent-rgb: 61,125,120;
+    --accent-dim: rgba(61,125,120,0.12);
+    --accent-glow: rgba(61,125,120,0.07);
+    --danger: #b5504f;
+    --success: #3f8f6a;
+    --radius: 6px;
+    --font-display: 'Merriweather', serif;
+    --font-mono: 'system-ui', -apple-system, sans-serif;
+    --font-size-base: 13px;
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {

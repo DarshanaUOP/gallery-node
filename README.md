@@ -212,7 +212,19 @@ All fields with their defaults:
 | Key | Default | Description |
 |---|---|---|
 | `theme` | `dark` | `dark` \| `light` \| `system` — light/dark mode |
-| `style` | `classic` | `classic` \| `modern` — `classic` is the serif/mono editorial look; `modern` is sans-serif with larger type, rounded corners, and a blue accent |
+| `style` | `classic` | `classic` \| `modern` \| `terminal` \| `sunset` \| `nordic` — see below |
+
+**Style options**
+
+| Style | Look |
+|---|---|
+| `classic` | Serif headers (Cormorant Garamond) + mono body (DM Mono), amber accent, sharp 4px corners — the original editorial look |
+| `modern` | Sans-serif (Space Grotesk + Inter), blue accent, rounded 12px corners, larger 14px type |
+| `terminal` | Monospace console (JetBrains Mono), phosphor-green accent, sharp 2px corners, compact 12px type |
+| `sunset` | Serif display (Fraunces) + rounded sans body (Nunito Sans), terracotta accent, generously rounded 16px corners |
+| `nordic` | Serif display (Merriweather) + system sans body, muted slate-teal accent, understated 6px corners |
+
+Each style has its own dark and light variant, controlled independently by `theme`.
 | `grid_columns` | `4` | `2` \| `3` \| `4` \| `auto` |
 | `card_size` | `medium` | `small` \| `medium` \| `large` — controls card height |
 | `show_filename_on_card` | `true` | Show filename label on each card |
