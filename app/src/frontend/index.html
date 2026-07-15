@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-style="classic" data-mode="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Luminary — Local Media Gallery</title>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@300;400&family=Space+Grotesk:wght@400;500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Nunito+Sans:wght@400;600;700&family=Merriweather:wght@300;400;700&display=swap" rel="stylesheet">
 <!-- Leaflet -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -382,6 +382,17 @@
     <!-- ── APPEARANCE ── -->
     <div class="settings-section">
       <div class="settings-section-title">Appearance</div>
+
+      <div class="settings-row">
+        <div class="settings-label">Style</div>
+        <select class="settings-select" id="s-style">
+          <option value="classic">Classic — serif &amp; mono, editorial</option>
+          <option value="modern">Modern — sans-serif, larger type</option>
+          <option value="terminal">Terminal — monospace console, sharp &amp; green</option>
+          <option value="sunset">Sunset — warm terracotta, rounded &amp; cozy</option>
+          <option value="nordic">Nordic — cool slate-teal, understated serif</option>
+        </select>
+      </div>
 
       <div class="settings-row">
         <div class="settings-label">Theme</div>

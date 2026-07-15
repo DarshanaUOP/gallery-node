@@ -1862,6 +1862,7 @@ function _settingsPopulate(c) {
 
   // Appearance
   sel('s-theme',           c.theme            ?? 'dark');
+  sel('s-style',           c.style            ?? 'classic');
   sel('s-grid-columns',    String(c.grid_columns ?? 4));
   sel('s-card-size',       c.card_size         ?? 'medium');
   tog('s-show-filename',   c.show_filename_on_card  ?? true);
@@ -1919,6 +1920,7 @@ async function saveSettings() {
   const payload = {
     // Appearance
     theme:                    _getSelect('s-theme'),
+    style:                    _getSelect('s-style'),
     grid_columns:             _getSelect('s-grid-columns') === 'auto' ? 'auto' : parseInt(_getSelect('s-grid-columns')),
     card_size:                _getSelect('s-card-size'),
     show_filename_on_card:    _getToggle('s-show-filename'),
@@ -1991,7 +1993,7 @@ function _applyImmediateSettings(s) {
   document.body.classList.toggle('hide-card-subfolder', !s.show_subfolder_on_card);
 
   // Theme
-  _applyTheme(s.theme);
+  _applyTheme(s.theme, s.style);
 
   // Sort chips — sync active chip to new default if not already changed
   if (s.default_sort !== currentSort) {
@@ -2008,24 +2010,11 @@ function _applyImmediateSettings(s) {
   }
 }
 
-function _applyTheme(theme) {
+function _applyTheme(theme, style) {
   const root = document.documentElement;
   const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  if (isDark) {
-    root.style.setProperty('--bg',      '#0a0a0b');
-    root.style.setProperty('--surface', '#111113');
-    root.style.setProperty('--surface2','#1a1a1e');
-    root.style.setProperty('--text',    '#e8e6e0');
-    root.style.setProperty('--text-dim','#9e9b94');
-    root.style.setProperty('--text-muted','#6b6860');
-  } else {
-    root.style.setProperty('--bg',      '#f5f4f0');
-    root.style.setProperty('--surface', '#ffffff');
-    root.style.setProperty('--surface2','#eeecea');
-    root.style.setProperty('--text',    '#1a1a1c');
-    root.style.setProperty('--text-dim','#4a4845');
-    root.style.setProperty('--text-muted','#8a8784');
-  }
+  root.setAttribute('data-mode', isDark ? 'dark' : 'light');
+  root.setAttribute('data-style', style === 'modern' ? 'modern' : 'classic');
 }
 
 // Apply settings on boot from loaded config
