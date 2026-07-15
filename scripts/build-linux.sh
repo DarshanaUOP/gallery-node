@@ -4,6 +4,8 @@ set -e
 # ── Luminary — Linux build script ──────────────────────────────────
 # Run this from the project root (the folder containing app/, requirements.txt, run.sh)
 
+PYTHON=${PYTHON:-python3}
+
 VENV_DIR="venv-linux"
 DIST_DIR="app/build/linux/portable"
 
@@ -12,7 +14,31 @@ echo "=== Creating virtual environment ($VENV_DIR) ==="
 if [ -d "$VENV_DIR" ]; then
     echo "Virtual environment already exists, skipping creation."
 else
-    python3 -m venv "$VENV_DIR"
+    if "$PYTHON" -c "import ensurepip" >/dev/null 2>&1; then
+        "$PYTHON" -m venv "$VENV_DIR"
+    else
+        echo "ensurepip is not available for $PYTHON. Trying fallbacks..."
+        if command -v virtualenv >/dev/null 2>&1; then
+            virtualenv -p "$PYTHON" "$VENV_DIR"
+        elif "$PYTHON" -m pip --version >/dev/null 2>&1; then
+            echo "Installing virtualenv into the user site-packages..."
+            "$PYTHON" -m pip install --user virtualenv
+            PATH="$HOME/.local/bin:$PATH"
+            if command -v virtualenv >/dev/null 2>&1; then
+                virtualenv -p "$PYTHON" "$VENV_DIR"
+            else
+                echo "Failed to install virtualenv into user bin."
+                echo "On Debian/Ubuntu you can enable venv support by running:"
+                echo "  sudo apt install python3-venv"
+                exit 1
+            fi
+        else
+            echo "ensurepip and pip are not available for $PYTHON." >&2
+            echo "On Debian/Ubuntu, install venv support with: sudo apt install python3-venv" >&2
+            echo "Or install pip/virtualenv and re-run this script." >&2
+            exit 1
+        fi
+    fi
 fi
 
 echo
