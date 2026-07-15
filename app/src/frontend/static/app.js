@@ -2387,11 +2387,12 @@ function deleteLocation(idx) {
   const plural = count !== 1;
   _openDangerConfirm(
     'Remove Location',
-    `<strong>"${escHtml(loc.name || loc.path)}"</strong> already has <strong>${count}</strong> ` +
-    `indexed file${plural ? 's' : ''} in your library.<br><br>` +
-    `Removing this location will discard ${plural ? 'those files' : 'that file'} from the database — ` +
-    `they will no longer be tracked, and this location will not be scanned for new media on future syncs. ` +
-    `Your original files on disk are <strong>not</strong> deleted, only Luminary's index of them.<br><br>` +
+    `<strong>"${escHtml(loc.name || loc.path)}"</strong> contains <strong>${count}</strong> indexed file${plural ? 's' : ''}.<br><br>` +
+    `If you remove this location, ${plural ? 'these files' : 'this file'} will be removed from Luminary's database. ` +
+    `They will no longer appear in your library or be included in future syncs.<br><br>` +
+    `Your original files on your computer will <strong>not</strong> be deleted. ` +
+    `Only Luminary's record of them will be removed.<br><br>` +
+    `To track ${plural ? 'them' : 'it'} again later, you'll need to add this location back and run a sync.<br><br>` +
     `Do you want to continue?`,
     () => _deleteLocationRequest(idx)
   );
