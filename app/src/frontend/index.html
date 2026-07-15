@@ -79,6 +79,20 @@
     <button class="btn btn-accent" onclick="triggerSync()">↻ Sync</button>
   </div>
 
+  <!-- SELECTION ACTION BAR — shown only while multi-select mode is active -->
+  <div id="selection-bar">
+    <span id="selection-count">0 selected</span>
+    <div class="selection-bar-actions">
+      <button class="btn btn-ghost" onclick="selectionSelectAll()">Select All</button>
+      <button class="btn btn-ghost" onclick="selectionClear()">Clear</button>
+      <div class="filter-sep"></div>
+      <button class="btn btn-ghost" id="sel-add-album-btn" onclick="openBulkAddToAlbum()">⬡ Add to Album</button>
+      <button class="btn btn-ghost" id="sel-remove-album-btn" onclick="bulkRemoveFromAlbum()" style="display:none">⊟ Remove from Album</button>
+      <button class="btn btn-ghost" id="sel-hide-btn" onclick="bulkHide(true)">◌ Hide</button>
+      <button class="btn btn-ghost" id="sel-unhide-btn" onclick="bulkHide(false)" style="display:none">◉ Unhide</button>
+    </div>
+  </div>
+
   <!-- FILTER BAR -->
   <div id="filterbar">
     <span class="filter-chip active" data-sort="date-desc" onclick="setSort('date-desc',this)">Newest First</span>

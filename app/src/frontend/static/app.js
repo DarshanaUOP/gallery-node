@@ -25,6 +25,10 @@ let filteredMedia = [];
 let renderedCount = 0;
 let lbIndex = 0;
 
+// Multi-select mode
+let selectMode = false;
+let selectedUniques = new Set();
+
 // Which folders are collapsed in the sidebar — persisted across reloads.
 let collapsedFolders = new Set();
 try {
@@ -321,7 +325,7 @@ function renderBatch() {
 
 function createCard(item, idx) {
   const div = document.createElement('div');
-  div.className = 'media-item';
+  div.className = 'media-item' + (selectMode ? ' selectable' : '') + (selectedUniques.has(item.uniqueName) ? ' selected' : '');
   div.dataset.unique = item.uniqueName;
   div.dataset.idx = idx;
 
@@ -360,10 +364,12 @@ function createCard(item, idx) {
     </div>
     ${item.isHidden ? '<span class="hidden-badge">hidden</span>' : ''}
     <div class="item-menu-btn" onclick="openCtxMenu(event, '${item.uniqueName}')">⋮</div>
+    <div class="item-select-check">✓</div>
   `;
 
   div.addEventListener('click', (e) => {
     if (e.target.classList.contains('item-menu-btn')) return;
+    if (selectMode) { toggleItemSelected(item.uniqueName, div); return; }
     openLightbox(idx);
   });
 
@@ -612,6 +618,8 @@ function setView(view, el) {
   currentView    = view;
   currentAlbumId = (view !== 'all' && view !== 'hidden' && view !== 'map') ? view : null;
 
+  if (selectMode) { selectedUniques.clear(); updateSelectionBar(); }
+
   document.querySelectorAll('.nav-item, .album-nav-item').forEach(n => n.classList.remove('active'));
   if (el) el.classList.add('active');
 
@@ -623,6 +631,7 @@ function setView(view, el) {
   const mapView     = document.getElementById('map-view');
 
   if (view === 'map') {
+    if (selectMode) toggleSelectMode();
     // Show map, hide gallery elements
     albumHeader.style.display = 'none';
     galleryGrid.style.display = 'none';
@@ -669,6 +678,123 @@ function toggleHidden(el) {
   el.classList.toggle('on');
   showHidden = el.classList.contains('on');
   applyFilters();
+}
+
+// ─────────────────────────────────────────────
+//  MULTI-SELECT MODE
+// ─────────────────────────────────────────────
+function toggleSelectMode() {
+  selectMode = !selectMode;
+  if (!selectMode) selectedUniques.clear();
+
+  document.getElementById('select-mode-btn').classList.toggle('active', selectMode);
+  document.getElementById('select-mode-btn').textContent = selectMode ? '✕ Cancel' : '☑ Select';
+  document.getElementById('selection-bar').classList.toggle('active', selectMode);
+
+  document.querySelectorAll('.media-item').forEach(card => {
+    card.classList.toggle('selectable', selectMode);
+    card.classList.toggle('selected', selectMode && selectedUniques.has(card.dataset.unique));
+  });
+
+  updateSelectionBar();
+}
+
+function toggleItemSelected(uniqueName, cardEl) {
+  if (selectedUniques.has(uniqueName)) selectedUniques.delete(uniqueName);
+  else selectedUniques.add(uniqueName);
+  if (cardEl) cardEl.classList.toggle('selected', selectedUniques.has(uniqueName));
+  updateSelectionBar();
+}
+
+function selectionSelectAll() {
+  filteredMedia.forEach(m => selectedUniques.add(m.uniqueName));
+  document.querySelectorAll('.media-item').forEach(card => card.classList.add('selected'));
+  updateSelectionBar();
+}
+
+function selectionClear() {
+  selectedUniques.clear();
+  document.querySelectorAll('.media-item.selected').forEach(card => card.classList.remove('selected'));
+  updateSelectionBar();
+}
+
+// Refreshes the count text and which action buttons make sense for the
+// current view (inside an album vs. in the Hidden view vs. elsewhere).
+function updateSelectionBar() {
+  const count = selectedUniques.size;
+  document.getElementById('selection-count').textContent = `${count} selected`;
+
+  const removeBtn = document.getElementById('sel-remove-album-btn');
+  const hideBtn   = document.getElementById('sel-hide-btn');
+  const unhideBtn = document.getElementById('sel-unhide-btn');
+
+  removeBtn.style.display = currentAlbumId ? '' : 'none';
+
+  if (currentView === 'hidden') {
+    hideBtn.style.display   = 'none';
+    unhideBtn.style.display = '';
+  } else {
+    hideBtn.style.display   = '';
+    unhideBtn.style.display = 'none';
+  }
+
+  const disable = count === 0;
+  ['sel-add-album-btn','sel-remove-album-btn','sel-hide-btn','sel-unhide-btn'].forEach(id => {
+    document.getElementById(id).disabled = disable;
+  });
+}
+
+// Clears the current selection but leaves select mode itself on, so the
+// person can immediately start picking the next batch. Select mode is only
+// exited by pressing the Select/Cancel toggle button.
+function _clearSelectionKeepMode() {
+  selectedUniques.clear();
+  document.querySelectorAll('.media-item.selected').forEach(card => card.classList.remove('selected'));
+  updateSelectionBar();
+}
+
+function openBulkAddToAlbum() {
+  if (selectedUniques.size === 0) return;
+  openAddToAlbum([...selectedUniques]);
+}
+
+function bulkRemoveFromAlbum() {
+  if (selectedUniques.size === 0 || !currentAlbumId) return;
+  const album = db.albums.find(a => a.id === currentAlbumId);
+  if (!album) return;
+  const removed = selectedUniques.size;
+  album.media = album.media.filter(un => !selectedUniques.has(un));
+  saveDB();
+  toast(`Removed ${removed} item${removed === 1 ? '' : 's'} from album`, 'success');
+  _clearSelectionKeepMode();
+  applyFilters();          // album view — items just disappear from the grid
+}
+
+function bulkHide(hidden) {
+  if (selectedUniques.size === 0) return;
+  const uniqueNames = [...selectedUniques];
+
+  fetch(`${API_BASE}/api/media/hide-bulk`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uniqueNames, hidden })
+  }).catch(() => {});
+
+  uniqueNames.forEach(un => {
+    const item = db.media.find(m => m.uniqueName === un);
+    if (item) item.isHidden = hidden;
+  });
+
+  toast(`${hidden ? 'Hidden' : 'Unhidden'} ${uniqueNames.length} item${uniqueNames.length === 1 ? '' : 's'}`, 'info');
+
+  _clearSelectionKeepMode();
+
+  if (currentView === 'hidden' || (!showHidden && hidden)) {
+    // Items should no longer appear in the current view — refetch.
+    applyFilters();
+  } else {
+    softRefresh();
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -896,6 +1022,47 @@ function renderLightbox() {
   _renderLbDetails(item);
 }
 
+// ─────────────────────────────────────────────
+//  MINI MAP PREVIEWS (lightbox details + metadata modal)
+// ─────────────────────────────────────────────
+// Small, non-interactive Leaflet maps embedded inline wherever we show a
+// Location section. Keyed by container id since more than one could
+// theoretically exist (lightbox panel + metadata modal).
+let _miniMaps = {};
+
+function _destroyMiniMap(containerId) {
+  if (_miniMaps[containerId]) {
+    try { _miniMaps[containerId].remove(); } catch {}
+    delete _miniMaps[containerId];
+  }
+}
+
+function _renderMiniMap(containerId, lat, lng) {
+  _destroyMiniMap(containerId);
+  const el = document.getElementById(containerId);
+  if (!el || lat == null || lng == null || isNaN(lat) || isNaN(lng)) return;
+
+  const map = L.map(containerId, {
+    center:            [lat, lng],
+    zoom:              13,
+    zoomControl:       false,
+    dragging:          false,
+    scrollWheelZoom:   false,
+    doubleClickZoom:   false,
+    boxZoom:           false,
+    keyboard:          false,
+    touchZoom:         false,
+    attributionControl:false,
+  });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  L.marker([lat, lng]).addTo(map);
+  _miniMaps[containerId] = map;
+
+  // Container may be inside a panel that was display:none at insert time —
+  // recompute tile layout once it's actually visible.
+  setTimeout(() => { try { map.invalidateSize(); } catch {} }, 60);
+}
+
 function _renderLbDetails(item) {
   const m   = item.metadata || {};
   const det = document.getElementById('lb-details');
@@ -972,7 +1139,13 @@ function _renderLbDetails(item) {
       row('Modified', fmtDate(m.date?.modified)),
     ]);
     if (m.location?.latitude) {
+      const lat = parseFloat(m.location.latitude);
+      const lng = parseFloat(m.location.longitude);
+      const mapHtml = (!isNaN(lat) && !isNaN(lng))
+        ? `<div class="lb-detail-minimap" id="lb-detail-minimap"></div>`
+        : '';
       html += section('Location', [
+        mapHtml,
         row('Latitude',  m.location?.latitude),
         row('Longitude', m.location?.longitude),
         row('City',      m.location?.city),
@@ -988,6 +1161,11 @@ function _renderLbDetails(item) {
   }
 
   det.innerHTML = html || '<p style="font-size:11px;color:var(--text-muted)">No metadata available.</p>';
+
+  _destroyMiniMap('lb-detail-minimap');
+  if (m.location?.latitude) {
+    _renderMiniMap('lb-detail-minimap', parseFloat(m.location.latitude), parseFloat(m.location.longitude));
+  }
 }
 
 // Guess MIME type for video src attribute
@@ -1167,6 +1345,7 @@ function closeLightbox() {
   const vid = document.getElementById('lb-content')?.querySelector('video');
   if (vid) { vid.pause(); vid.src = ''; vid.load(); }
   document.getElementById('lightbox').classList.remove('open');
+  _destroyMiniMap('lb-detail-minimap');
 }
 
 function lbNav(dir) {
@@ -1238,6 +1417,9 @@ function openMetaModal(item) {
     const rows = sec.rows.filter(r => r[1] != null && r[1] !== '');
     if (rows.length === 0) return;
     html += `<div class="meta-section"><div class="meta-section-title">${sec.title}</div>`;
+    if (sec.title === 'Location' && !isNaN(parseFloat(m.location?.latitude)) && !isNaN(parseFloat(m.location?.longitude))) {
+      html += `<div class="meta-minimap" id="meta-minimap"></div>`;
+    }
     rows.forEach(([k, v]) => {
       html += `<div class="meta-row"><span class="meta-key">${k}</span><span class="meta-val">${escHtml(String(v))}</span></div>`;
     });
@@ -1246,42 +1428,61 @@ function openMetaModal(item) {
 
   document.getElementById('meta-content').innerHTML = html || '<p style="color:var(--text-muted);font-size:12px">No metadata available.</p>';
   document.getElementById('meta-modal').classList.add('open');
+
+  _destroyMiniMap('meta-minimap');
+  if (m.location?.latitude) {
+    _renderMiniMap('meta-minimap', parseFloat(m.location.latitude), parseFloat(m.location.longitude));
+  }
 }
 
 // ─────────────────────────────────────────────
 //  ALBUM MODALS
 // ─────────────────────────────────────────────
-let pendingAddUnique = null;
+let pendingAddUnique = null;   // string (single item) or string[] (bulk selection)
 
-function openAddToAlbum(uniqueName) {
-  pendingAddUnique = uniqueName;
+// uniqueNameOrNames: either a single uniqueName string (existing per-item flow)
+// or an array of uniqueNames (bulk multi-select flow). A checkbox reflects
+// "checked" when EVERY selected item is already in that album; for a bulk
+// selection that's only partially in an album, the checkbox starts unchecked
+// (mirroring how a single fresh add would work) rather than guessing intent.
+function openAddToAlbum(uniqueNameOrNames) {
+  pendingAddUnique = uniqueNameOrNames;
+  const uniques = Array.isArray(uniqueNameOrNames) ? uniqueNameOrNames : [uniqueNameOrNames];
   const list = document.getElementById('album-list-select');
   if (db.albums.length === 0) {
     list.innerHTML = '<p style="color:var(--text-muted);font-size:12px;padding:8px 0">No albums yet. Create one first.</p>';
   } else {
-    list.innerHTML = db.albums.map(a => `
+    list.innerHTML = db.albums.map(a => {
+      const allIn = uniques.every(un => a.media.includes(un));
+      return `
       <label class="album-check-item">
-        <input type="checkbox" value="${a.id}" ${a.media.includes(uniqueName) ? 'checked' : ''}>
+        <input type="checkbox" value="${a.id}" ${allIn ? 'checked' : ''}>
         ${escHtml(a.name)} <span style="color:var(--text-muted);margin-left:auto">${a.media.length}</span>
       </label>
-    `).join('');
+    `;
+    }).join('');
   }
   document.getElementById('add-album-modal').classList.add('open');
 }
 
 function confirmAddToAlbum() {
   if (!pendingAddUnique) return;
+  const uniques = Array.isArray(pendingAddUnique) ? pendingAddUnique : [pendingAddUnique];
   const checks = document.getElementById('album-list-select').querySelectorAll('input[type=checkbox]');
   checks.forEach(cb => {
     const album = db.albums.find(a => a.id === cb.value);
     if (!album) return;
-    if (cb.checked && !album.media.includes(pendingAddUnique)) album.media.push(pendingAddUnique);
-    if (!cb.checked) { const i = album.media.indexOf(pendingAddUnique); if (i > -1) album.media.splice(i, 1); }
+    if (cb.checked) {
+      uniques.forEach(un => { if (!album.media.includes(un)) album.media.push(un); });
+    } else {
+      uniques.forEach(un => { const i = album.media.indexOf(un); if (i > -1) album.media.splice(i, 1); });
+    }
   });
   saveDB();
   softRefresh();
   closeModal('add-album-modal');
-  toast('Album membership updated', 'success');
+  toast(uniques.length > 1 ? `Updated album membership for ${uniques.length} items` : 'Album membership updated', 'success');
+  if (uniques.length > 1) _clearSelectionKeepMode();
 }
 
 function openCreateAlbum() {
@@ -1608,12 +1809,14 @@ function _runDangerConfirm() {
 function closeModal(id) {
   document.getElementById(id).classList.remove('open');
   if (id === 'danger-confirm-modal') _dangerConfirmCallback = null;
+  if (id === 'meta-modal') _destroyMiniMap('meta-minimap');
 }
 document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('click', e => {
     if (e.target === m) {
       m.classList.remove('open');
       if (m.id === 'danger-confirm-modal') _dangerConfirmCallback = null;
+      if (m.id === 'meta-modal') _destroyMiniMap('meta-minimap');
     }
   });
 });
