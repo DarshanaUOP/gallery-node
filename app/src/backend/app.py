@@ -451,6 +451,19 @@ def set_media_hidden(unique_name: str, hidden: bool) -> bool:
         )
     return cur.rowcount > 0
 
+def set_media_hidden_bulk(unique_names, hidden: bool) -> int:
+    """Set isHidden for a batch of records in one transaction. Returns rows updated."""
+    if not unique_names:
+        return 0
+    conn = get_db_conn()
+    with _db_lock:
+        with conn:
+            cur = conn.executemany(
+                "UPDATE media SET isHidden = ? WHERE uniqueName = ?",
+                [(1 if hidden else 0, un) for un in unique_names]
+            )
+    return cur.rowcount if cur.rowcount is not None else len(unique_names)
+
 def delete_media_records(unique_names) -> int:
     """
     Permanently remove media rows for the given uniqueNames — used whenever we
@@ -2353,6 +2366,23 @@ if FLASK_AVAILABLE:
         if ok:
             return jsonify({"ok": True})
         return jsonify({"error": "Not found"}), 404
+
+    @app.route("/api/media/hide-bulk", methods=["POST"])
+    def api_media_hide_bulk():
+        """
+        Set hidden/unhidden for a batch of media in one request.
+        Body: { uniqueNames: [str, ...], hidden: bool }
+        Returns { ok: true, updated: N }.
+        """
+        body         = request.get_json(force=True) or {}
+        unique_names = body.get("uniqueNames", [])
+        hidden       = body.get("hidden", True)
+        if not unique_names:
+            return jsonify({"error": "uniqueNames required"}), 400
+        updated = set_media_hidden_bulk(unique_names, hidden)
+        return jsonify({"ok": True, "updated": updated})
+
+
 
     def run_server(port: int = 5000):
         if WAITRESS_AVAILABLE:
