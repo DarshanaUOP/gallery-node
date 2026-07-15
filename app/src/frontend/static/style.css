@@ -1,5 +1,17 @@
-:root {
+/* ─────────────────────────────────────────────────────────────────────────
+   THEME SYSTEM
+   Two independent axes:
+     data-style  → "classic" (default, serif/mono editorial look) or
+                   "modern"  (sans-serif, larger type, rounded, blue accent)
+     data-mode   → "dark" or "light"
+   Both are set on <html> by _applyTheme() in app.js. The plain :root block
+   below is the fallback for the brief instant before JS runs.
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root,
+html[data-style="classic"][data-mode="dark"] {
     --bg: #0a0a0b;
+    --bg-rgb: 10,10,11;
     --surface: #111113;
     --surface2: #1a1a1e;
     --border: rgba(255,255,255,0.07);
@@ -8,13 +20,82 @@
     --text-muted: #6b6860;
     --text-dim: #9e9b94;
     --accent: #c8a97e;
-    --accent-dim: rgba(200,169,126,0.15);
-    --accent-glow: rgba(200,169,126,0.08);
+    --accent-rgb: 200,169,126;
+    --accent-dim: rgba(var(--accent-rgb),0.15);
+    --accent-glow: rgba(var(--accent-rgb),0.08);
     --danger: #c87e7e;
     --success: #7ec8a0;
     --radius: 4px;
     --font-display: 'Cormorant Garamond', Georgia, serif;
     --font-mono: 'DM Mono', monospace;
+    --font-size-base: 13px;
+  }
+
+  html[data-style="classic"][data-mode="light"] {
+    --bg: #f5f4f0;
+    --bg-rgb: 245,244,240;
+    --surface: #ffffff;
+    --surface2: #eeecea;
+    --border: rgba(0,0,0,0.08);
+    --border-hover: rgba(0,0,0,0.16);
+    --text: #1a1a1c;
+    --text-muted: #8a8784;
+    --text-dim: #4a4845;
+    --accent: #a9825a;
+    --accent-rgb: 169,130,90;
+    --accent-dim: rgba(169,130,90,0.15);
+    --accent-glow: rgba(169,130,90,0.08);
+    --danger: #b35b5b;
+    --success: #4f9c74;
+    --radius: 4px;
+    --font-display: 'Cormorant Garamond', Georgia, serif;
+    --font-mono: 'DM Mono', monospace;
+    --font-size-base: 13px;
+  }
+
+  /* ── MODERN — clean sans-serif, larger type, rounded corners, cool accent ── */
+  html[data-style="modern"][data-mode="dark"] {
+    --bg: #0d1117;
+    --bg-rgb: 13,17,23;
+    --surface: #151b23;
+    --surface2: #1c242e;
+    --border: rgba(255,255,255,0.08);
+    --border-hover: rgba(255,255,255,0.18);
+    --text: #eef1f6;
+    --text-muted: #6e7887;
+    --text-dim: #a3adba;
+    --accent: #5b8cff;
+    --accent-rgb: 91,140,255;
+    --accent-dim: rgba(91,140,255,0.16);
+    --accent-glow: rgba(91,140,255,0.09);
+    --danger: #ff6b6b;
+    --success: #3ddc97;
+    --radius: 12px;
+    --font-display: 'Space Grotesk', 'Inter', sans-serif;
+    --font-mono: 'Inter', sans-serif;
+    --font-size-base: 14px;
+  }
+
+  html[data-style="modern"][data-mode="light"] {
+    --bg: #f7f8fb;
+    --bg-rgb: 247,248,251;
+    --surface: #ffffff;
+    --surface2: #eef1f6;
+    --border: rgba(15,23,42,0.08);
+    --border-hover: rgba(15,23,42,0.16);
+    --text: #131722;
+    --text-muted: #8891a0;
+    --text-dim: #4b5563;
+    --accent: #3568e0;
+    --accent-rgb: 53,104,224;
+    --accent-dim: rgba(53,104,224,0.12);
+    --accent-glow: rgba(53,104,224,0.07);
+    --danger: #d94b4b;
+    --success: #1fae76;
+    --radius: 12px;
+    --font-display: 'Space Grotesk', 'Inter', sans-serif;
+    --font-mono: 'Inter', sans-serif;
+    --font-size-base: 14px;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -23,7 +104,7 @@
     background: var(--bg);
     color: var(--text);
     font-family: var(--font-mono);
-    font-size: 13px;
+    font-size: var(--font-size-base);
     min-height: 100vh;
     overflow-x: hidden;
   }
@@ -186,7 +267,7 @@
     position: sticky;
     top: 0;
     z-index: 50;
-    background: rgba(10,10,11,0.85);
+    background: rgba(var(--bg-rgb),0.85);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--border);
     padding: 14px 32px;
@@ -250,10 +331,10 @@
   .btn-ghost:hover { border-color: var(--border-hover); color: var(--text); background: var(--surface2); }
   .btn-accent {
     background: var(--accent-dim);
-    border-color: rgba(200,169,126,0.3);
+    border-color: rgba(var(--accent-rgb),0.3);
     color: var(--accent);
   }
-  .btn-accent:hover { background: rgba(200,169,126,0.22); border-color: var(--accent); }
+  .btn-accent:hover { background: rgba(var(--accent-rgb),0.22); border-color: var(--accent); }
   .btn-danger {
     background: rgba(200,126,126,0.1);
     border-color: rgba(200,126,126,0.3);
@@ -278,7 +359,7 @@
     position: relative;
     transition: background 0.2s;
   }
-  .toggle.on { background: rgba(200,169,126,0.3); border-color: var(--accent); }
+  .toggle.on { background: rgba(var(--accent-rgb),0.3); border-color: var(--accent); }
   .toggle::after {
     content: '';
     position: absolute;
@@ -416,7 +497,7 @@
   }
   .item-path {
     font-size: 9px;
-    color: rgba(200,169,126,0.6);
+    color: rgba(var(--accent-rgb),0.6);
     margin-top: 1px;
     white-space: nowrap;
     overflow: hidden;
@@ -461,7 +542,7 @@
     transition: transform 0.15s, background 0.15s;
   }
   .media-item:hover .play-btn-circle {
-    background: rgba(200,169,126,0.75);
+    background: rgba(var(--accent-rgb),0.75);
     border-color: var(--accent);
     transform: scale(1.12);
   }
@@ -1227,7 +1308,7 @@
   .picker-already-badge {
     position: absolute;
     top: 6px; left: 6px;
-    background: rgba(200,169,126,0.85);
+    background: rgba(var(--accent-rgb),0.85);
     color: #000;
     font-size: 8px;
     padding: 2px 5px;
@@ -1325,7 +1406,7 @@
     transition: background 0.2s;
     flex-shrink: 0;
   }
-  .settings-toggle.on { background: rgba(200,169,126,0.3); border-color: var(--accent); }
+  .settings-toggle.on { background: rgba(var(--accent-rgb),0.3); border-color: var(--accent); }
   .settings-toggle::after {
     content: '';
     position: absolute;
@@ -1542,7 +1623,7 @@
 
   #map-gps-banner {
     display: none;
-    background: rgba(200,169,126,0.12);
+    background: rgba(var(--accent-rgb),0.12);
     border: 1px solid var(--accent);
     border-radius: var(--radius);
     padding: 8px 16px;

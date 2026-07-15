@@ -171,6 +171,7 @@ All fields with their defaults:
 ```json
 {
   "theme": "dark",
+  "style": "classic",
   "grid_columns": 4,
   "card_size": "medium",
   "show_filename_on_card": true,
@@ -210,7 +211,8 @@ All fields with their defaults:
 
 | Key | Default | Description |
 |---|---|---|
-| `theme` | `dark` | `dark` \| `light` \| `system` |
+| `theme` | `dark` | `dark` \| `light` \| `system` — light/dark mode |
+| `style` | `classic` | `classic` \| `modern` — `classic` is the serif/mono editorial look; `modern` is sans-serif with larger type, rounded corners, and a blue accent |
 | `grid_columns` | `4` | `2` \| `3` \| `4` \| `auto` |
 | `card_size` | `medium` | `small` \| `medium` \| `large` — controls card height |
 | `show_filename_on_card` | `true` | Show filename label on each card |
