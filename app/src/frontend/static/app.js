@@ -798,6 +798,37 @@ function bulkHide(hidden) {
 }
 
 // ─────────────────────────────────────────────
+//  SCROLL TO TOP
+// ─────────────────────────────────────────────
+(function () {
+  const btn = document.getElementById('scroll-top-btn');
+  const topbar = document.getElementById('topbar');
+
+  function currentScrollTop() {
+    const main = document.getElementById('main');
+    // Whichever element is actually scrolling — #main or the window/document.
+    return Math.max(main.scrollTop, window.scrollY || document.documentElement.scrollTop);
+  }
+
+  function onScrollTopBtn() {
+    // Reveal once the user has scrolled down past the topbar's own height —
+    // i.e. the point at which the topbar would have scrolled out of view
+    // if it weren't sticky.
+    const threshold = (topbar?.offsetHeight || 60) + 40;
+    btn.classList.toggle('visible', currentScrollTop() > threshold);
+  }
+
+  document.getElementById('main').addEventListener('scroll', onScrollTopBtn, { passive: true });
+  window.addEventListener('scroll', onScrollTopBtn, { passive: true });
+  onScrollTopBtn();
+})();
+
+function scrollToTop() {
+  document.getElementById('main').scrollTo({ top: 0, behavior: 'smooth' });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ─────────────────────────────────────────────
 //  INFINITE SCROLL
 // ─────────────────────────────────────────────
 function setupIntersectionObserver() {

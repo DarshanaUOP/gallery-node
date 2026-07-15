@@ -1741,6 +1741,37 @@
   }
   #scroll-date-pill.visible { opacity: 1; }
 
+  /* ── SCROLL TO TOP ── */
+  #scroll-top-btn {
+    position: fixed;
+    right: 28px;
+    bottom: 28px;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(var(--bg-rgb), 0.88);
+    border: 1px solid var(--border-hover);
+    backdrop-filter: blur(10px);
+    color: var(--text);
+    font-size: 18px;
+    cursor: pointer;
+    z-index: 200;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(8px);
+    transition: opacity 0.2s ease, transform 0.2s ease, border-color 0.15s, color 0.15s;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+  }
+  #scroll-top-btn:hover { color: var(--accent); border-color: var(--accent); }
+  #scroll-top-btn.visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+
   /* ── LOCATIONS MANAGER ── */
   .loc-row {
     display: grid;
