@@ -2066,6 +2066,7 @@ function _settingsPopulate(c) {
   // Appearance
   sel('s-theme',           c.theme            ?? 'dark');
   sel('s-style',           c.style            ?? 'classic');
+  sel('s-font-size',       c.font_size        ?? 'small');
   sel('s-grid-columns',    String(c.grid_columns ?? 4));
   sel('s-card-size',       c.card_size         ?? 'medium');
   tog('s-show-filename',   c.show_filename_on_card  ?? true);
@@ -2124,6 +2125,7 @@ async function saveSettings() {
     // Appearance
     theme:                    _getSelect('s-theme'),
     style:                    _getSelect('s-style'),
+    font_size:                _getSelect('s-font-size'),
     grid_columns:             _getSelect('s-grid-columns') === 'auto' ? 'auto' : parseInt(_getSelect('s-grid-columns')),
     card_size:                _getSelect('s-card-size'),
     show_filename_on_card:    _getToggle('s-show-filename'),
@@ -2196,7 +2198,7 @@ function _applyImmediateSettings(s) {
   document.body.classList.toggle('hide-card-subfolder', !s.show_subfolder_on_card);
 
   // Theme
-  _applyTheme(s.theme, s.style);
+  _applyTheme(s.theme, s.style, s.font_size);
 
   // Sort chips — sync active chip to new default if not already changed
   if (s.default_sort !== currentSort) {
@@ -2214,12 +2216,14 @@ function _applyImmediateSettings(s) {
 }
 
 const KNOWN_STYLES = ['classic', 'modern', 'terminal', 'sunset', 'nordic'];
+const KNOWN_FONT_SIZES = ['small', 'medium', 'large'];
 
-function _applyTheme(theme, style) {
+function _applyTheme(theme, style, fontSize) {
   const root = document.documentElement;
   const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   root.setAttribute('data-mode', isDark ? 'dark' : 'light');
   root.setAttribute('data-style', KNOWN_STYLES.includes(style) ? style : 'classic');
+  root.setAttribute('data-font-size', KNOWN_FONT_SIZES.includes(fontSize) ? fontSize : 'small');
   _updateThemeModeToggleIcon(isDark);
 }
 
@@ -2240,7 +2244,7 @@ async function toggleThemeMode() {
   const previousTheme = config.theme;
 
   // Apply immediately for a snappy UI, before the save round-trip completes.
-  _applyTheme(newTheme, config.style);
+  _applyTheme(newTheme, config.style, config.font_size);
   if (btn) btn.disabled = true;
 
   try {
@@ -2253,7 +2257,7 @@ async function toggleThemeMode() {
     config.theme = newTheme;
   } catch {
     // Revert on failure so the UI doesn't silently disagree with configuration.json
-    _applyTheme(previousTheme, config.style);
+    _applyTheme(previousTheme, config.style, config.font_size);
     toast('Could not save theme — is app.py running?', 'error');
   } finally {
     if (btn) btn.disabled = false;
