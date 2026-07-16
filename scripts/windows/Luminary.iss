@@ -32,6 +32,13 @@
   ;   versioning scheme the rest of the project uses.
 #define MyAppPublisher "Luminary"
 #define MyAppExeName "Luminary.exe"
+#define MyAppIcon "icon.ico"
+  ; ^ Inno Setup (and Windows shortcuts generally) need an .ico, not a .png —
+  ;   convert your PNG once, e.g. via ImageMagick:
+  ;     magick icon.png -define icon:auto-resize=256,128,64,48,32,16 icon.ico
+  ;   or any online PNG→ICO converter (include multiple sizes for a crisp
+  ;   look at every zoom level: taskbar, Start menu, desktop, Explorer).
+  ;   Place the resulting icon.ico next to this .iss file (scripts\windows\).
 #define MyDistDir "..\..\app\build\windows\portable\Luminary"
   ; ^ Must match DIST_DIR\Luminary in build-windows.bat.
 
@@ -56,7 +63,8 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupIconFile={#MyAppIcon}
+UninstallDisplayIcon={app}\{#MyAppIcon}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -70,11 +78,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; bundled. "ignoreversion" always overwrites on upgrade, which is safe here
 ; since none of this is user data (see the note at the top of this file).
 Source: "{#MyDistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#MyAppIcon}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIcon}"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\{#MyAppIcon}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
