@@ -32,7 +32,7 @@
   ;   versioning scheme the rest of the project uses.
 #define MyAppPublisher "Luminary"
 #define MyAppExeName "Luminary.exe"
-#define MyAppIcon "icon.ico"
+#define MyAppIcon "..\..\app\src\frontend\images\luminary.ico"
   ; ^ Inno Setup (and Windows shortcuts generally) need an .ico, not a .png —
   ;   convert your PNG once, e.g. via ImageMagick:
   ;     magick icon.png -define icon:auto-resize=256,128,64,48,32,16 icon.ico

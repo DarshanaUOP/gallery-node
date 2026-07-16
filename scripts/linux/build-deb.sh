@@ -18,6 +18,7 @@ ARCH="${2:-amd64}"
 SRC_DIR="app/build/linux/portable/Luminary"
 DEB_OUT="app/build/linux/installer/luminary_${VERSION}_${ARCH}.deb"
 SCRIPTS_DIR="scripts/linux"
+ICON_DIR="app/src/frontend/images"
 
 if [ ! -d "$SRC_DIR" ]; then
     echo "ERROR: $SRC_DIR not found — run build-linux.sh first." >&2
@@ -65,7 +66,7 @@ echo "=== Installing launcher, desktop entry, icon ==="
 # tries to run postinst/prerm during install or removal.
 sed 's/\r$//' "$SCRIPTS_DIR/usr-bin-luminary" > "$PKG_ROOT/usr/bin/luminary"
 cp "$SCRIPTS_DIR/luminary.desktop" "$PKG_ROOT/usr/share/applications/luminary.desktop"
-if [ -f "$SCRIPTS_DIR/luminary.png" ]; then
+if [ -f "$ICON_DIR/luminary.png" ]; then
     cp "$SCRIPTS_DIR/luminary.png" "$PKG_ROOT/usr/share/icons/hicolor/256x256/apps/luminary.png"
 else
     echo "  (no $SCRIPTS_DIR/luminary.png found — skipping icon; add a 256x256 PNG there to enable it)"
