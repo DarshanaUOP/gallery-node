@@ -41,6 +41,13 @@
   ;   Place the resulting icon.ico next to this .iss file (scripts\windows\).
 #define MyDistDir "..\..\app\build\windows\portable\Luminary"
   ; ^ Must match DIST_DIR\Luminary in build-windows.bat.
+#define MyAppIconFile "luminary.ico"
+  ; ^ The [Files] section below copies MyAppIcon into {app} as a flat file
+  ;   named MyAppIconFile (not preserving the source's ..\..\ path). Every
+  ;   reference to the *installed* icon (shortcuts, UninstallDisplayIcon)
+  ;   must use "{app}\{#MyAppIconFile}", NOT "{app}\{#MyAppIcon}" — the
+  ;   latter would literally resolve to "{app}\..\..\app\src\..." which
+  ;   does not exist post-install.
 
 [Setup]
 ; This AppId is what lets Windows/Inno recognize a new installer as an
@@ -64,7 +71,7 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesInstallIn64BitMode=x64compatible
 SetupIconFile={#MyAppIcon}
-UninstallDisplayIcon={app}\{#MyAppIcon}
+UninstallDisplayIcon={app}\{#MyAppIconFile}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -78,12 +85,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; bundled. "ignoreversion" always overwrites on upgrade, which is safe here
 ; since none of this is user data (see the note at the top of this file).
 Source: "{#MyDistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#MyAppIcon}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MyAppIcon}"; DestDir: "{app}"; DestName: "{#MyAppIconFile}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIcon}"
-Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\{#MyAppIcon}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppIconFile}"
+Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"; IconFilename: "{app}\{#MyAppIconFile}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\{#MyAppIconFile}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
