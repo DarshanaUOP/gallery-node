@@ -1,0 +1,12 @@
+#!/bin/sh
+# Luminary launcher — installed at /usr/bin/luminary by the .deb package.
+#
+# Prefers run-luminary.sh (which puts the bundled ffmpeg/ffprobe on PATH —
+# see build-linux.sh) if it was bundled; falls back to running the binary
+# directly if ffmpeg wasn't available at build time.
+DIR=/opt/luminary
+if [ -x "$DIR/run-luminary.sh" ]; then
+    exec "$DIR/run-luminary.sh" "$@"
+else
+    exec "$DIR/Luminary" "$@"
+fi

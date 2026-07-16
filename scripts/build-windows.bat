@@ -37,6 +37,7 @@ echo === Building application with PyInstaller ===
 pyinstaller --clean --onedir ^
     --distpath "%DIST_DIR%" ^
     --name "Luminary" ^
+    --icon "app\src\frontend\images\luminary.ico" ^
     app\src\backend\app.py
 if errorlevel 1 goto :error
 

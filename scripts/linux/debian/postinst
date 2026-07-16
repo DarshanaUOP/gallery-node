@@ -1,0 +1,23 @@
+#!/bin/sh
+# Luminary — postinst
+# Runs after the package's files are unpacked onto the filesystem.
+set -e
+
+# Some archive/transfer steps flatten executable bits even when build-deb.sh
+# set them correctly — reassert them here so a fresh install always works.
+[ -f /opt/luminary/Luminary ]        && chmod +x /opt/luminary/Luminary
+[ -f /opt/luminary/run-luminary.sh ] && chmod +x /opt/luminary/run-luminary.sh
+[ -f /opt/luminary/ffmpeg ]          && chmod +x /opt/luminary/ffmpeg /opt/luminary/ffprobe
+[ -f /usr/bin/luminary ]             && chmod +x /usr/bin/luminary
+
+# Best-effort refresh so the app shows up in application launchers and gets
+# its icon immediately, without requiring a logout/login. A missing tool
+# (e.g. on a minimal/headless system) must not fail the install.
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications || true
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q /usr/share/icons/hicolor || true
+fi
+
+exit 0
