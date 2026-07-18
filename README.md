@@ -77,6 +77,7 @@ luminary/
 │       │   ├── app.py                 # Flask backend — API, scanner, metadata extractor
 │       │   ├── app_paths.py           # Central path resolver — see "Data Locations" below
 │       │   ├── tray.py                # System tray icon — installed builds only, see "System Tray"
+│       │   ├── instance_lock.py       # Single-instance guard — see "Single Instance"
 │       │   ├── config/                # Dev-mode settings — tracked in git
 │       │   │   └── configuration.json # All configurable settings (edit this)
 │       │   ├── data/                  # Dev-mode runtime data — auto-created, git-ignored
@@ -126,6 +127,14 @@ All of the paths above (`data/`, `config/`, `logs/`, `thumbnails/`, `cache/`) ar
   - Linux: `~/.local/share/Luminary/`
 
   If you're upgrading from an older build that stored data inside `_internal\`, `app_paths.py` migrates it to the new location automatically, once, the first time you launch the new version — nothing to do manually.
+
+### Single Instance
+
+Luminary refuses to start a second time while an instance is already running — this applies everywhere: two dev runs, two installed tray-app launches, a dev run alongside an installed build, a headless server, any combination. `app.py` takes an OS-level advisory lock on a small `luminary.lock` file in the same per-user data directory described above (see `instance_lock.py`), so it's scoped exactly like the DB/config/logs — a second dev run against the same checkout is blocked, and a second launch of the same installed build is blocked, but a dev run and an installed build don't interfere with each other since they use different data directories.
+
+If a launch finds another instance already running, it doesn't error out — it logs/prints a note, opens `http://localhost:<port>/` in your default browser (skipped automatically on a headless box with no display), and exits cleanly. The lock is released automatically the moment the running process exits, including on a crash or `kill -9` — there's no stale lock file to hunt down and delete by hand.
+
+If you deliberately want more than one instance at once (e.g. two dev servers on different `--port` values for parallel testing), pass `--allow-multiple-instances` to skip the check.
 
 ### System Tray (installed builds only)
 
@@ -558,3 +567,8 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 - Confirm the auto-detection kicked in: check the log for a line like `No graphical session detected ... running Luminary as a plain background server`
 - If it's hanging or erroring instead of falling back, `DISPLAY`/`WAYLAND_DISPLAY` may be set to a stale/invalid value in your shell (common after an old X11-forwarded SSH session) — `echo $DISPLAY` to check, `unset DISPLAY WAYLAND_DISPLAY` to clear it, or just pass `--no-tray` to force plain mode regardless
 - Not starting after a reboot? You likely haven't set up the systemd service yet — see `scripts/linux/luminary.service`
+
+**"Luminary is already running" but I don't see it**
+- On an installed build with a display, this should have opened `http://localhost:<port>/` in your browser automatically — check for a browser window/tab that already opened
+- The message includes the PID and port of the running instance; confirm it's actually alive: `ps -p <PID>` (Linux/macOS) or Task Manager (Windows). If that PID is gone but you still get this message, the lock file's OS-level lock should have released automatically when that process exited — this would be unusual and worth reporting, but as a workaround you can delete the lock file directly (see [Data Locations](#data-locations--dev-mode-vs-installed-builds) for where `luminary.lock` lives) while no instance is running
+- Intentionally want two running at once (e.g. two dev servers on different ports)? Pass `--allow-multiple-instances`
