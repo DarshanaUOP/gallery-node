@@ -18,8 +18,18 @@ python-dateutil>=2.8
 
 # System tray icon for installed builds (Open Luminary / About / Start-Stop /
 # Quit menu — see app/src/backend/tray.py). Not needed for dev-mode runs via
-# run.sh, only used when the packaged .exe/binary is launched. Reuses Pillow
-# (already required above) for the tray icon image.
+# run.sh, only used when the packaged .exe/binary is launched.
+#
+# On Linux, tray.py tries a native GTK + AppIndicator backend FIRST (via
+# PyGObject/"gi" — see the "Not pip-installable" section below, it's a system
+# package, not listed here) and only falls back to pystray if that's
+# unavailable. This exists because pystray's own Linux backend looks for one
+# specific AppIndicator gi typelib name, and which one a given distro ships
+# varies (Ubuntu 20.04 vs. 22.04+, see tray.py's module docstring) — it can
+# silently fail to show a tray icon on a distro shipping the "wrong" one.
+#
+# pystray is still required as that fallback (and as the only backend on
+# Windows/macOS), reusing Pillow (already required above) for the icon image.
 pystray>=0.19
 #   Linux note: pystray needs a tray backend from the desktop environment
 #   itself (AppIndicator/GTK on GNOME, native tray on KDE/XFCE, etc.) — this
@@ -31,6 +41,17 @@ pystray>=0.19
 #   macOS:          brew install ffmpeg
 #   Ubuntu/Debian:  sudo apt install ffmpeg
 #   Windows:        https://ffmpeg.org/download.html
+
+# PyGObject ("gi"): needed on Linux ONLY for the native AppIndicator tray
+# backend described above. Deliberately NOT listed as a pip package here —
+# it binds to system GTK/GObject-Introspection libraries at install time and
+# is much more reliable installed as your distro's package than via pip
+# (building it via pip requires the matching -dev headers and a C compiler
+# present first anyway). If it's missing, tray.py just falls back to pystray
+# automatically — nothing breaks, you only lose the more robust backend.
+#   Ubuntu 20.04:   sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-appindicator3-0.1
+#   Ubuntu 22.04+:  sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1
+#   Fedora:         sudo dnf install python3-gobject gtk3 libayatana-appindicator-gtk3
 
 # ── Required for building the application
 pyinstaller
