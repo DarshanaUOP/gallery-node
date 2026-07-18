@@ -130,9 +130,14 @@ All of the paths above (`data/`, `config/`, `logs/`, `thumbnails/`, `cache/`) ar
 
 ### Single Instance
 
-Luminary refuses to start a second time while an instance is already running — this applies everywhere: two dev runs, two installed tray-app launches, a dev run alongside an installed build, a headless server, any combination. `app.py` takes an OS-level advisory lock on a small `luminary.lock` file in the same per-user data directory described above (see `instance_lock.py`), so it's scoped exactly like the DB/config/logs — a second dev run against the same checkout is blocked, and a second launch of the same installed build is blocked, but a dev run and an installed build don't interfere with each other since they use different data directories.
+Luminary refuses to start a second time while an instance is already running — this applies everywhere: two dev runs, two installed tray-app launches, a dev run alongside an installed build, a headless server, any combination. The guard (`instance_lock.py`) is platform-specific:
 
-If a launch finds another instance already running, it doesn't error out — it logs/prints a note, opens `http://localhost:<port>/` in your default browser (skipped automatically on a headless box with no display), and exits cleanly. The lock is released automatically the moment the running process exits, including on a crash or `kill -9` — there's no stale lock file to hunt down and delete by hand.
+- **Windows**: a named OS-level mutex (`CreateMutexW`) is the authoritative check. This is deliberately used instead of a file lock — file-locking APIs are filesystem operations that antivirus/EDR software and backup tools sometimes hook or interfere with (locking is exactly the pattern ransomware heuristics watch for), which can make a non-blocking file lock silently succeed for a second process instead of failing. A named mutex is a kernel object, not a file operation, and isn't subject to that. It's released automatically the instant the process exits for any reason, including a crash or `taskkill /F`.
+- **Linux/macOS**: an OS-level advisory lock (`fcntl.flock`) on a small `luminary.lock` file in the per-user data directory described above, so it's scoped exactly like the DB/config/logs.
+
+On every platform, whichever instance is running also writes its PID and port to `luminary.lock` in the per-user data directory — this file is informational only (used to tell you who's already running and to redirect your browser), never the source of truth for whether another instance exists. A second dev run against the same checkout is blocked, and a second launch of the same installed build is blocked, but a dev run and an installed build don't interfere with each other since they use different data directories.
+
+If a launch finds another instance already running, it doesn't error out — it logs/prints a note, opens `http://localhost:<port>/` in your default browser (skipped automatically on a headless box with no display), and exits cleanly.
 
 If you deliberately want more than one instance at once (e.g. two dev servers on different `--port` values for parallel testing), pass `--allow-multiple-instances` to skip the check.
 
@@ -562,6 +567,11 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 - The app itself is still running even without a visible tray icon — check `logs/log-YYYY-MM-DD.log` under the installed-build data directory (see [Data Locations](#data-locations--dev-mode-vs-installed-builds)) and open `http://localhost:5000` directly
 - To rule out a tray-specific issue, launch with `--no-tray` (see [System Tray](#system-tray-installed-builds-only)) — if the app works fine that way, the problem is specifically with the tray backend, not Luminary itself
 
+**Two tray icons appear after launching Luminary twice**
+- This means the single-instance guard (see [Single Instance](#single-instance)) didn't catch the second launch and should not happen — as of the current `instance_lock.py`, Windows uses a named mutex specifically because file-lock APIs can be silently interfered with by antivirus/EDR/backup software, which was a known cause of this symptom
+- Confirm you're on a build that includes this fix: check `logs/log-YYYY-MM-DD.log` — the second launch should log an "already running" line naming the first instance's PID
+- If it's still reproducible, check Task Manager for the actual process count (two `Luminary.exe` processes vs. one process somehow drawing two icons) and report which it is
+
 **Headless install (Raspberry Pi, etc.) — is it running as a tray app or not?**
 - It shouldn't be — no tray icon is expected on a machine with no display at all; Luminary should auto-detect this and run as a plain background server (see [Headless / Server Mode](#headless--server-mode-linux-eg-raspberry-pi))
 - Confirm the auto-detection kicked in: check the log for a line like `No graphical session detected ... running Luminary as a plain background server`
@@ -570,5 +580,7 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 
 **"Luminary is already running" but I don't see it**
 - On an installed build with a display, this should have opened `http://localhost:<port>/` in your browser automatically — check for a browser window/tab that already opened
-- The message includes the PID and port of the running instance; confirm it's actually alive: `ps -p <PID>` (Linux/macOS) or Task Manager (Windows). If that PID is gone but you still get this message, the lock file's OS-level lock should have released automatically when that process exited — this would be unusual and worth reporting, but as a workaround you can delete the lock file directly (see [Data Locations](#data-locations--dev-mode-vs-installed-builds) for where `luminary.lock` lives) while no instance is running
+- The message includes the PID and port of the running instance; confirm it's actually alive: `ps -p <PID>` (Linux/macOS) or Task Manager (Windows). If that PID is gone but you still get this message:
+  - **Windows**: the guard is a named mutex, not a file, so it's released automatically the instant a process exits — there's nothing to delete by hand. If this happens anyway, it's worth reporting.
+  - **Linux/macOS**: the lock file's OS-level `flock` should have released automatically when that process exited — this would be unusual and worth reporting, but as a workaround you can delete the lock file directly (see [Data Locations](#data-locations--dev-mode-vs-installed-builds) for where `luminary.lock` lives) while no instance is running
 - Intentionally want two running at once (e.g. two dev servers on different ports)? Pass `--allow-multiple-instances`
