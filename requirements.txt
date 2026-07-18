@@ -16,6 +16,15 @@ pillow-heif>=0.13
 # metadata. Without this, app.py falls back to using the raw tag value as-is.
 python-dateutil>=2.8
 
+# System tray icon for installed builds (Open Luminary / About / Start-Stop /
+# Quit menu — see app/src/backend/tray.py). Not needed for dev-mode runs via
+# run.sh, only used when the packaged .exe/binary is launched. Reuses Pillow
+# (already required above) for the tray icon image.
+pystray>=0.19
+#   Linux note: pystray needs a tray backend from the desktop environment
+#   itself (AppIndicator/GTK on GNOME, native tray on KDE/XFCE, etc.) — this
+#   is a system package, not something pip can install.
+
 # ── Not pip-installable — install separately if you want video metadata ────
 # ffmpeg/ffprobe: required for extract_video_metadata(); without it, video
 # files are still indexed but without duration/resolution/fps/GPS metadata.

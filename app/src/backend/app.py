@@ -2492,6 +2492,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Luminary backend")
     parser.add_argument("--sync-only", action="store_true", help="Run sync and exit without starting server")
     parser.add_argument("--port", type=int, default=5000, help="API port (default 5000)")
+    parser.add_argument("--no-tray", action="store_true",
+                         help="Force plain console mode even in an installed build "
+                              "(skips the system tray icon; useful for debugging)")
     args = parser.parse_args()
 
     if args.sync_only:
@@ -2503,4 +2506,22 @@ if __name__ == "__main__":
         print("ERROR: Flask not installed. Run: pip install flask flask-cors")
         sys.exit(1)
 
-    run_server(port=args.port)
+    # Dev mode (`python3 app.py` / `./run.sh`, i.e. NOT a frozen PyInstaller
+    # build) always runs the plain console server, exactly as before — you
+    # keep seeing normal terminal output while developing.
+    #
+    # A frozen/installed build (double-clicked from the Start Menu / desktop
+    # launcher) instead runs as a system tray application: no console window,
+    # an icon in the tray with Open/About/Start-Stop/Quit, and the server
+    # itself running on a background thread that the tray controls.
+    run_as_tray = app_paths.is_frozen() and not args.no_tray
+
+    if run_as_tray:
+        try:
+            from tray import run_tray
+            run_tray(app, port=args.port)
+        except Exception:
+            log.exception("Failed to start the system tray — falling back to console mode.")
+            run_server(port=args.port)
+    else:
+        run_server(port=args.port)

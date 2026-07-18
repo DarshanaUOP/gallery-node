@@ -9,6 +9,7 @@ A lightweight, local-first photo and video gallery. Index media from your filesy
 - Python 3.8+
 - ffmpeg — for video thumbnails and metadata (`apt install ffmpeg` or `brew install ffmpeg`)
 - Internet connection for the **Map** view — Leaflet, the marker-clustering plugin, and OpenStreetMap tiles are loaded from a CDN at runtime. Everything else works fully offline.
+- `pystray` (installed via `requirements.txt`) — only used by installed builds, for the system tray icon. Not needed for dev-mode (`./run.sh`). See [System Tray](#system-tray-installed-builds-only).
 
 ---
 
@@ -34,6 +35,8 @@ chmod +x run.sh
 ```
 
 Then open **http://localhost:5000** in your browser.
+
+`./run.sh` (dev mode) always runs in your terminal with normal console output, exactly as above — this is unchanged. Only the *installed* build (the packaged `.exe`/`.deb`) runs as a system tray application instead; see [System Tray](#system-tray-installed-builds-only).
 
 ```bash
 ./run.sh --sync                            # run a sync pass then start the server
@@ -73,6 +76,7 @@ luminary/
 │       ├── backend/
 │       │   ├── app.py                 # Flask backend — API, scanner, metadata extractor
 │       │   ├── app_paths.py           # Central path resolver — see "Data Locations" below
+│       │   ├── tray.py                # System tray icon — installed builds only, see "System Tray"
 │       │   ├── config/                # Dev-mode settings — tracked in git
 │       │   │   └── configuration.json # All configurable settings (edit this)
 │       │   ├── data/                  # Dev-mode runtime data — auto-created, git-ignored
@@ -121,6 +125,30 @@ All of the paths above (`data/`, `config/`, `logs/`, `thumbnails/`, `cache/`) ar
   - Linux: `~/.local/share/Luminary/`
 
   If you're upgrading from an older build that stored data inside `_internal\`, `app_paths.py` migrates it to the new location automatically, once, the first time you launch the new version — nothing to do manually.
+
+### System Tray (installed builds only)
+
+- **Dev mode** (`python3 app.py`, or `./run.sh`): unchanged — runs in your terminal with normal console output, no tray icon.
+- **Installed build** (the packaged `.exe`, `.deb`, etc., launched from the Start Menu / application launcher / desktop shortcut, same as any other installed app): runs as a system tray application instead of a visible console window. `tray.py` starts the backend on a background thread and shows a tray icon with:
+
+  | Menu item | Action |
+  |---|---|
+  | **Open Luminary** | Opens `http://localhost:<port>/` in your default browser (also the default action if you double-click the icon) |
+  | **About** | Opens the project's GitHub page |
+  | **Start / Stop** | Toggles the backend on/off — label reflects current state |
+  | **Quit** | Stops the backend and closes the tray icon, ending the app |
+
+  Nothing auto-starts at login or boot — like any other installed app, it only runs once you launch it yourself.
+
+  If you ever need the old plain-console behaviour from an installed build (e.g. to see log output live while debugging), run the executable with `--no-tray`:
+  ```bash
+  # Linux
+  /opt/luminary/Luminary --no-tray
+  # Windows (from a terminal)
+  "C:\Program Files\Luminary\Luminary.exe" --no-tray
+  ```
+
+  **Linux note:** the tray icon needs a tray/AppIndicator backend from your desktop environment. KDE, XFCE, and most other DEs support it natively; on GNOME you'll need an extension such as [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/). The `.deb` package lists the relevant GTK/AppIndicator libraries as `Recommends` (not hard `Depends`, since they aren't needed on every desktop environment).
 
 ### Why SQLite
 
@@ -488,3 +516,9 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 **Settings not saving**
 - Confirm `app.py` is running — Settings are saved via `POST /api/config` which writes to `config/configuration.json`
 - Check file permissions: `ls -l config/configuration.json`
+
+**Tray icon doesn't appear (installed build)**
+- This only applies to installed builds — dev mode (`./run.sh`) never shows a tray icon, that's expected
+- Linux: your desktop environment needs tray/AppIndicator support — install it (e.g. on GNOME, the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/)) and log out/in, or install the packages listed under `Recommends` in the `.deb` if you installed via `dpkg`/`apt`
+- The app itself is still running even without a visible tray icon — check `logs/log-YYYY-MM-DD.log` under the installed-build data directory (see [Data Locations](#data-locations--dev-mode-vs-installed-builds)) and open `http://localhost:5000` directly
+- To rule out a tray-specific issue, launch with `--no-tray` (see [System Tray](#system-tray-installed-builds-only)) — if the app works fine that way, the problem is specifically with the tray backend, not Luminary itself
