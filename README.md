@@ -25,6 +25,16 @@ pip install -r requirements.txt
 
 `requirements.txt` includes `pillow-heif` for HEIC/HEIF support. It's optional but strongly recommended — without it, Luminary falls back to system ImageMagick or ffmpeg for HEIC decoding.
 
+**Linux only**, for the system tray icon on installed builds (skip if you only run dev mode via `./run.sh`, or if you're on Windows/macOS): install the AppIndicator bindings so `tray.py` can use its native backend instead of falling back to pystray's less reliable one (see [System Tray](#system-tray-installed-builds-only)):
+
+```bash
+# Ubuntu 20.04 and similar-vintage distros:
+sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-appindicator3-0.1
+
+# Ubuntu 22.04+ and most current distros (note the different package name):
+sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1
+```
+
 ---
 
 ## Quick Start

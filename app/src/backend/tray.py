@@ -383,9 +383,15 @@ def run_tray(app, port: int, open_on_start: bool = True):
             _run_tray_appindicator(app, port, open_on_start)
             return
         except (ImportError, ValueError) as exc:
-            log.info(
-                "Native AppIndicator tray backend unavailable (%s) — "
-                "falling back to pystray.", exc
+            log.warning(
+                "Native AppIndicator tray backend unavailable (%s) — falling "
+                "back to pystray. Without AppIndicator bindings, pystray's "
+                "own fallback is the legacy X11 XEmbed tray protocol, which "
+                "stock GNOME (no tray extension) does not support at all — "
+                "if you see 'Failed to dock icon' next, install:  "
+                "sudo apt install python3-gi gir1.2-gtk-3.0 "
+                "gir1.2-appindicator3-0.1  (or gir1.2-ayatanaappindicator3-0.1 "
+                "on newer distros) and relaunch.", exc
             )
 
     _run_tray_pystray(app, port, open_on_start)
