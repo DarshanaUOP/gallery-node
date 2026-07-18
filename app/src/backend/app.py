@@ -2514,12 +2514,28 @@ if __name__ == "__main__":
     # launcher) instead runs as a system tray application: no console window,
     # an icon in the tray with Open/About/Start-Stop/Quit, and the server
     # itself running on a background thread that the tray controls.
+    #
+    # Exception: a headless Linux install (e.g. a Raspberry Pi set up over
+    # SSH with no desktop environment) has no display for a tray icon to
+    # attach to at all — that's auto-detected below and falls back to the
+    # same plain background server dev mode uses, with no action needed from
+    # the user (see README.md's "Headless / Server Mode" section for running
+    # it as a systemd service in that case).
     run_as_tray = app_paths.is_frozen() and not args.no_tray
 
     if run_as_tray:
         try:
-            from tray import run_tray
-            run_tray(app, port=args.port)
+            from tray import run_tray, is_display_available
+            if not is_display_available():
+                log.info(
+                    "No graphical session detected (DISPLAY/WAYLAND_DISPLAY not "
+                    "set — likely a headless Linux install, e.g. a Raspberry Pi "
+                    "without a desktop environment). Running Luminary as a plain "
+                    "background server instead of a system tray app."
+                )
+                run_server(port=args.port)
+            else:
+                run_tray(app, port=args.port)
         except Exception:
             log.exception("Failed to start the system tray — falling back to console mode.")
             run_server(port=args.port)

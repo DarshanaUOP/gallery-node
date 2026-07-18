@@ -103,6 +103,7 @@ luminary/
         ├── build-deb.sh          # Assembles a .deb from the build-linux.sh output
         ├── usr-bin-luminary      # Launcher installed at /usr/bin/luminary
         ├── luminary.desktop      # Application-menu entry
+        ├── luminary.service      # Example systemd --user service for headless installs (Raspberry Pi, etc.)
         └── debian/
             ├── control           # Package metadata template
             ├── postinst          # Fixes permissions, refreshes desktop/icon caches
@@ -148,7 +149,36 @@ All of the paths above (`data/`, `config/`, `logs/`, `thumbnails/`, `cache/`) ar
   "C:\Program Files\Luminary\Luminary.exe" --no-tray
   ```
 
-  **Linux note:** the tray icon needs a tray/AppIndicator backend from your desktop environment. KDE, XFCE, and most other DEs support it natively; on GNOME you'll need an extension such as [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/). The `.deb` package lists the relevant GTK/AppIndicator libraries as `Recommends` (not hard `Depends`, since they aren't needed on every desktop environment).
+  **Linux note:** the tray icon needs a tray/AppIndicator backend from your desktop environment. KDE, XFCE, and most other DEs support it natively; on GNOME you'll need an extension such as [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/). The `.deb` package lists the relevant GTK/AppIndicator libraries as `Recommends` (not hard `Depends`, since they aren't needed on every desktop environment). That's for a desktop that's missing the tray backend but still has a display — for a machine with **no desktop environment at all**, see the next section.
+
+### Headless / Server Mode (Linux, e.g. Raspberry Pi)
+
+An installed build launched on a Linux machine with **no display at all** — no X11, no Wayland, no desktop environment installed — can't show a tray icon; there's nothing for it to attach to. This is the normal situation for a headless Raspberry Pi (or any server) set up over SSH.
+
+Luminary detects this automatically: `tray.py` checks for `DISPLAY`/`WAYLAND_DISPLAY` before attempting the tray, and if neither is set, it logs a note and runs as a plain background server instead — the exact same code path dev mode uses. **No flags or config changes are needed** for this to work; it Just Works on a fresh headless install.
+
+The one thing headless setups do need that a desktop doesn't: something to start Luminary automatically on boot, since there's no Start Menu/launcher to click. An example systemd **user** service is provided at `scripts/linux/luminary.service`:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp scripts/linux/luminary.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now luminary.service
+
+# So it also starts on boot without you logging in / opening an SSH session:
+sudo loginctl enable-linger $USER
+```
+
+Check on it with:
+```bash
+systemctl --user status luminary.service
+journalctl --user -u luminary -f
+```
+
+Or skip systemd entirely and just run it directly over SSH for a quick one-off session:
+```bash
+/usr/bin/luminary   # or python3 app/src/backend/app.py in a dev checkout
+```
 
 ### Why SQLite
 
@@ -522,3 +552,9 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 - Linux: your desktop environment needs tray/AppIndicator support — install it (e.g. on GNOME, the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/)) and log out/in, or install the packages listed under `Recommends` in the `.deb` if you installed via `dpkg`/`apt`
 - The app itself is still running even without a visible tray icon — check `logs/log-YYYY-MM-DD.log` under the installed-build data directory (see [Data Locations](#data-locations--dev-mode-vs-installed-builds)) and open `http://localhost:5000` directly
 - To rule out a tray-specific issue, launch with `--no-tray` (see [System Tray](#system-tray-installed-builds-only)) — if the app works fine that way, the problem is specifically with the tray backend, not Luminary itself
+
+**Headless install (Raspberry Pi, etc.) — is it running as a tray app or not?**
+- It shouldn't be — no tray icon is expected on a machine with no display at all; Luminary should auto-detect this and run as a plain background server (see [Headless / Server Mode](#headless--server-mode-linux-eg-raspberry-pi))
+- Confirm the auto-detection kicked in: check the log for a line like `No graphical session detected ... running Luminary as a plain background server`
+- If it's hanging or erroring instead of falling back, `DISPLAY`/`WAYLAND_DISPLAY` may be set to a stale/invalid value in your shell (common after an old X11-forwarded SSH session) — `echo $DISPLAY` to check, `unset DISPLAY WAYLAND_DISPLAY` to clear it, or just pass `--no-tray` to force plain mode regardless
+- Not starting after a reboot? You likely haven't set up the systemd service yet — see `scripts/linux/luminary.service`

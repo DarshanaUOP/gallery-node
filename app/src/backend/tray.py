@@ -18,9 +18,18 @@ Notes for packaging (see build-linux.sh / build-windows.bat / requirements.txt):
     visible (e.g. a GNOME extension, or a desktop environment with native
     tray support such as KDE/XFCE). This is a desktop-environment concern,
     not something pip/PyInstaller can provide.
+  - On a headless Linux install (no desktop environment at all — e.g. a
+    Raspberry Pi set up over SSH), there's no display for a tray icon to
+    exist on in the first place. is_display_available() detects this
+    (no DISPLAY/WAYLAND_DISPLAY set) so app.py's entry point can skip the
+    tray automatically and fall back to running as a plain background
+    server, the same as dev mode — see README.md's "Headless / Server Mode"
+    section for running it as a systemd service in that case.
 """
 
+import os
 import logging
+import platform
 import threading
 import webbrowser
 
@@ -92,6 +101,26 @@ class ServerController:
             self._thread = None
             self._server = None
             log.info("Luminary backend stopped")
+
+
+def is_display_available() -> bool:
+    """
+    Best-effort check for whether a GUI session exists to host a tray icon.
+
+    Only meaningful on Linux: a headless install (e.g. a Raspberry Pi set up
+    over SSH with no desktop environment installed) has no X11 or Wayland
+    session at all, so there's nothing for pystray to attach a tray icon to
+    — it has no "headless" fallback of its own, it would just fail to
+    connect to a display (or hang trying). DISPLAY / WAYLAND_DISPLAY being
+    unset is the standard signal that no such session exists.
+
+    Windows and macOS installs always have a session capable of hosting a
+    tray icon by the time a user-launched .exe/.app is running, so they're
+    not checked here.
+    """
+    if platform.system() != "Linux":
+        return True
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
 def _load_icon_image():
