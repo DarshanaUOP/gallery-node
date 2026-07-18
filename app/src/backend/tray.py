@@ -12,12 +12,35 @@ Tray menu:
   Start / Stop    — toggles the backend server on/off; label reflects state
   Quit            — stops the backend (if running) and exits the tray app
 
+Tray backend selection:
+  - Windows / macOS: pystray, unchanged.
+  - Linux: a native GTK + AppIndicator backend is tried FIRST, falling back
+    to pystray only if that's unavailable. This exists because pystray's
+    own GTK backend has a real, commonly-hit blind spot on Linux: it looks
+    for a specific gi typelib namespace, and which one a distro actually
+    ships varies —
+      - Ubuntu 20.04 (and derivatives of that vintage) ship the original,
+        now-unmaintained `AppIndicator3` typelib (`gir1.2-appindicator3-0.1`).
+      - Most current distros (Ubuntu 22.04+, Fedora, etc.) instead ship the
+        actively-maintained fork under `AyatanaAppIndicator3`
+        (`gir1.2-ayatanaappindicator3-0.1`) and don't have `AppIndicator3`
+        at all.
+    If pystray's own detection guesses the namespace this particular
+    machine doesn't have, it fails to construct a tray icon — not always
+    loudly. Talking to AppIndicator directly here (via `_run_tray_appindicator`)
+    sidesteps that: it tries both namespaces itself and uses whichever is
+    actually installed, so both old and new Ubuntu (and anything else
+    shipping either typelib) work the same way. Only if NEITHER typelib nor
+    `gi` itself is available does this fall back to pystray.
+
 Notes for packaging (see build-linux.sh / build-windows.bat / requirements.txt):
-  - Requires the `pystray` package (plus Pillow, already a dependency).
-  - On Linux, pystray needs a system tray/AppIndicator backend to actually be
-    visible (e.g. a GNOME extension, or a desktop environment with native
-    tray support such as KDE/XFCE). This is a desktop-environment concern,
-    not something pip/PyInstaller can provide.
+  - Requires the `pystray` package (plus Pillow, already a dependency) as
+    the fallback backend on every platform.
+  - On Linux, one of the two AppIndicator gi typelibs (see above) plus
+    `python3-gi` and GTK 3 needs to be present for the native backend to be
+    used; if neither is installed, pystray is used instead (which itself
+    then also needs a tray/AppIndicator backend to actually show anything —
+    see the pystray note in README.md's "System Tray" section).
   - On a headless Linux install (no desktop environment at all — e.g. a
     Raspberry Pi set up over SSH), there's no display for a tray icon to
     exist on in the first place. is_display_available() detects this
@@ -28,6 +51,7 @@ Notes for packaging (see build-linux.sh / build-windows.bat / requirements.txt):
 """
 
 import os
+import importlib
 import logging
 import platform
 import threading
@@ -148,14 +172,149 @@ def _load_icon_image():
     return Image.new("RGB", (64, 64), color=(30, 144, 255))
 
 
-def run_tray(app, port: int, open_on_start: bool = True):
+def _resolve_icon_path_for_appindicator() -> str:
     """
-    Runs the system tray icon's event loop on the CALLING thread (this
-    blocks — required on some platforms, e.g. macOS, where the tray must
-    live on the main thread). The Flask/waitress server itself always runs
-    on a separate background thread managed by a ServerController, which is
-    started immediately and can be stopped/restarted from the "Start/Stop"
-    menu item without closing the tray icon.
+    AppIndicator wants an icon *name* or an absolute *path* to an image file
+    — GTK's icon loading here handles .png/.svg well but not .ico — unlike
+    pystray, which wants a PIL Image (see _load_icon_image). Prefers an
+    actual bundled .png; falls back to generating a small placeholder .png
+    into CACHE_DIR (once, then reused) so a missing/corrupt icon file never
+    prevents the tray from starting.
+    """
+    import app_paths
+
+    candidates = [
+        app_paths.RESOURCES_DIR / "images" / "luminary.png",
+        app_paths.RESOURCES_DIR / "images" / "luminary.ico",
+    ]
+    for path in candidates:
+        if path.exists():
+            return str(path)
+
+    placeholder = app_paths.CACHE_DIR / "luminary-tray-placeholder.png"
+    if not placeholder.exists():
+        try:
+            from PIL import Image
+            app_paths.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (64, 64), color=(30, 144, 255)).save(placeholder)
+        except Exception:
+            log.warning("Could not generate placeholder tray icon", exc_info=True)
+            return ""
+    return str(placeholder)
+
+
+def _import_appindicator():
+    """
+    Try both gi typelib names that provide the AppIndicator API (see the
+    module docstring for why there are two), and return whichever one is
+    actually installed on this machine, along with `Gtk`/`GLib`.
+
+    Raises ImportError if `gi` itself, GTK 3, or neither AppIndicator
+    typelib is available — the caller falls back to pystray in that case.
+    """
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gtk, GLib
+
+    for namespace in ("AyatanaAppIndicator3", "AppIndicator3"):
+        try:
+            gi.require_version(namespace, "0.1")
+        except ValueError:
+            continue  # typelib not installed under this name
+        try:
+            appindicator = importlib.import_module(f"gi.repository.{namespace}")
+        except ImportError:
+            continue
+        return appindicator, Gtk, GLib
+
+    raise ImportError(
+        "Neither AyatanaAppIndicator3 nor AppIndicator3 gi typelib is installed"
+    )
+
+
+
+def _run_tray_appindicator(app, port: int, open_on_start: bool):
+    """
+    Native GTK + AppIndicator tray backend — tried first on Linux (see the
+    module docstring). Runs GLib's main loop on the CALLING thread, same
+    blocking contract as pystray's icon.run().
+
+    Note: unlike pystray's `default=True` menu item (which pystray emulates
+    as a double-click/primary-click action on the platforms that support
+    it), AppIndicator/StatusNotifierItem icons open their menu on any click
+    by design — there's no separate "primary action" slot. "Open Luminary"
+    is therefore always reached via the menu here, not a direct click.
+    """
+    appindicator, Gtk, GLib = _import_appindicator()
+
+    controller = ServerController(app, port)
+    controller.start()
+
+    def url() -> str:
+        return f"http://localhost:{port}/"
+
+    def on_open(_item=None):
+        webbrowser.open(url())
+
+    def on_about(_item):
+        webbrowser.open(ABOUT_URL)
+
+    def on_toggle(_item):
+        if controller.running:
+            controller.stop()
+        else:
+            controller.start()
+        toggle_item.set_label("Stop Luminary" if controller.running else "Start Luminary")
+
+    def on_quit(_item):
+        controller.stop()
+        Gtk.main_quit()
+
+    menu = Gtk.Menu()
+
+    open_item = Gtk.MenuItem(label="Open Luminary")
+    open_item.connect("activate", on_open)
+    menu.append(open_item)
+
+    about_item = Gtk.MenuItem(label="About")
+    about_item.connect("activate", on_about)
+    menu.append(about_item)
+
+    menu.append(Gtk.SeparatorMenuItem())
+
+    toggle_item = Gtk.MenuItem(label="Stop Luminary" if controller.running else "Start Luminary")
+    toggle_item.connect("activate", on_toggle)
+    menu.append(toggle_item)
+
+    quit_item = Gtk.MenuItem(label="Quit")
+    quit_item.connect("activate", on_quit)
+    menu.append(quit_item)
+
+    menu.show_all()
+
+    icon_path = _resolve_icon_path_for_appindicator()
+    indicator = appindicator.Indicator.new(
+        "luminary",
+        icon_path or "image-missing",
+        appindicator.IndicatorCategory.APPLICATION_STATUS,
+    )
+    indicator.set_status(appindicator.IndicatorStatus.ACTIVE)
+    indicator.set_title("Luminary")
+    indicator.set_menu(menu)
+
+    if open_on_start:
+        # Give the server a moment to bind its socket before the browser
+        # makes its first request.
+        GLib.timeout_add(1000, lambda: (on_open(), False)[1])
+
+    Gtk.main()  # blocks the calling thread until on_quit() calls Gtk.main_quit()
+
+
+def _run_tray_pystray(app, port: int, open_on_start: bool):
+    """
+    pystray-based tray backend. Used on Windows and macOS always, and on
+    Linux only as a fallback when no AppIndicator gi typelib is installed
+    (see run_tray() and the module docstring).
     """
     import pystray
     from pystray import MenuItem
@@ -204,3 +363,29 @@ def run_tray(app, port: int, open_on_start: bool = True):
         threading.Timer(1.0, lambda: webbrowser.open(url())).start()
 
     icon.run()  # blocks the calling thread until on_quit() calls icon.stop()
+
+
+def run_tray(app, port: int, open_on_start: bool = True):
+    """
+    Runs the system tray icon's event loop on the CALLING thread (this
+    blocks — required on some platforms, e.g. macOS, where the tray must
+    live on the main thread). The Flask/waitress server itself always runs
+    on a separate background thread managed by a ServerController, which is
+    started immediately and can be stopped/restarted from the "Start/Stop"
+    menu item without closing the tray icon.
+
+    Backend selection: on Linux, the native AppIndicator backend is tried
+    first and used if available; pystray is the fallback there and the only
+    backend on Windows/macOS. See the module docstring for why.
+    """
+    if platform.system() == "Linux":
+        try:
+            _run_tray_appindicator(app, port, open_on_start)
+            return
+        except (ImportError, ValueError) as exc:
+            log.info(
+                "Native AppIndicator tray backend unavailable (%s) — "
+                "falling back to pystray.", exc
+            )
+
+    _run_tray_pystray(app, port, open_on_start)

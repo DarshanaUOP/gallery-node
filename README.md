@@ -9,7 +9,7 @@ A lightweight, local-first photo and video gallery. Index media from your filesy
 - Python 3.8+
 - ffmpeg — for video thumbnails and metadata (`apt install ffmpeg` or `brew install ffmpeg`)
 - Internet connection for the **Map** view — Leaflet, the marker-clustering plugin, and OpenStreetMap tiles are loaded from a CDN at runtime. Everything else works fully offline.
-- `pystray` (installed via `requirements.txt`) — only used by installed builds, for the system tray icon. Not needed for dev-mode (`./run.sh`). See [System Tray](#system-tray-installed-builds-only).
+- `pystray` (installed via `requirements.txt`) — only used by installed builds, for the system tray icon. On Linux this is the fallback backend; a native GTK + AppIndicator backend is tried first, see [System Tray](#system-tray-installed-builds-only). Not needed for dev-mode (`./run.sh`).
 
 ---
 
@@ -163,7 +163,11 @@ If you deliberately want more than one instance at once (e.g. two dev servers on
   "C:\Program Files\Luminary\Luminary.exe" --no-tray
   ```
 
-  **Linux note:** the tray icon needs a tray/AppIndicator backend from your desktop environment. KDE, XFCE, and most other DEs support it natively; on GNOME you'll need an extension such as [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/). The `.deb` package lists the relevant GTK/AppIndicator libraries as `Recommends` (not hard `Depends`, since they aren't needed on every desktop environment). That's for a desktop that's missing the tray backend but still has a display — for a machine with **no desktop environment at all**, see the next section.
+  **Linux note:** on Linux, `tray.py` tries a native GTK + AppIndicator backend first and only falls back to pystray if that's unavailable — this avoids a real gap where pystray's own backend looks for one specific `AppIndicator` gi typelib name and some distros only ship the other one. Either way, the tray icon still needs a tray/AppIndicator backend from your desktop environment to actually be visible. KDE, XFCE, and most other DEs support it natively; on GNOME you'll need an extension such as [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/). For the native backend specifically, you'll also need `python3-gi`, GTK 3, and one of:
+  - `gir1.2-appindicator3-0.1` (Ubuntu 20.04 and similar-vintage distros), or
+  - `gir1.2-ayatanaappindicator3-0.1` (Ubuntu 22.04+, most current distros)
+
+  The `.deb` package lists these as `Recommends` (not hard `Depends`, since they aren't needed on every desktop environment — pystray remains a working fallback). That's for a desktop that's missing the tray backend but still has a display — for a machine with **no desktop environment at all**, see the next section.
 
 ### Headless / Server Mode (Linux, e.g. Raspberry Pi)
 
@@ -564,6 +568,7 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 **Tray icon doesn't appear (installed build)**
 - This only applies to installed builds — dev mode (`./run.sh`) never shows a tray icon, that's expected
 - Linux: your desktop environment needs tray/AppIndicator support — install it (e.g. on GNOME, the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/)) and log out/in, or install the packages listed under `Recommends` in the `.deb` if you installed via `dpkg`/`apt`
+- Linux, specifically on Ubuntu 20.04 or similar: `tray.py` now tries a native AppIndicator backend before falling back to pystray, specifically because pystray's own backend can silently fail to find the right typelib on some distro/version combinations — check `logs/log-YYYY-MM-DD.log` for a line noting whether it fell back to pystray and why
 - The app itself is still running even without a visible tray icon — check `logs/log-YYYY-MM-DD.log` under the installed-build data directory (see [Data Locations](#data-locations--dev-mode-vs-installed-builds)) and open `http://localhost:5000` directly
 - To rule out a tray-specific issue, launch with `--no-tray` (see [System Tray](#system-tray-installed-builds-only)) — if the app works fine that way, the problem is specifically with the tray backend, not Luminary itself
 
