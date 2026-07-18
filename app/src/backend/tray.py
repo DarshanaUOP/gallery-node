@@ -205,33 +205,25 @@ def _resolve_icon_path_for_appindicator() -> str:
 
 def _import_appindicator():
     """
-    Try both gi typelib names that provide the AppIndicator API (see the
-    module docstring for why there are two), and return whichever one is
-    actually installed on this machine, along with `Gtk`/`GLib`.
+    Import the GTK/AppIndicator bindings used by the native tray backend.
 
-    Raises ImportError if `gi` itself, GTK 3, or neither AppIndicator
-    typelib is available — the caller falls back to pystray in that case.
+    Uses the standard AppIndicator3 namespace on older systems such as
+    Ubuntu 20.04 and falls back to AyatanaAppIndicator3 when that namespace
+    is not available.
     """
     import gi
+
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gtk, GLib
+    gi.require_version('AppIndicator3', '0.1')
+    from gi.repository import GLib, Gtk
 
-    for namespace in ("AyatanaAppIndicator3", "AppIndicator3"):
-        try:
-            gi.require_version(namespace, "0.1")
-        except ValueError:
-            continue  # typelib not installed under this name
-        try:
-            appindicator = importlib.import_module(f"gi.repository.{namespace}")
-        except ImportError:
-            continue
-        return appindicator, Gtk, GLib
+    try:
+        # On 20.04, use the standard AppIndicator3 namespace.
+        from gi.repository import AppIndicator3 as appindicator
+    except ImportError:
+        from gi.repository import AyatanaAppIndicator3 as appindicator
 
-    raise ImportError(
-        "Neither AyatanaAppIndicator3 nor AppIndicator3 gi typelib is installed"
-    )
-
-
+    return appindicator, Gtk, GLib
 
 def _run_tray_appindicator(app, port: int, open_on_start: bool):
     """
@@ -362,7 +354,19 @@ def _run_tray_pystray(app, port: int, open_on_start: bool):
         # makes its first request.
         threading.Timer(1.0, lambda: webbrowser.open(url())).start()
 
-    icon.run()  # blocks the calling thread until on_quit() calls icon.stop()
+    try:
+        icon.run()  # blocks the calling thread until on_quit() calls icon.stop()
+    except AssertionError:
+        log.exception(
+            "pystray failed to dock icon (AssertionError). Running without tray."
+        )
+        # Keep the process alive while the server thread runs so the
+        # background HTTP server started above continues serving.
+        try:
+            while controller.running:
+                threading.Event().wait(1.0)
+        except KeyboardInterrupt:
+            pass
 
 
 def run_tray(app, port: int, open_on_start: bool = True):
@@ -393,5 +397,29 @@ def run_tray(app, port: int, open_on_start: bool = True):
                 "gir1.2-appindicator3-0.1  (or gir1.2-ayatanaappindicator3-0.1 "
                 "on newer distros) and relaunch.", exc
             )
+
+            # Heuristic: on Wayland or a GNOME desktop without AppIndicator
+            # bindings, pystray's XEmbed fallback is unlikely to work and
+            # will commonly fail with Xlib ConnectionClosedError /
+            # "Failed to dock icon". In that situation, prefer to run the
+            # backend without a tray rather than falling back to pystray
+            # which only results in noisy errors and a broken tray UX.
+            wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
+            xdg_desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
+            if wayland or "GNOME" in xdg_desktop:
+                log.info(
+                    "Detected Wayland/GNOME session without AppIndicator — "
+                    "starting server without tray."
+                )
+                controller = ServerController(app, port)
+                controller.start()
+                if open_on_start:
+                    threading.Timer(1.0, lambda: webbrowser.open(f"http://localhost:{port}/")).start()
+                try:
+                    while controller.running:
+                        threading.Event().wait(1.0)
+                except KeyboardInterrupt:
+                    controller.stop()
+                return
 
     _run_tray_pystray(app, port, open_on_start)
