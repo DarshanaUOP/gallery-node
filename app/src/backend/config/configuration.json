@@ -12,7 +12,6 @@
   "media_page_size": 50,
   "thumbnail_size": 400,
   "thumbnail_quality": 60,
-  "thumbnail_cache_path": "thumb",
   "supported_image_formats": [
     "jpg",
     "jpeg",

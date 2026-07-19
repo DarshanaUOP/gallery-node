@@ -2169,7 +2169,6 @@ function _settingsPopulate(c) {
   const sel  = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? el.options[0]?.value; };
   const tog  = (id, val) => { const el = document.getElementById(id); if (el) el.classList.toggle('on', !!val); };
   const num  = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ''; };
-  const txt  = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ''; };
 
   // Appearance
   sel('s-theme',           c.theme            ?? 'dark');
@@ -2189,7 +2188,6 @@ function _settingsPopulate(c) {
   num('s-media-page-size',      c.media_page_size      ?? 500);
   num('s-thumbnail-size',       c.thumbnail_size       ?? 400);
   num('s-thumbnail-quality',    c.thumbnail_quality    ?? 60);
-  txt('s-thumbnail-cache-path', c.thumbnail_cache_path ?? 'thumb');
   // Media types — chips
   _buildFormatChips('s-image-formats', ALL_IMAGE_FORMATS, c.supported_image_formats ?? ALL_IMAGE_FORMATS);
   _buildFormatChips('s-video-formats', ALL_VIDEO_FORMATS, c.supported_video_formats ?? ALL_VIDEO_FORMATS);
@@ -2225,7 +2223,6 @@ function _buildFormatChips(containerId, allFormats, activeFormats) {
 function _getToggle(id)   { return document.getElementById(id)?.classList.contains('on') ?? false; }
 function _getSelect(id)   { return document.getElementById(id)?.value ?? ''; }
 function _getNumber(id)   { return parseInt(document.getElementById(id)?.value ?? '0', 10); }
-function _getText(id)     { return document.getElementById(id)?.value?.trim() ?? ''; }
 function _getChips(id)    { return [...document.querySelectorAll(`#${id} .settings-chip.active`)].map(c => c.textContent); }
 
 async function saveSettings() {
@@ -2248,7 +2245,6 @@ async function saveSettings() {
     media_page_size:          _getNumber('s-media-page-size'),
     thumbnail_size:           _getNumber('s-thumbnail-size'),
     thumbnail_quality:        _getNumber('s-thumbnail-quality'),
-    thumbnail_cache_path:     _getText('s-thumbnail-cache-path'),
     // Media types
     supported_image_formats:  _getChips('s-image-formats'),
     supported_video_formats:  _getChips('s-video-formats'),
