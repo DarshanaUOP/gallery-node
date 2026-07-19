@@ -25,6 +25,20 @@ let filteredMedia = [];
 let renderedCount = 0;
 let lbIndex = 0;
 
+// Lazy image loader for the main gallery grid. We deliberately do NOT rely on
+// native <img loading="lazy">: Chromium's native lazy-load distance check is
+// computed off the layout snapshot at insertion time, and with grid-template-
+// columns set to auto-fill/minmax ("Auto" column setting) the grid needs an
+// extra intrinsic-sizing pass to resolve track widths. Native lazy-load can
+// end up evaluating images against a stale pre-final layout and then never
+// re-checks them — which is why they silently never load, and why opening
+// DevTools "fixes" it (docking the Network panel forces a real viewport
+// resize, and only a genuine engine-level resize/scroll makes Chromium
+// re-run that internal check; dispatching a synthetic 'resize' event from JS
+// does not). Using our own IntersectionObserver sidesteps that heuristic
+// entirely, matching the pattern already used for the map cluster panel.
+let _galleryImgObserver = null;
+
 // Multi-select mode
 let selectMode = false;
 let selectedUniques = new Set();
@@ -44,6 +58,32 @@ async function init() {
   renderAll();
   populateAllFilters();   // fetches /api/media/formats, /api/media/cameras, /api/locations
   setupIntersectionObserver();
+  setupGalleryImageObserver();
+}
+
+// Creates (once) the IntersectionObserver that lazily loads each gallery
+// card's <img data-src> when the card scrolls near the viewport. See the
+// comment on _galleryImgObserver above for why this replaces native
+// loading="lazy".
+function setupGalleryImageObserver() {
+  if (_galleryImgObserver) return;
+  _galleryImgObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const img = entry.target.querySelector('img[data-src]');
+      if (img) {
+        img.onload  = () => img.classList.add('loaded');
+        img.onerror = () => {
+          img.style.display = 'none';
+          const ph = img.nextElementSibling;
+          if (ph) ph.style.display = 'flex';
+        };
+        img.src = img.dataset.src;
+        img.removeAttribute('data-src');
+      }
+      _galleryImgObserver.unobserve(entry.target);
+    });
+  }, { rootMargin: '600px' });
 }
 
 async function loadConfig() {
@@ -162,6 +202,7 @@ async function _fetchNextPage() {
       const grid = document.getElementById('gallery-grid');
       newItems.forEach((item, i) => grid.appendChild(createCard(item, startIdx + i)));
       renderedCount = filteredMedia.length;
+      _observeLastCard();
       softRefresh();
     }
   } catch { /* network error — observer retries on next scroll */ }
@@ -279,6 +320,9 @@ function applyFilters() {
 
   filteredMedia = [];
   renderedCount = 0;
+  _galleryImgObserver?.disconnect();
+  _lastCardObserver?.disconnect();
+  _lastObservedCard = null;
   document.getElementById('gallery-grid').innerHTML = '';
   document.getElementById('empty-state').style.display = 'none';
 
@@ -321,6 +365,7 @@ function renderBatch() {
     grid.appendChild(createCard(filteredMedia[i], i));
   }
   renderedCount = end;
+  _observeLastCard();
 }
 
 function createCard(item, idx) {
@@ -332,9 +377,7 @@ function createCard(item, idx) {
   const isVideo = item.type === 'video';
   const src = thumbUrl(item.uniqueName);
   const imgHtml = `
-    <img src="${src}" loading="lazy"
-         onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"
-         alt="${escHtml(item.name)}">
+    <img data-src="${src}" src="" class="lazy-thumb" alt="${escHtml(item.name)}">
     <div class="media-placeholder" style="display:none">
       <span class="ph-icon">${isVideo ? '▶' : '⬡'}</span>
       <span>${escHtml(item.name)}</span>
@@ -372,6 +415,8 @@ function createCard(item, idx) {
     if (selectMode) { toggleItemSelected(item.uniqueName, div); return; }
     openLightbox(idx);
   });
+
+  if (_galleryImgObserver) _galleryImgObserver.observe(div);
 
   return div;
 }
@@ -831,19 +876,51 @@ function scrollToTop() {
 // ─────────────────────────────────────────────
 //  INFINITE SCROLL
 // ─────────────────────────────────────────────
+// Shared by both the dedicated sentinel div AND the last-card observer below —
+// whichever fires first advances rendering/pagination.
+function _maybeLoadMore() {
+  if (renderedCount < filteredMedia.length) {
+    // Still have locally filtered items to render
+    renderBatch();
+  } else if (db._hasMore && !db._fetching) {
+    // All local items rendered — fetch next page from server
+    _fetchNextPage();
+  }
+}
+
 function setupIntersectionObserver() {
   const trigger = document.getElementById('load-more-trigger');
   const obs = new IntersectionObserver(entries => {
     if (!entries[0].isIntersecting) return;
-    if (renderedCount < filteredMedia.length) {
-      // Still have locally filtered items to render
-      renderBatch();
-    } else if (db._hasMore && !db._fetching) {
-      // All local items rendered — fetch next page from server
-      _fetchNextPage();
-    }
+    _maybeLoadMore();
   }, { rootMargin: '400px' });
   obs.observe(trigger);
+}
+
+// Redundant, more direct trigger: watches the actual last rendered card
+// instead of only the separate #load-more-trigger sentinel. The sentinel
+// approach is normally fine, but this catches any case where the sentinel's
+// position hasn't caught up with a grid reflow (e.g. right after switching
+// "grid columns" to Auto, where auto-fill/minmax changes the row count for
+// the same items). Re-targeted every time new cards are appended.
+let _lastCardObserver = null;
+let _lastObservedCard = null;
+
+function _observeLastCard() {
+  if (!_lastCardObserver) {
+    _lastCardObserver = new IntersectionObserver(entries => {
+      if (!entries[0].isIntersecting) return;
+      _lastCardObserver.unobserve(entries[0].target);
+      _maybeLoadMore();
+    }, { rootMargin: '400px' });
+  }
+  if (_lastObservedCard) _lastCardObserver.unobserve(_lastObservedCard);
+  const grid = document.getElementById('gallery-grid');
+  const last = grid.lastElementChild;
+  if (last) {
+    _lastCardObserver.observe(last);
+    _lastObservedCard = last;
+  }
 }
 
 // ─────────────────────────────────────────────

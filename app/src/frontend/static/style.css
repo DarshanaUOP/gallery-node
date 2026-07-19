@@ -633,6 +633,11 @@
     border-radius: var(--radius);
     transition: transform 0.3s ease;
   }
+  .media-item img.lazy-thumb {
+    opacity: 0;
+    transition: opacity 0.25s ease, transform 0.3s ease;
+  }
+  .media-item img.lazy-thumb.loaded { opacity: 1; }
   .media-item:hover img { transform: scale(1.02); }
 
   /* Placeholder when no real images */
