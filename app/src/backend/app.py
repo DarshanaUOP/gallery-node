@@ -85,21 +85,20 @@ def _bootstrap():
         import json as _json
         CONFIG_JSON.write_text(_json.dumps({
             "theme":                    "dark",
-            "style":                    "classic",
-            "font_size":                "small",
-            "grid_columns":             4,
-            "card_size":                "medium",
+            "style":                    "modern",
+            "font_size":                "large",
+            "grid_columns":             "auto",
+            "card_size":                "small",
             "show_filename_on_card":    True,
             "show_date_on_card":        True,
             "show_subfolder_on_card":   True,
             "default_sort":             "date-desc",
             "default_date_field":       "modified",
             "show_hidden_default":      False,
-            "lazy_load_batch":          50,
-            "media_page_size":          500,
+            "lazy_load_batch":          10,
+            "media_page_size":          50,
             "thumbnail_size":           400,
             "thumbnail_quality":        60,
-            "thumbnail_cache_path":     "thumb",
             "supported_image_formats":  ["jpg","jpeg","png","heic","heif","webp","tiff","bmp","gif"],
             "supported_video_formats":  ["mp4","mov","avi","mkv","webm","m4v","3gp","wmv","flv","ts","mts"],
             "video_autoplay":           False,
@@ -1287,7 +1286,6 @@ def load_config() -> dict:
         "media_page_size":          500,
         "thumbnail_size":           400,
         "thumbnail_quality":        60,
-        "thumbnail_cache_path":     "thumb",
         # Media Types
         "supported_image_formats":  list(IMAGE_FORMATS),
         "supported_video_formats":  list(VIDEO_FORMATS),
@@ -1695,32 +1693,12 @@ if FLASK_AVAILABLE:
 
     def _get_thumb_cache_dir() -> Path:
         """
-        Resolve thumbnail_cache_path from configuration.json.
-        - "thumb" or "thumbnails" (the historical and current defaults) always
-          resolve to THUMB_DIR itself — this avoids creating a stray empty
-          folder if an existing config still has the old literal default value.
-        - Other relative paths are resolved relative to the user data root
-          (app_paths.USER_DATA_ROOT), not the install dir — the install dir
-          may not even be writable (e.g. Program Files), and per-user data
-          belongs next to the rest of it.
-        - Absolute paths are used as-is (supports custom mounts like /mnt/ssd/cache).
-        - Falls back to THUMB_DIR if the configured path can't be created.
+        Thumbnail cache dir is fixed at app_paths.THUMB_DIR — not user-configurable.
+        Kept as a function (rather than referencing THUMB_DIR directly at call
+        sites) so callers don't care whether the location is fixed or derived.
         """
-        cfg = load_config()
-        raw = cfg.get("thumbnail_cache_path", "thumb").strip()
-        if not raw or raw in ("thumb", "thumbnails"):
-            return THUMB_DIR
-        p = Path(raw)
-        if not p.is_absolute():
-            p = app_paths.USER_DATA_ROOT / p
-        p = p.expanduser()
-        try:
-            p.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            log.warning("Cannot create thumbnail cache dir %s: %s — falling back to thumbnails/", p, e)
-            p = THUMB_DIR
-            p.mkdir(parents=True, exist_ok=True)
-        return p
+        THUMB_DIR.mkdir(parents=True, exist_ok=True)
+        return THUMB_DIR
 
     def _thumb_cache_path(unique_name, size, quality):
         return _get_thumb_cache_dir() / f"{unique_name}_{size}q{quality}.jpg"
@@ -1766,8 +1744,6 @@ if FLASK_AVAILABLE:
         """
         Total on-disk size of the thumbnail cache + temp cache directories,
         in bytes and MB. Used by the Settings panel's "Clear Cache" section.
-        Uses the *configured* thumbnail cache dir (which may differ from
-        app_paths.THUMB_DIR if the user set a custom thumbnail_cache_path).
         """
         thumb_bytes = _dir_size_bytes(_get_thumb_cache_dir())
         cache_bytes = _dir_size_bytes(app_paths.CACHE_DIR)

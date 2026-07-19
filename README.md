@@ -283,7 +283,6 @@ All fields with their defaults:
   "media_page_size": 500,
   "thumbnail_size": 400,
   "thumbnail_quality": 60,
-  "thumbnail_cache_path": "thumb",
 
   "supported_image_formats": ["jpg","jpeg","png","heic","heif","webp","tiff","bmp","gif"],
   "supported_video_formats": ["mp4","mov","avi","mkv","webm","m4v","3gp","wmv","flv","ts","mts"],
@@ -345,7 +344,6 @@ Each style has its own dark and light variant, controlled independently by `them
 | `media_page_size` | `500` | Records fetched per API page |
 | `thumbnail_size` | `400` | Max thumbnail dimension in pixels |
 | `thumbnail_quality` | `60` | Thumbnail JPEG quality (1–95) |
-| `thumbnail_cache_path` | `thumb` | Relative paths resolve from project root; absolute paths used as-is |
 
 **Media Types**
 
@@ -452,7 +450,7 @@ Accessible via **⚙ Settings** in the sidebar. Covers all configuration keys �
 Accessible via **⊞ Locations** in the top bar. Add, edit, rename, delete, and toggle visibility of source directories without editing `data/media.json` directly.
 
 ### Thumbnail Cache
-Thumbnails are generated once on first request and cached to `thumbnails/` (configurable via `thumbnail_cache_path`; the historical `thumb` value is still accepted). HEIC files and video frames (extracted at 10% of duration via ffmpeg) are cached the same way. Subsequent requests serve from disk instantly.
+Thumbnails are generated once on first request and cached to the fixed `thumbnails/` location under the user data directory. HEIC files and video frames (extracted at 10% of duration via ffmpeg) are cached the same way. Subsequent requests serve from disk instantly.
 
 ### Logging
 Daily rotating log files are written to `logs/log-YYYY-MM-DD.log` alongside console output. Logs rotate at midnight, retained for 30 days (configurable), all git-ignored.

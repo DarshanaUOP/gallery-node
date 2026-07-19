@@ -1,18 +1,17 @@
 {
   "theme": "dark",
-  "grid_columns": 4,
-  "card_size": "medium",
+  "grid_columns": "auto",
+  "card_size": "small",
   "show_filename_on_card": true,
   "show_date_on_card": true,
   "show_subfolder_on_card": true,
   "default_sort": "date-desc",
   "default_date_field": "modified",
   "show_hidden_default": false,
-  "lazy_load_batch": 50,
-  "media_page_size": 500,
+  "lazy_load_batch": 10,
+  "media_page_size": 50,
   "thumbnail_size": 400,
   "thumbnail_quality": 60,
-  "thumbnail_cache_path": "thumb",
   "supported_image_formats": [
     "jpg",
     "jpeg",
@@ -49,5 +48,5 @@
   "log_level": "INFO",
   "log_retention_days": 30,
   "style": "modern",
-  "font_size": "medium"
+  "font_size": "large"
 }
