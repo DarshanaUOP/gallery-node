@@ -16,6 +16,34 @@ pillow-heif>=0.13
 # metadata. Without this, app.py falls back to using the raw tag value as-is.
 python-dateutil>=2.8
 
+# System tray icon for installed builds (Open Luminary / About / Start-Stop /
+# Quit menu — see app/src/backend/tray.py). Not needed for dev-mode runs via
+# run.sh, only used when the packaged .exe/binary is launched. Reuses Pillow
+# (already required above) for the tray icon image.
+pystray>=0.19
+#   Linux note: pystray needs a tray backend from the desktop environment
+#   itself (AppIndicator/GTK on GNOME, native tray on KDE/XFCE, etc.) — this
+#   is a system package, not something pip can install.
+
+# ── Optional — native Linux system-tray backend (AppIndicator) ─────────────
+# tray.py tries a native GTK + AppIndicator backend first on Linux, before
+# falling back to pystray above if it's unavailable. Not listed as an active
+# dependency here on purpose: PyGObject has no Windows/macOS wheel (it's a
+# source-compiled C extension built against GTK's introspection data) and
+# needs system headers present before it can even build, so pulling it in
+# unconditionally would break `pip install -r requirements.txt` for everyone
+# on Windows/macOS, and for anyone on Linux without those headers yet. If you
+# want the native backend, install the system headers first, then PyGObject
+# itself, inside the same venv Luminary runs in (e.g. venv-linux — see
+# build-linux.sh/README.md):
+#   sudo apt install libgirepository1.0-dev gcc libcairo2-dev pkg-config python3-dev
+#   pip install PyGObject>=3.42
+# Skipping this is fine — tray.py falls back to pystray automatically, no
+# functionality is lost, this only affects which backend renders the icon.
+# (If you'd rather pip attempt this automatically on Linux only, once the
+# system headers above are installed, uncomment the line below.)
+# PyGObject>=3.42; sys_platform == "linux"
+
 # ── Not pip-installable — install separately if you want video metadata ────
 # ffmpeg/ffprobe: required for extract_video_metadata(); without it, video
 # files are still indexed but without duration/resolution/fps/GPS metadata.

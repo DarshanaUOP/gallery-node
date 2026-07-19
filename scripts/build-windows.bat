@@ -34,10 +34,18 @@ if exist "%DIST_DIR%" (
 
 echo.
 echo === Building application with PyInstaller ===
-pyinstaller --clean --onedir ^
+rem --windowed (aka --noconsole): the app now runs as a system tray application
+rem (see app/src/backend/tray.py) once installed, so no console window should
+rem pop up when it's launched from the Start Menu/desktop shortcut. Dev-mode
+rem runs (`python app.py` / run.sh) are unaffected by this — it's only a
+rem property of this built .exe. --hidden-import is needed because pystray
+rem picks its Windows backend (pystray._win32) at runtime via a sys.platform
+rem check, which PyInstaller's static import scan can miss.
+pyinstaller --clean --onedir --windowed ^
     --distpath "%DIST_DIR%" ^
     --name "Luminary" ^
     --icon "app\src\frontend\images\luminary.ico" ^
+    --hidden-import "pystray._win32" ^
     app\src\backend\app.py
 if errorlevel 1 goto :error
 

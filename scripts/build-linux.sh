@@ -55,9 +55,19 @@ rm -rf "$DIST_DIR"
 
 echo
 echo "=== Building application with PyInstaller ==="
+# --hidden-import: pystray (the system tray icon — see app/src/backend/tray.py)
+# picks whichever Linux backend is actually available (AppIndicator, GTK
+# StatusIcon, or plain Xorg) at runtime via a try/except chain, which
+# PyInstaller's static import scan can miss. Listing all three here is
+# harmless if a given machine doesn't have the matching libraries — pystray
+# still falls back gracefully at runtime, this just ensures whichever one
+# *is* available got bundled.
 pyinstaller --clean --onedir \
     --distpath "$DIST_DIR" \
     --name "Luminary" \
+    --hidden-import "pystray._gtk" \
+    --hidden-import "pystray._appindicator" \
+    --hidden-import "pystray._xorg" \
     app/src/backend/app.py
 
 echo

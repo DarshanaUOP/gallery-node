@@ -4,10 +4,14 @@ Section: graphics
 Priority: optional
 Architecture: @ARCH@
 Depends: libc6 (>= 2.31)
+Recommends: gir1.2-appindicator3-0.1 | gir1.2-ayatanaappindicator3-0.1 | gir1.2-gtk-3.0
 Maintainer: Luminary Maintainers <maintainers@example.com>
 Homepage: https://example.com/luminary
 Description: Luminary — Local Media Gallery
  A self-hosted local media gallery and browser for photos and videos.
  .
  This package bundles its own Python runtime (PyInstaller onedir build) —
- no system Python or pip dependencies are required at runtime.
+ no system Python or pip dependencies are required at runtime. The Recommends
+ above provide the system tray icon on desktop environments that need an
+ AppIndicator/GTK backend for it (e.g. GNOME); on environments with native
+ tray support (KDE, XFCE, etc.) they are not required for the tray to work.

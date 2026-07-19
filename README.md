@@ -9,6 +9,7 @@ A lightweight, local-first photo and video gallery. Index media from your filesy
 - Python 3.8+
 - ffmpeg — for video thumbnails and metadata (`apt install ffmpeg` or `brew install ffmpeg`)
 - Internet connection for the **Map** view — Leaflet, the marker-clustering plugin, and OpenStreetMap tiles are loaded from a CDN at runtime. Everything else works fully offline.
+- `pystray` (installed via `requirements.txt`) — only used by installed builds, for the system tray icon. On Linux this is the fallback backend; a native GTK + AppIndicator backend is tried first, see [System Tray](#system-tray-installed-builds-only). Not needed for dev-mode (`./run.sh`).
 
 ---
 
@@ -24,6 +25,16 @@ pip install -r requirements.txt
 
 `requirements.txt` includes `pillow-heif` for HEIC/HEIF support. It's optional but strongly recommended — without it, Luminary falls back to system ImageMagick or ffmpeg for HEIC decoding.
 
+**Linux only**, for the system tray icon on installed builds (skip if you only run dev mode via `./run.sh`, or if you're on Windows/macOS): install the AppIndicator bindings so `tray.py` can use its native backend instead of falling back to pystray's less reliable one (see [System Tray](#system-tray-installed-builds-only)):
+
+```bash
+# Ubuntu 20.04 and similar-vintage distros:
+sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-appindicator3-0.1
+
+# Ubuntu 22.04+ and most current distros (note the different package name):
+sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1
+```
+
 ---
 
 ## Quick Start
@@ -34,6 +45,8 @@ chmod +x run.sh
 ```
 
 Then open **http://localhost:5000** in your browser.
+
+`./run.sh` (dev mode) always runs in your terminal with normal console output, exactly as above — this is unchanged. Only the *installed* build (the packaged `.exe`/`.deb`) runs as a system tray application instead; see [System Tray](#system-tray-installed-builds-only).
 
 ```bash
 ./run.sh --sync                            # run a sync pass then start the server
@@ -73,6 +86,8 @@ luminary/
 │       ├── backend/
 │       │   ├── app.py                 # Flask backend — API, scanner, metadata extractor
 │       │   ├── app_paths.py           # Central path resolver — see "Data Locations" below
+│       │   ├── tray.py                # System tray icon — installed builds only, see "System Tray"
+│       │   ├── instance_lock.py       # Single-instance guard — see "Single Instance"
 │       │   ├── config/                # Dev-mode settings — tracked in git
 │       │   │   └── configuration.json # All configurable settings (edit this)
 │       │   ├── data/                  # Dev-mode runtime data — auto-created, git-ignored
@@ -99,6 +114,7 @@ luminary/
         ├── build-deb.sh          # Assembles a .deb from the build-linux.sh output
         ├── usr-bin-luminary      # Launcher installed at /usr/bin/luminary
         ├── luminary.desktop      # Application-menu entry
+        ├── luminary.service      # Example systemd --user service for headless installs (Raspberry Pi, etc.)
         └── debian/
             ├── control           # Package metadata template
             ├── postinst          # Fixes permissions, refreshes desktop/icon caches
@@ -121,6 +137,86 @@ All of the paths above (`data/`, `config/`, `logs/`, `thumbnails/`, `cache/`) ar
   - Linux: `~/.local/share/Luminary/`
 
   If you're upgrading from an older build that stored data inside `_internal\`, `app_paths.py` migrates it to the new location automatically, once, the first time you launch the new version — nothing to do manually.
+
+### Single Instance
+
+Luminary refuses to start a second time while an instance is already running — this applies everywhere: two dev runs, two installed tray-app launches, a dev run alongside an installed build, a headless server, any combination. The guard (`instance_lock.py`) is platform-specific:
+
+- **Windows**: a named OS-level mutex (`CreateMutexW`) is the authoritative check. This is deliberately used instead of a file lock — file-locking APIs are filesystem operations that antivirus/EDR software and backup tools sometimes hook or interfere with (locking is exactly the pattern ransomware heuristics watch for), which can make a non-blocking file lock silently succeed for a second process instead of failing. A named mutex is a kernel object, not a file operation, and isn't subject to that. It's released automatically the instant the process exits for any reason, including a crash or `taskkill /F`.
+- **Linux/macOS**: an OS-level advisory lock (`fcntl.flock`) on a small `luminary.lock` file in the per-user data directory described above, so it's scoped exactly like the DB/config/logs.
+
+On every platform, whichever instance is running also writes its PID and port to `luminary.lock` in the per-user data directory — this file is informational only (used to tell you who's already running and to redirect your browser), never the source of truth for whether another instance exists. A second dev run against the same checkout is blocked, and a second launch of the same installed build is blocked, but a dev run and an installed build don't interfere with each other since they use different data directories.
+
+If a launch finds another instance already running, it doesn't error out — it logs/prints a note, opens `http://localhost:<port>/` in your default browser (skipped automatically on a headless box with no display), and exits cleanly.
+
+If you deliberately want more than one instance at once (e.g. two dev servers on different `--port` values for parallel testing), pass `--allow-multiple-instances` to skip the check.
+
+### System Tray (installed builds only)
+
+- **Dev mode** (`python3 app.py`, or `./run.sh`): unchanged — runs in your terminal with normal console output, no tray icon.
+- **Installed build** (the packaged `.exe`, `.deb`, etc., launched from the Start Menu / application launcher / desktop shortcut, same as any other installed app): runs as a system tray application instead of a visible console window. `tray.py` starts the backend on a background thread and shows a tray icon with:
+
+  | Menu item | Action |
+  |---|---|
+  | **Open Luminary** | Opens `http://localhost:<port>/` in your default browser (also the default action if you double-click the icon) |
+  | **About** | Opens the project's GitHub page |
+  | **Start / Stop** | Toggles the backend on/off — label reflects current state |
+  | **Quit** | Stops the backend and closes the tray icon, ending the app |
+
+  Nothing auto-starts at login or boot — like any other installed app, it only runs once you launch it yourself.
+
+  If you ever need the old plain-console behaviour from an installed build (e.g. to see log output live while debugging), run the executable with `--no-tray`:
+  ```bash
+  # Linux
+  /opt/luminary/Luminary --no-tray
+  # Windows (from a terminal)
+  "C:\Program Files\Luminary\Luminary.exe" --no-tray
+  ```
+
+  **Linux note:** on Linux, `tray.py` tries a native GTK + AppIndicator backend first and only falls back to pystray if that's unavailable — this avoids a real gap where pystray's own backend looks for one specific `AppIndicator` gi typelib name and some distros only ship the other one. Either way, the tray icon still needs a tray/AppIndicator backend from your desktop environment to actually be visible. KDE, XFCE, and most other DEs support it natively; on GNOME you'll need an extension such as [AppIndicator and KStatusNotifierItem Support](https://extensions.gnome.org/extension/615/appindicator-support/). For the native backend specifically, you'll also need `python3-gi`, GTK 3, and one of:
+  - `gir1.2-appindicator3-0.1` (Ubuntu 20.04 and similar-vintage distros), or
+  - `gir1.2-ayatanaappindicator3-0.1` (Ubuntu 22.04+, most current distros)
+
+  The `.deb` package lists these as `Recommends` (not hard `Depends`, since they aren't needed on every desktop environment — pystray remains a working fallback). That's for a desktop that's missing the tray backend but still has a display — for a machine with **no desktop environment at all**, see the next section.
+
+  **Building/running from source on Linux — getting the native backend to actually import:** the `gir1.2-*` packages above provide the AppIndicator library itself, but the native backend also needs Python's `gi` bindings (PyGObject) installed *inside the same virtual environment Luminary runs in*. A system-wide `python3-gi`/`apt install`-provided `gi` isn't visible to a venv created without `--system-site-packages` — `venv-linux` (the one `build-linux.sh`/`run.sh` use) needs its own copy. If the native backend silently falls back to pystray (or you see an `ImportError`/`ModuleNotFoundError` for `gi` in the logs) even after installing the packages above, build PyGObject into the venv:
+
+  ```bash
+  sudo apt install libgirepository1.0-dev gcc libcairo2-dev pkg-config python3-dev
+  source venv-linux/bin/activate
+  pip install PyGObject
+  ```
+
+  The `apt install` line pulls in the headers and compiler PyGObject's build needs — it compiles a C extension against GTK's introspection data, so it isn't a pure-Python wheel and can't just be `pip install`ed on its own. Do this once before running `build-linux.sh` (or before `./run.sh` in dev mode) if the native tray backend isn't being picked up; `pip install -r requirements.txt` alone won't get you there without the system packages first.
+
+### Headless / Server Mode (Linux, e.g. Raspberry Pi)
+
+An installed build launched on a Linux machine with **no display at all** — no X11, no Wayland, no desktop environment installed — can't show a tray icon; there's nothing for it to attach to. This is the normal situation for a headless Raspberry Pi (or any server) set up over SSH.
+
+Luminary detects this automatically: `tray.py` checks for `DISPLAY`/`WAYLAND_DISPLAY` before attempting the tray, and if neither is set, it logs a note and runs as a plain background server instead — the exact same code path dev mode uses. **No flags or config changes are needed** for this to work; it Just Works on a fresh headless install.
+
+The one thing headless setups do need that a desktop doesn't: something to start Luminary automatically on boot, since there's no Start Menu/launcher to click. An example systemd **user** service is provided at `scripts/linux/luminary.service`:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp scripts/linux/luminary.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now luminary.service
+
+# So it also starts on boot without you logging in / opening an SSH session:
+sudo loginctl enable-linger $USER
+```
+
+Check on it with:
+```bash
+systemctl --user status luminary.service
+journalctl --user -u luminary -f
+```
+
+Or skip systemd entirely and just run it directly over SSH for a quick one-off session:
+```bash
+/usr/bin/luminary   # or python3 app/src/backend/app.py in a dev checkout
+```
 
 ### Why SQLite
 
@@ -488,3 +584,34 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 **Settings not saving**
 - Confirm `app.py` is running — Settings are saved via `POST /api/config` which writes to `config/configuration.json`
 - Check file permissions: `ls -l config/configuration.json`
+
+**Tray icon doesn't appear (installed build)**
+- This only applies to installed builds — dev mode (`./run.sh`) never shows a tray icon, that's expected
+- Linux: your desktop environment needs tray/AppIndicator support — install it (e.g. on GNOME, the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/)) and log out/in, or install the packages listed under `Recommends` in the `.deb` if you installed via `dpkg`/`apt`
+- Linux, specifically on Ubuntu 20.04 or similar: `tray.py` now tries a native AppIndicator backend before falling back to pystray, specifically because pystray's own backend can silently fail to find the right typelib on some distro/version combinations — check `logs/log-YYYY-MM-DD.log` for a line noting whether it fell back to pystray and why
+- Building/running from source and the native backend isn't being used even with the `gir1.2-*` packages installed system-wide? It also needs PyGObject built *inside* `venv-linux` — see the "Building/running from source on Linux" note under [System Tray](#system-tray-installed-builds-only):
+  ```bash
+  sudo apt install libgirepository1.0-dev gcc libcairo2-dev pkg-config python3-dev
+  source venv-linux/bin/activate
+  pip install PyGObject
+  ```
+- The app itself is still running even without a visible tray icon — check `logs/log-YYYY-MM-DD.log` under the installed-build data directory (see [Data Locations](#data-locations--dev-mode-vs-installed-builds)) and open `http://localhost:5000` directly
+- To rule out a tray-specific issue, launch with `--no-tray` (see [System Tray](#system-tray-installed-builds-only)) — if the app works fine that way, the problem is specifically with the tray backend, not Luminary itself
+
+**Two tray icons appear after launching Luminary twice**
+- This means the single-instance guard (see [Single Instance](#single-instance)) didn't catch the second launch and should not happen — as of the current `instance_lock.py`, Windows uses a named mutex specifically because file-lock APIs can be silently interfered with by antivirus/EDR/backup software, which was a known cause of this symptom
+- Confirm you're on a build that includes this fix: check `logs/log-YYYY-MM-DD.log` — the second launch should log an "already running" line naming the first instance's PID
+- If it's still reproducible, check Task Manager for the actual process count (two `Luminary.exe` processes vs. one process somehow drawing two icons) and report which it is
+
+**Headless install (Raspberry Pi, etc.) — is it running as a tray app or not?**
+- It shouldn't be — no tray icon is expected on a machine with no display at all; Luminary should auto-detect this and run as a plain background server (see [Headless / Server Mode](#headless--server-mode-linux-eg-raspberry-pi))
+- Confirm the auto-detection kicked in: check the log for a line like `No graphical session detected ... running Luminary as a plain background server`
+- If it's hanging or erroring instead of falling back, `DISPLAY`/`WAYLAND_DISPLAY` may be set to a stale/invalid value in your shell (common after an old X11-forwarded SSH session) — `echo $DISPLAY` to check, `unset DISPLAY WAYLAND_DISPLAY` to clear it, or just pass `--no-tray` to force plain mode regardless
+- Not starting after a reboot? You likely haven't set up the systemd service yet — see `scripts/linux/luminary.service`
+
+**"Luminary is already running" but I don't see it**
+- On an installed build with a display, this should have opened `http://localhost:<port>/` in your browser automatically — check for a browser window/tab that already opened
+- The message includes the PID and port of the running instance; confirm it's actually alive: `ps -p <PID>` (Linux/macOS) or Task Manager (Windows). If that PID is gone but you still get this message:
+  - **Windows**: the guard is a named mutex, not a file, so it's released automatically the instant a process exits — there's nothing to delete by hand. If this happens anyway, it's worth reporting.
+  - **Linux/macOS**: the lock file's OS-level `flock` should have released automatically when that process exited — this would be unusual and worth reporting, but as a workaround you can delete the lock file directly (see [Data Locations](#data-locations--dev-mode-vs-installed-builds) for where `luminary.lock` lives) while no instance is running
+- Intentionally want two running at once (e.g. two dev servers on different ports)? Pass `--allow-multiple-instances`

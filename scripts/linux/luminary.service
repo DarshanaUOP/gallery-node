@@ -1,0 +1,43 @@
+# Luminary — example systemd USER service for headless Linux installs
+# (e.g. a Raspberry Pi set up over SSH with no desktop environment).
+#
+# On a normal desktop, Luminary is launched manually from the Start
+# Menu/application launcher like any other app (see README.md's "System
+# Tray" section) — nothing auto-starts. A headless machine has no such
+# launcher to click, so if you want Luminary running automatically after
+# boot/reboot, install this as a systemd --user service instead.
+#
+# Luminary itself needs no flags or config changes for this: tray.py
+# auto-detects the missing DISPLAY/WAYLAND_DISPLAY and runs as a plain
+# background server rather than attempting a system tray icon — see
+# README.md's "Headless / Server Mode" section.
+#
+# Install (as the user Luminary should run as, e.g. "pi" — NOT root):
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/linux/luminary.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now luminary.service
+#
+# So it also starts before you log in / over SSH without an active session:
+#   sudo loginctl enable-linger $USER
+#
+# Logs:
+#   journalctl --user -u luminary -f
+#   # or Luminary's own log files — see README.md's "Data Locations" section
+#
+# Uninstall:
+#   systemctl --user disable --now luminary.service
+#   rm ~/.config/systemd/user/luminary.service
+
+[Unit]
+Description=Luminary — Local Media Gallery
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/luminary
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

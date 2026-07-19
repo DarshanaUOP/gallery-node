@@ -2492,6 +2492,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Luminary backend")
     parser.add_argument("--sync-only", action="store_true", help="Run sync and exit without starting server")
     parser.add_argument("--port", type=int, default=5000, help="API port (default 5000)")
+    parser.add_argument("--no-tray", action="store_true",
+                         help="Force plain console mode even in an installed build "
+                              "(skips the system tray icon; useful for debugging)")
+    parser.add_argument("--allow-multiple-instances", action="store_true",
+                         help="Skip the single-instance check (advanced/dev use only — "
+                              "e.g. intentionally running two dev servers on different "
+                              "--port values at once)")
     args = parser.parse_args()
 
     if args.sync_only:
@@ -2503,4 +2510,73 @@ if __name__ == "__main__":
         print("ERROR: Flask not installed. Run: pip install flask flask-cors")
         sys.exit(1)
 
-    run_server(port=args.port)
+    # ── single-instance guard ────────────────────────────────────────────
+    # Applies in every environment (dev console, installed tray app, headless
+    # server) — see instance_lock.py for how the lock actually works and why
+    # it's crash-safe. Skipped entirely for --sync-only above since that's a
+    # short-lived one-off command, not "the app running".
+    instance_lock = None
+    if not args.allow_multiple_instances:
+        from instance_lock import SingleInstance
+        instance_lock = SingleInstance(port=args.port)
+        if instance_lock.already_running:
+            existing_port = instance_lock.existing_port or args.port
+            msg = (
+                f"Luminary is already running (PID {instance_lock.existing_pid}, "
+                f"http://localhost:{existing_port}/) — not starting a second instance."
+            )
+            print(msg)
+            log.info(msg)
+            try:
+                from tray import is_display_available
+                if is_display_available():
+                    import webbrowser
+                    webbrowser.open(f"http://localhost:{existing_port}/")
+            except Exception:
+                pass  # best-effort only — a headless box has nothing to open anyway
+            sys.exit(0)
+
+    # Dev mode (`python3 app.py` / `./run.sh`, i.e. NOT a frozen PyInstaller
+    # build) always runs the plain console server, exactly as before — you
+    # keep seeing normal terminal output while developing.
+    #
+    # A frozen/installed build (double-clicked from the Start Menu / desktop
+    # launcher) instead runs as a system tray application: no console window,
+    # an icon in the tray with Open/About/Start-Stop/Quit, and the server
+    # itself running on a background thread that the tray controls.
+    #
+    # Exception: a headless Linux install (e.g. a Raspberry Pi set up over
+    # SSH with no desktop environment) has no display for a tray icon to
+    # attach to at all — that's auto-detected below and falls back to the
+    # same plain background server dev mode uses, with no action needed from
+    # the user (see README.md's "Headless / Server Mode" section for running
+    # it as a systemd service in that case).
+    run_as_tray = app_paths.is_frozen() and not args.no_tray
+
+    try:
+        if run_as_tray:
+            try:
+                from tray import run_tray, is_display_available
+                if not is_display_available():
+                    log.info(
+                        "No graphical session detected (DISPLAY/WAYLAND_DISPLAY not "
+                        "set — likely a headless Linux install, e.g. a Raspberry Pi "
+                        "without a desktop environment). Running Luminary as a plain "
+                        "background server instead of a system tray app."
+                    )
+                    run_server(port=args.port)
+                else:
+                    run_tray(app, port=args.port)
+            except Exception:
+                log.exception("Failed to start the system tray — falling back to console mode.")
+                run_server(port=args.port)
+        else:
+            run_server(port=args.port)
+    finally:
+        # Releases the OS-level lock so the next launch can acquire it —
+        # reached on normal shutdown (Quit from the tray, Ctrl+C in dev
+        # mode) as well as on any unhandled exception above. If the lock
+        # was never acquired (already_running, or --allow-multiple-instances
+        # was passed), this is a harmless no-op.
+        if instance_lock is not None:
+            instance_lock.release()
