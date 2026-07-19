@@ -605,6 +605,26 @@ def query_media(filters: dict, sort: str, offset: int, limit: int) -> tuple:
         like = f"%{q}%"
         args.extend([like, like, like])
 
+    # Date range — dateFrom/dateTo are plain "YYYY-MM-DD" strings from the
+    # frontend's <input type="date">. m.date_sort is stored as a full ISO
+    # timestamp (see _row_to_media_dict), so a "YYYY-MM-DD" bound compares
+    # correctly against it lexicographically (it's a shorter, equal-prefix
+    # string) without needing to parse either side. dateTo gets a trailing
+    # end-of-day timestamp appended so the whole selected end day is included
+    # rather than only its midnight instant. Items with no known date
+    # (date_sort == "") are excluded once either bound is set, since they
+    # can't be meaningfully placed inside a date range.
+    date_from = (filters.get("dateFrom") or "").strip()
+    date_to   = (filters.get("dateTo") or "").strip()
+    if date_from or date_to:
+        where.append("m.date_sort != ''")
+    if date_from:
+        where.append("m.date_sort >= ?")
+        args.append(date_from)
+    if date_to:
+        where.append("m.date_sort <= ?")
+        args.append(date_to + "T23:59:59.999999")
+
     if album_id:
         # JOIN restricts results to album members only
         from_sql  = "FROM media m INNER JOIN album_media am ON m.uniqueName = am.uniqueName AND am.album_id = ?"
@@ -1624,6 +1644,8 @@ if FLASK_AVAILABLE:
           location (str,    optional)           — filter by source_root path
           q        (str,    optional)           — search string
           hidden   (str,    optional)           — true | false | include
+          dateFrom (str,    optional)           — "YYYY-MM-DD", inclusive lower bound on date_sort
+          dateTo   (str,    optional)           — "YYYY-MM-DD", inclusive upper bound on date_sort
         Response:
           { items, offset, limit, total, has_more }
         """
