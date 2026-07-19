@@ -59,6 +59,16 @@ async function init() {
   populateAllFilters();   // fetches /api/media/formats, /api/media/cameras, /api/locations
   setupIntersectionObserver();
   setupGalleryImageObserver();
+  setupDateFilterBounds();
+}
+
+// Caps both date-range inputs at today — media can't be dated in the future.
+function setupDateFilterBounds() {
+  const today = new Date().toISOString().slice(0, 10);
+  const fromEl = document.getElementById('filter-date-from');
+  const toEl   = document.getElementById('filter-date-to');
+  if (fromEl) fromEl.max = today;
+  if (toEl)   toEl.max   = today;
 }
 
 // Creates (once) the IntersectionObserver that lazily loads each gallery
@@ -139,15 +149,19 @@ function _serverSort() {
 // Build the current active filter params to send to the server
 function _serverFilters() {
   const params = {};
-  const fmt = document.getElementById('filter-format')?.value  || '';
-  const cam = document.getElementById('filter-camera')?.value  || '';
-  const loc = document.getElementById('filter-location')?.value || '';
-  const q   = document.getElementById('search-input')?.value   || '';
+  const fmt  = document.getElementById('filter-format')?.value    || '';
+  const cam  = document.getElementById('filter-camera')?.value    || '';
+  const loc  = document.getElementById('filter-location')?.value  || '';
+  const q    = document.getElementById('search-input')?.value     || '';
+  const from = document.getElementById('filter-date-from')?.value || '';
+  const to   = document.getElementById('filter-date-to')?.value   || '';
 
-  if (fmt) params.format   = fmt;
-  if (cam) params.camera   = cam;
-  if (loc) params.location = loc;
-  if (q)   params.q        = q;
+  if (fmt)  params.format   = fmt;
+  if (cam)  params.camera   = cam;
+  if (loc)  params.location = loc;
+  if (q)    params.q        = q;
+  if (from) params.dateFrom = from;
+  if (to)   params.dateTo   = to;
 
   // Album view — let server filter by album membership via JOIN
   if (currentView !== 'all' && currentView !== 'hidden') {
@@ -306,6 +320,31 @@ function toggleFolder(folderId) {
   else collapsedFolders.add(folderId);
   try { localStorage.setItem('luminary_collapsed_folders', JSON.stringify([...collapsedFolders])); } catch {}
   renderAlbumNav();
+}
+
+// Keeps the two date inputs from crossing each other (from can't be after
+// to, and vice versa), shows/hides the clear (✕) button, then re-queries.
+function onDateFilterChange() {
+  const fromEl = document.getElementById('filter-date-from');
+  const toEl   = document.getElementById('filter-date-to');
+  if (fromEl.value) toEl.min   = fromEl.value; else toEl.removeAttribute('min');
+  if (toEl.value)   fromEl.max = toEl.value;   else fromEl.removeAttribute('max');
+
+  const clearBtn = document.getElementById('filter-date-clear');
+  clearBtn.style.display = (fromEl.value || toEl.value) ? 'inline' : 'none';
+
+  applyFilters();
+}
+
+function clearDateFilter() {
+  const fromEl = document.getElementById('filter-date-from');
+  const toEl   = document.getElementById('filter-date-to');
+  fromEl.value = '';
+  toEl.value   = '';
+  fromEl.removeAttribute('max');
+  toEl.removeAttribute('min');
+  document.getElementById('filter-date-clear').style.display = 'none';
+  applyFilters();
 }
 
 function applyFilters() {

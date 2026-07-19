@@ -413,6 +413,7 @@ New media appears in the gallery immediately — no page refresh needed.
 ### Filtering & Sorting
 - **Sort** — Newest First / Oldest First (by modified date, falling back to created) / Name; sorting is server-side so all records are sorted correctly regardless of which page has loaded
 - **Filter dropdowns** — Format, Camera, Location; populated from the full database on load via dedicated indexed API endpoints, not from the currently loaded page
+- **Date range filter** — From/To date pickers in the filter bar restrict results to media dated within the selected (inclusive) range; ✕ clears it
 - **Search** — full-text across filename, camera make/model, and date
 - All filters are applied server-side; each filter change re-fetches from the server at offset 0
 
@@ -465,7 +466,7 @@ All media endpoints support server-side filtering via query parameters.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/media` | Filtered, sorted, paginated media. Params: `offset`, `limit`, `sort` (`date-desc`\|`date-asc`\|`name`), `format`, `camera`, `location`, `q`, `hidden` (`true`\|`include`) |
+| GET | `/api/media` | Filtered, sorted, paginated media. Params: `offset`, `limit`, `sort` (`date-desc`\|`date-asc`\|`name`), `format`, `camera`, `location`, `q`, `hidden` (`true`\|`include`), `dateFrom`/`dateTo` (`YYYY-MM-DD`, inclusive) |
 | GET | `/api/media/by-id/<uniqueName>` | Single full media record — used by the map panel to fetch details on demand |
 | GET | `/api/media/count` | `{total: N}` — fast indexed count |
 | GET | `/api/media/formats` | All distinct formats in the database (`SELECT DISTINCT` on indexed column) |
