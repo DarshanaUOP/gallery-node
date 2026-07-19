@@ -179,6 +179,16 @@ If you deliberately want more than one instance at once (e.g. two dev servers on
 
   The `.deb` package lists these as `Recommends` (not hard `Depends`, since they aren't needed on every desktop environment — pystray remains a working fallback). That's for a desktop that's missing the tray backend but still has a display — for a machine with **no desktop environment at all**, see the next section.
 
+  **Building/running from source on Linux — getting the native backend to actually import:** the `gir1.2-*` packages above provide the AppIndicator library itself, but the native backend also needs Python's `gi` bindings (PyGObject) installed *inside the same virtual environment Luminary runs in*. A system-wide `python3-gi`/`apt install`-provided `gi` isn't visible to a venv created without `--system-site-packages` — `venv-linux` (the one `build-linux.sh`/`run.sh` use) needs its own copy. If the native backend silently falls back to pystray (or you see an `ImportError`/`ModuleNotFoundError` for `gi` in the logs) even after installing the packages above, build PyGObject into the venv:
+
+  ```bash
+  sudo apt install libgirepository1.0-dev gcc libcairo2-dev pkg-config python3-dev
+  source venv-linux/bin/activate
+  pip install PyGObject
+  ```
+
+  The `apt install` line pulls in the headers and compiler PyGObject's build needs — it compiles a C extension against GTK's introspection data, so it isn't a pure-Python wheel and can't just be `pip install`ed on its own. Do this once before running `build-linux.sh` (or before `./run.sh` in dev mode) if the native tray backend isn't being picked up; `pip install -r requirements.txt` alone won't get you there without the system packages first.
+
 ### Headless / Server Mode (Linux, e.g. Raspberry Pi)
 
 An installed build launched on a Linux machine with **no display at all** — no X11, no Wayland, no desktop environment installed — can't show a tray icon; there's nothing for it to attach to. This is the normal situation for a headless Raspberry Pi (or any server) set up over SSH.
@@ -579,6 +589,12 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 - This only applies to installed builds — dev mode (`./run.sh`) never shows a tray icon, that's expected
 - Linux: your desktop environment needs tray/AppIndicator support — install it (e.g. on GNOME, the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/)) and log out/in, or install the packages listed under `Recommends` in the `.deb` if you installed via `dpkg`/`apt`
 - Linux, specifically on Ubuntu 20.04 or similar: `tray.py` now tries a native AppIndicator backend before falling back to pystray, specifically because pystray's own backend can silently fail to find the right typelib on some distro/version combinations — check `logs/log-YYYY-MM-DD.log` for a line noting whether it fell back to pystray and why
+- Building/running from source and the native backend isn't being used even with the `gir1.2-*` packages installed system-wide? It also needs PyGObject built *inside* `venv-linux` — see the "Building/running from source on Linux" note under [System Tray](#system-tray-installed-builds-only):
+  ```bash
+  sudo apt install libgirepository1.0-dev gcc libcairo2-dev pkg-config python3-dev
+  source venv-linux/bin/activate
+  pip install PyGObject
+  ```
 - The app itself is still running even without a visible tray icon — check `logs/log-YYYY-MM-DD.log` under the installed-build data directory (see [Data Locations](#data-locations--dev-mode-vs-installed-builds)) and open `http://localhost:5000` directly
 - To rule out a tray-specific issue, launch with `--no-tray` (see [System Tray](#system-tray-installed-builds-only)) — if the app works fine that way, the problem is specifically with the tray backend, not Luminary itself
 
