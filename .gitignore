@@ -34,3 +34,6 @@ build/
 
 ## ffmpeg executables
 .ffmpeg*
+
+## lock files
+*.lock
