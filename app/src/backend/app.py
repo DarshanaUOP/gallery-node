@@ -658,6 +658,102 @@ def query_media(filters: dict, sort: str, offset: int, limit: int) -> tuple:
 
     return [_row_to_media_dict(r) for r in rows], total
 
+
+def query_media_groups(filters, group_by, year=None):
+    """
+    Bucket the media table by year or month, entirely in SQL — used by the
+    gallery's Years/Months grouping view. Never loads full result sets into
+    Python just to bucket them: one aggregate query gets the counts, then one
+    small LIMIT-4 query per bucket gets the "most recent" preview thumbnails
+    for that stack card. This keeps the response tiny even for a library of
+    tens of thousands of items — only up to (buckets * 4) media rows are ever
+    read, never "all photos in the bucket".
+
+    filters accepts the same format/camera/location/q/hidden params as
+    query_media() (applied identically before bucketing). dateFrom/dateTo are
+    intentionally NOT applied here — grouping IS the date navigation.
+
+    group_by: 'year' -> buckets keyed "YYYY"
+              'month' -> buckets keyed "YYYY-MM", optionally restricted to a
+                         single `year` ("YYYY") so the frontend can show just
+                         that year's months after a year card is clicked.
+
+    Items with no known date (date_sort == '') can't be meaningfully placed
+    in a year/month bucket, so — like the dateFrom/dateTo range filter in
+    query_media() — they're excluded here. They still appear in the "All"
+    (ungrouped) view.
+
+    Returns: [ { "key": "YYYY" | "YYYY-MM", "count": int, "preview": [media, ...] }, ... ]
+    ordered most-recent bucket first.
+    """
+    conn = get_db_conn()
+
+    where = ["m.date_sort != ''"]
+    args  = []
+
+    hidden = (filters.get("hidden") or "").strip().lower()
+    if hidden == "true":
+        where.append("m.isHidden = 1")
+    elif hidden != "include":
+        where.append("m.isHidden = 0")
+
+    fmt = (filters.get("format") or "").strip().upper()
+    if fmt:
+        where.append("m.format = ?")
+        args.append(fmt)
+
+    cam = (filters.get("camera") or "").strip()
+    if cam:
+        where.append("m.camera_label = ?")
+        args.append(cam)
+
+    loc = (filters.get("location") or "").strip().rstrip("/\\")
+    if loc:
+        where.append("(m.source_root = ? OR m.source_root LIKE ? OR m.file_path = ? OR m.file_path LIKE ?)")
+        args.extend([loc, loc + "/%", loc, loc + "/%"])
+
+    q = (filters.get("q") or "").strip().lower()
+    if q:
+        where.append("(LOWER(m.name) LIKE ? OR LOWER(m.camera_label) LIKE ? OR m.date_created LIKE ?)")
+        like = f"%{q}%"
+        args.extend([like, like, like])
+
+    bucket_expr = "substr(m.date_sort,1,4)" if group_by == "year" else "substr(m.date_sort,1,7)"
+
+    if group_by == "month" and year:
+        where.append("substr(m.date_sort,1,4) = ?")
+        args.append(year)
+
+    where_sql = "WHERE " + " AND ".join(where)
+
+    count_sql = f"""
+        SELECT {bucket_expr} AS bucket, COUNT(*) AS cnt
+        FROM media m
+        {where_sql}
+        GROUP BY bucket
+        ORDER BY bucket DESC
+    """
+
+    groups = []
+    with _db_lock:
+        buckets = conn.execute(count_sql, args).fetchall()
+        for b in buckets:
+            bucket_key = b["bucket"]
+            preview_sql = f"""
+                SELECT m.* FROM media m
+                {where_sql} AND {bucket_expr} = ?
+                ORDER BY m.date_sort DESC
+                LIMIT 4
+            """
+            preview_rows = conn.execute(preview_sql, args + [bucket_key]).fetchall()
+            groups.append({
+                "key":     bucket_key,
+                "count":   b["cnt"],
+                "preview": [_row_to_media_dict(r) for r in preview_rows],
+            })
+
+    return groups
+
 def get_distinct_formats() -> list:
     conn = get_db_conn()
     rows = conn.execute(
@@ -1660,6 +1756,31 @@ if FLASK_AVAILABLE:
             "total":    total,
             "has_more": (offset + limit) < total,
         })
+
+    @app.route("/api/media/groups", methods=["GET"])
+    def api_media_groups():
+        """
+        Bucket media into year or month stacks for the gallery's grouping view
+        (All / Years / Months). SQL-backed via query_media_groups() — only
+        counts plus up to 4 preview thumbnails per bucket are ever loaded, so
+        this stays cheap no matter how large the library is.
+
+        Query params:
+          groupBy  (str, required) — 'year' | 'month'
+          year     (str, optional) — with groupBy=month, restricts results to
+                                      the months within this year ("YYYY").
+                                      Omitted -> months across all years.
+          Also accepts the same format/camera/location/q/hidden filters as
+          /api/media, applied identically before bucketing.
+        Response:
+          { groups: [ { key, count, preview: [...] }, ... ], group_by }
+        """
+        group_by = (request.args.get("groupBy") or "").strip().lower()
+        if group_by not in ("year", "month"):
+            return jsonify({"error": "groupBy must be 'year' or 'month'"}), 400
+        year = (request.args.get("year") or "").strip() or None
+        groups = query_media_groups(request.args, group_by, year=year)
+        return jsonify({"groups": groups, "group_by": group_by})
 
     # ── shared image helpers ──────────────────────────────────────────────────
 
