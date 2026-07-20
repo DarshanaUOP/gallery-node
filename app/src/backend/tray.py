@@ -8,6 +8,8 @@ this module and keep the normal terminal/console behaviour unchanged.
 
 Tray menu:
   Open Luminary   — opens http://localhost:<port>/ in the default browser
+  Dashboard       — opens a local status window (dashbord.py): server health/
+                    monitoring on one tab, indexed-media stats on another
   About           — opens the project's GitHub page
   Start / Stop    — toggles the backend server on/off; label reflects state
   Quit            — stops the backend (if running) and exits the tray app
@@ -55,6 +57,7 @@ import importlib
 import logging
 import platform
 import threading
+import time
 import webbrowser
 
 log = logging.getLogger("luminary.tray")
@@ -80,10 +83,18 @@ class ServerController:
         self._server = None
         self._thread = None
         self._lock = threading.Lock()
+        self.started_at = None  # time.monotonic() timestamp, set on start(); read by dashbord.py
 
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def uptime_seconds(self):
+        """Seconds since the backend last started, or None if it isn't running."""
+        if not self.running or self.started_at is None:
+            return None
+        return time.monotonic() - self.started_at
 
     def start(self):
         with self._lock:
@@ -109,6 +120,7 @@ class ServerController:
                 target=target, name="luminary-server", daemon=True
             )
             self._thread.start()
+            self.started_at = time.monotonic()
 
     def stop(self):
         with self._lock:
@@ -124,6 +136,7 @@ class ServerController:
             self._thread.join(timeout=5)
             self._thread = None
             self._server = None
+            self.started_at = None
             log.info("Luminary backend stopped")
 
 
@@ -225,6 +238,20 @@ def _import_appindicator():
 
     return appindicator, Gtk, GLib
 
+def _open_dashboard(controller: ServerController, port: int):
+    """
+    Opens the Dashboard window (dashbord.py). Imported lazily here, not at
+    module load, so a missing/broken Tkinter or psutil install never
+    prevents the tray icon itself from starting — only the Dashboard menu
+    item would fail, and only when clicked.
+    """
+    try:
+        import dashbord
+        dashbord.open_dashboard(controller, port)
+    except Exception:
+        log.exception("Failed to open the Dashboard window")
+
+
 def _run_tray_appindicator(app, port: int, open_on_start: bool):
     """
     Native GTK + AppIndicator tray backend — tried first on Linux (see the
@@ -251,6 +278,9 @@ def _run_tray_appindicator(app, port: int, open_on_start: bool):
     def on_about(_item):
         webbrowser.open(ABOUT_URL)
 
+    def on_dashboard(_item):
+        _open_dashboard(controller, port)
+
     def on_toggle(_item):
         if controller.running:
             controller.stop()
@@ -267,6 +297,10 @@ def _run_tray_appindicator(app, port: int, open_on_start: bool):
     open_item = Gtk.MenuItem(label="Open Luminary")
     open_item.connect("activate", on_open)
     menu.append(open_item)
+
+    dashboard_item = Gtk.MenuItem(label="Dashboard")
+    dashboard_item.connect("activate", on_dashboard)
+    menu.append(dashboard_item)
 
     about_item = Gtk.MenuItem(label="About")
     about_item.connect("activate", on_about)
@@ -323,6 +357,9 @@ def _run_tray_pystray(app, port: int, open_on_start: bool):
     def on_about(icon, item):
         webbrowser.open(ABOUT_URL)
 
+    def on_dashboard(icon, item):
+        _open_dashboard(controller, port)
+
     def on_toggle(icon, item):
         if controller.running:
             controller.stop()
@@ -341,6 +378,7 @@ def _run_tray_pystray(app, port: int, open_on_start: bool):
             "Open Luminary", on_open, default=True,
             enabled=lambda item: controller.running,
         ),
+        MenuItem("Dashboard", on_dashboard),
         MenuItem("About", on_about),
         pystray.Menu.SEPARATOR,
         MenuItem(toggle_label, on_toggle),

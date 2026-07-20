@@ -16,11 +16,18 @@ pillow-heif>=0.13
 # metadata. Without this, app.py falls back to using the raw tag value as-is.
 python-dateutil>=2.8
 
-# System tray icon for installed builds (Open Luminary / About / Start-Stop /
-# Quit menu — see app/src/backend/tray.py). Not needed for dev-mode runs via
-# run.sh, only used when the packaged .exe/binary is launched. Reuses Pillow
-# (already required above) for the tray icon image.
+# System tray icon for installed builds (Open Luminary / Dashboard / About /
+# Start-Stop / Quit menu — see app/src/backend/tray.py). Not needed for
+# dev-mode runs via run.sh, only used when the packaged .exe/binary is
+# launched. Reuses Pillow (already required above) for the tray icon image.
 pystray>=0.19
+
+# CPU/memory stats shown on the tray Dashboard's Home tab (see
+# app/src/backend/dashbord.py). Optional: without it, the Dashboard still
+# opens and shows server status + media stats, just with "psutil not
+# installed" in place of the CPU/memory rows. The Dashboard UI itself is
+# plain Tkinter (stdlib), so this is the only extra dependency it needs.
+psutil>=5.9
 #   Linux note: pystray needs a tray backend from the desktop environment
 #   itself (AppIndicator/GTK on GNOME, native tray on KDE/XFCE, etc.) — this
 #   is a system package, not something pip can install.
