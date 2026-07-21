@@ -28,6 +28,19 @@ Design notes
   is handed back to the Tk main loop through a plain queue.Queue; the UI
   thread only ever does non-blocking queue reads, so a slow/unreachable
   server can never freeze the window.
+- Window lifecycle: the Tk() root is created once, the first time the
+  Dashboard is opened, and lives for the rest of the app's life. Clicking
+  the window's close button only withdraws (hides) it — it does not
+  destroy the root — and reopening from the tray just re-shows the same
+  window. This is deliberate: creating a fresh Tk() after a previous one
+  was destroyed in the same process is fragile (testing showed it can
+  intermittently hang), so "create once, hide/show repeatedly" sidesteps
+  that entirely, on top of guaranteeing that closing the Dashboard can
+  never affect the backend server or the tray icon — see
+  DashboardWindow._on_window_close(). Any cross-thread signal into the Tk
+  thread (e.g. re-showing the window when the tray's own thread requests
+  it) goes through the same queue.Queue rather than a direct Tk call, for
+  the same reason — see DashboardWindow.bring_to_front().
 - Threading model: pystray/AppIndicator already own the process's main
   thread with their own event loop (see tray.py's module docstring), so this
   window runs its own Tk root + mainloop on a dedicated background thread.
@@ -229,6 +242,16 @@ class DashboardWindow:
         self.root.resizable(False, False)  # fixed-size window, per request
         _set_window_icon(self.root)
 
+        # IMPORTANT: without an explicit WM_DELETE_WINDOW handler, some
+        # platforms fall back to Tk's own default close behavior for a root
+        # window, which can tear down the whole Tcl interpreter/process
+        # rather than just this window — that's what caused closing the
+        # Dashboard to kill the entire Luminary app. Binding it ourselves to
+        # a plain self.root.destroy() scopes the close to this window only;
+        # the backend server and tray icon live in a completely separate
+        # thread/event loop and are never touched here.
+        self.root.protocol("WM_DELETE_WINDOW", self._on_window_close)
+
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -352,7 +375,10 @@ class DashboardWindow:
     def _auto_refresh_tick(self):
         if not self._alive():
             return
-        self._schedule_fetch()
+        # Skip the actual fetch while hidden (closed) — nothing's watching
+        # it — but keep rescheduling so it resumes instantly on reopen.
+        if self.root.state() != "withdrawn":
+            self._schedule_fetch()
         self.root.after(REFRESH_INTERVAL_MS, self._auto_refresh_tick)
 
     def _poll_queue(self):
@@ -360,10 +386,22 @@ class DashboardWindow:
             return
         try:
             while True:
-                kind, home, media = self._queue.get_nowait()
-                self._apply_home(home)
-                self._apply_media(media)
-                self._status_var.set(f"Updated {time.strftime('%H:%M:%S')}")
+                item = self._queue.get_nowait()
+                kind = item[0]
+                if kind == "data":
+                    _, home, media = item
+                    self._apply_home(home)
+                    self._apply_media(media)
+                    self._status_var.set(f"Updated {time.strftime('%H:%M:%S')}")
+                elif kind == "raise":
+                    # Requested by bring_to_front() from another thread (the
+                    # tray's own thread) — handled here, on the Tk thread
+                    # itself, via the queue rather than a direct cross-thread
+                    # Tk call. Tkinter calls from a foreign thread aren't
+                    # reliably safe; queue.Queue.put() is.
+                    self.root.deiconify()
+                    self.root.lift()
+                    self.root.focus_force()
         except queue.Empty:
             pass
         self.root.after(QUEUE_POLL_MS, self._poll_queue)
@@ -464,20 +502,44 @@ class DashboardWindow:
         except Exception:
             return False
 
+    def _on_window_close(self):
+        """
+        The only thing an "X" click on the Dashboard should ever do: hide
+        this window. This withdraws rather than destroys the root on
+        purpose — Tcl/Tk is fragile about creating a fresh Tk() interpreter
+        after a previous one was destroyed in the same process (testing
+        showed this can intermittently hang on the *second* such root), so
+        the safe pattern here is "create the one root once, hide/show it
+        repeatedly" rather than "destroy and recreate every time". No
+        sys.exit(), no touching the server controller, no reaching into the
+        tray — this window, now just hidden, is the only thing affected.
+        """
+        try:
+            self.root.withdraw()
+        except Exception:
+            pass
+
     def show(self):
-        """Blocks until the window is closed."""
+        """
+        Blocks for as long as this Tk root exists — in practice, for the
+        rest of the app's life, since closing the window only withdraws
+        (hides) it rather than destroying the root; see _on_window_close().
+        """
         self.root.mainloop()
 
     def bring_to_front(self):
         """
-        Best-effort: called from a different thread (the tray's own event
-        loop) when the user clicks "Dashboard" while it's already open.
-        Tkinter calls aren't officially thread-safe, but scheduling through
-        .after(0, …) from another thread is a common, generally-safe-enough
-        pattern in CPython for a simple "raise this window" action.
+        Called from a different thread (the tray's own event loop) when the
+        user clicks "Dashboard" while it's already open (or was previously
+        closed/hidden). Tkinter calls made directly from a thread that
+        isn't running that root's mainloop are not reliably safe — under
+        real-world conditions this can hang rather than raise, so this
+        hands the request to the Tk thread through the same plain
+        queue.Queue used for data updates instead of touching self.root
+        directly. queue.Queue is itself thread-safe.
         """
         try:
-            self.root.after(0, lambda: (self.root.deiconify(), self.root.lift(), self.root.focus_force()))
+            self._queue.put(("raise",))
         except Exception:
             pass
 
@@ -491,9 +553,14 @@ _state = {"window": None}
 def open_dashboard(controller, port: int):
     """
     Open the Dashboard window, or bring the existing one to front if it's
-    already open. Runs its own Tk mainloop on a dedicated daemon thread —
-    see the module docstring for why (pystray/AppIndicator already own the
-    process's main thread).
+    already open (or was previously closed — closing only hides it, see
+    DashboardWindow._on_window_close). Only ever constructs one Tk() root
+    for the life of the process: the first call creates it and starts its
+    mainloop on a dedicated daemon thread (pystray/AppIndicator already own
+    the process's main thread with their own event loop — see the module
+    docstring); every later call just re-shows that same root. Deliberately
+    never destroys and recreates the root, since doing that repeatedly is
+    the specific pattern that can hang (see _on_window_close's docstring).
     """
     with _state_lock:
         win = _state["window"]
@@ -513,3 +580,24 @@ def open_dashboard(controller, port: int):
                         _state["window"] = None
 
         threading.Thread(target=_run, name="luminary-dashboard", daemon=True).start()
+
+
+def shutdown():
+    """
+    Fully destroys the Dashboard's Tk root, if one was ever created.
+    Optional — the dashboard thread is a daemon thread, so the process
+    exiting cleans it up either way — but calling this from the tray's Quit
+    handler gives a tidy, immediate teardown instead of leaving a hidden
+    window around until process exit. Harmless to call if no Dashboard was
+    ever opened. Safe to call from any thread: this is the one and only
+    root this process will ever destroy, so the cross-thread-Tk-call
+    fragility that affects *repeated* create/destroy cycles doesn't apply.
+    """
+    with _state_lock:
+        win = _state["window"]
+    if win is None:
+        return
+    try:
+        win.root.after(0, win.root.destroy)
+    except Exception:
+        pass

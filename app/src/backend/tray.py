@@ -56,6 +56,7 @@ import os
 import importlib
 import logging
 import platform
+import sys
 import threading
 import time
 import webbrowser
@@ -252,6 +253,26 @@ def _open_dashboard(controller: ServerController, port: int):
         log.exception("Failed to open the Dashboard window")
 
 
+def _shutdown_dashboard():
+    """
+    Tears down the Dashboard window's Tk root (if one was ever created)
+    when the tray is quitting. Optional cleanliness — the dashboard runs on
+    a daemon thread, so the process exiting would take it down anyway —
+    but this avoids leaving a hidden Tk window lingering for however long
+    shutdown otherwise takes. Only imports dashbord if it was already
+    imported (i.e. the Dashboard was opened at least once this session);
+    never triggers the (comparatively heavy) Tkinter/psutil import path
+    just to quit.
+    """
+    dashbord = sys.modules.get("dashbord")
+    if dashbord is None:
+        return
+    try:
+        dashbord.shutdown()
+    except Exception:
+        log.exception("Failed to shut down the Dashboard window")
+
+
 def _run_tray_appindicator(app, port: int, open_on_start: bool):
     """
     Native GTK + AppIndicator tray backend — tried first on Linux (see the
@@ -289,6 +310,7 @@ def _run_tray_appindicator(app, port: int, open_on_start: bool):
         toggle_item.set_label("Stop Luminary" if controller.running else "Start Luminary")
 
     def on_quit(_item):
+        _shutdown_dashboard()
         controller.stop()
         Gtk.main_quit()
 
@@ -367,6 +389,7 @@ def _run_tray_pystray(app, port: int, open_on_start: bool):
             controller.start()
 
     def on_quit(icon, item):
+        _shutdown_dashboard()
         controller.stop()
         icon.stop()
 
