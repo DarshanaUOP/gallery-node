@@ -709,7 +709,7 @@
     color: var(--text-muted);
     font-size: calc(28px * var(--font-scale));
   }
-  .stack-info { margin-top: 14px; }
+  .stack-info { margin-top: 14px; position: relative; z-index: 5; }
   .stack-label {
     font-size: calc(15px * var(--font-scale));
     color: var(--text);
