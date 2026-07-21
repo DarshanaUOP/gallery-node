@@ -776,6 +776,27 @@ def get_media_count() -> int:
     conn = get_db_conn()
     return conn.execute("SELECT COUNT(*) FROM media").fetchone()[0]
 
+def get_media_stats() -> dict:
+    """
+    Aggregate counts used by the tray dashboard's Media tab (see dashbord.py):
+    total items, a breakdown by type (image/video), and how many are
+    currently hidden. Three cheap COUNT/GROUP BY queries — no full scan of
+    metadata_json, same spirit as get_media_count()/get_distinct_formats().
+    """
+    conn = get_db_conn()
+    total = conn.execute("SELECT COUNT(*) FROM media").fetchone()[0]
+    by_type = {
+        row["type"]: row["c"]
+        for row in conn.execute("SELECT type, COUNT(*) AS c FROM media GROUP BY type").fetchall()
+    }
+    hidden = conn.execute("SELECT COUNT(*) FROM media WHERE isHidden = 1").fetchone()[0]
+    return {
+        "total":  total,
+        "images": by_type.get("image", 0),
+        "videos": by_type.get("video", 0),
+        "hidden": hidden,
+    }
+
 
 # ── Albums ──────────────────────────────────────────────────────────────────
 
@@ -1523,6 +1544,14 @@ if FLASK_AVAILABLE:
     def api_media_count():
         """Return total number of indexed media items — single indexed COUNT(*)."""
         return jsonify({"total": get_media_count()})
+
+    @app.route("/api/media/stats", methods=["GET"])
+    def api_media_stats():
+        """
+        Aggregate media counts for the tray dashboard's Media tab (see
+        dashbord.py): total, per-type (image/video), and hidden count.
+        """
+        return jsonify(get_media_stats())
 
     @app.route("/api/media/formats", methods=["GET"])
     def api_media_formats():

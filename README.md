@@ -10,6 +10,7 @@ A lightweight, local-first photo and video gallery. Index media from your filesy
 - ffmpeg — for video thumbnails and metadata (`apt install ffmpeg` or `brew install ffmpeg`)
 - Internet connection for the **Map** view — Leaflet, the marker-clustering plugin, and OpenStreetMap tiles are loaded from a CDN at runtime. Everything else works fully offline.
 - `pystray` (installed via `requirements.txt`) — only used by installed builds, for the system tray icon. On Linux this is the fallback backend; a native GTK + AppIndicator backend is tried first, see [System Tray](#system-tray-installed-builds-only). Not needed for dev-mode (`./run.sh`).
+- `psutil` (installed via `requirements.txt`, optional) — powers the CPU/memory rows on the tray's [Dashboard](#dashboard-installed-builds-only). Everything else on the Dashboard works fine without it.
 
 ---
 
@@ -159,6 +160,7 @@ If you deliberately want more than one instance at once (e.g. two dev servers on
   | Menu item | Action |
   |---|---|
   | **Open Luminary** | Opens `http://localhost:<port>/` in your default browser (also the default action if you double-click the icon) |
+  | **Dashboard** | Opens a local status window — see [Dashboard](#dashboard-installed-builds-only) |
   | **About** | Opens the project's GitHub page |
   | **Start / Stop** | Toggles the backend on/off — label reflects current state |
   | **Quit** | Stops the backend and closes the tray icon, ending the app |
@@ -188,6 +190,17 @@ If you deliberately want more than one instance at once (e.g. two dev servers on
   ```
 
   The `apt install` line pulls in the headers and compiler PyGObject's build needs — it compiles a C extension against GTK's introspection data, so it isn't a pure-Python wheel and can't just be `pip install`ed on its own. Do this once before running `build-linux.sh` (or before `./run.sh` in dev mode) if the native tray backend isn't being picked up; `pip install -r requirements.txt` alone won't get you there without the system packages first.
+
+### Dashboard (installed builds only)
+
+Click **Dashboard** in the tray menu to open a small local status window (`app/src/backend/dashbord.py`). It's a plain Tkinter window with two tabs, auto-refreshing every 5 seconds (or on demand via **Refresh Now**):
+
+- **Home** — server status/monitoring: running or stopped, the address it's serving on, uptime, process ID, CPU usage, memory usage, thread count, and whether a background sync is currently running (plus the result of the last one this session).
+- **Media** — indexed-media stats: total count, image/video breakdown, hidden count, how many distinct formats and cameras have been seen, album/folder counts, on-disk thumbnail cache size, and a per-location breakdown of how many items are indexed under each configured source.
+
+The Dashboard reads everything through Luminary's own REST API (the same endpoints the web frontend uses — see [API Reference](#api-reference)), so it always reflects exactly what the running server would show, and never opens the SQLite database directly. CPU/memory rows need `psutil` (see [Requirements](#requirements)); everything else on the Dashboard works without it.
+
+Only one Dashboard window opens at a time — clicking the menu item again while it's already open just brings the existing window to front instead of opening a second one.
 
 ### Headless / Server Mode (Linux, e.g. Raspberry Pi)
 
