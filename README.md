@@ -425,6 +425,7 @@ New media appears in the gallery immediately — no page refresh needed.
 
 ### Filtering & Sorting
 - **Sort** — Newest First / Oldest First (by modified date, falling back to created) / Name; sorting is server-side so all records are sorted correctly regardless of which page has loaded
+- **Group by — All / Years / Months** — chips in the filter bar, available in **All Photos** and **Hidden** (not in albums or Map). *Years* shows one stack card per year; clicking a year drills into that year's *Months*, in the same stack-card style. A *Months* chip is also available directly, showing month stacks across every year. Each stack card shows the year/month label, the photo count, and up to 4 recent thumbnails fanned like a deck — server-computed via `/api/media/groups`, so only those preview thumbnails are fetched, never the full bucket. Clicking a month card opens its photos in the normal lazily-loaded flat grid, scoped to that month; a breadcrumb (`‹ Years / 2024 / March 2024`) navigates back up. Items with no detectable date aren't shown in Years/Months (they're still visible under All)
 - **Filter dropdowns** — Format, Camera, Location; populated from the full database on load via dedicated indexed API endpoints, not from the currently loaded page
 - **Date range filter** — From/To date pickers in the filter bar restrict results to media dated within the selected (inclusive) range; ✕ clears it
 - **Search** — full-text across filename, camera make/model, and date
@@ -480,6 +481,7 @@ All media endpoints support server-side filtering via query parameters.
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/media` | Filtered, sorted, paginated media. Params: `offset`, `limit`, `sort` (`date-desc`\|`date-asc`\|`name`), `format`, `camera`, `location`, `q`, `hidden` (`true`\|`include`), `dateFrom`/`dateTo` (`YYYY-MM-DD`, inclusive) |
+| GET | `/api/media/groups` | Year/month buckets for the gallery's grouping view. Params: `groupBy` (`year`\|`month`, required), `year` (`YYYY`, optional — restricts `groupBy=month` to that year's months), plus the same `format`/`camera`/`location`/`q`/`hidden` filters as `/api/media`. Items with no known date are excluded. Returns `{group_by, groups: [{key, count, preview}]}` — `key` is `"YYYY"` or `"YYYY-MM"`, `preview` is up to 4 of the bucket's most recent media records (not the full bucket) |
 | GET | `/api/media/by-id/<uniqueName>` | Single full media record — used by the map panel to fetch details on demand |
 | GET | `/api/media/count` | `{total: N}` — fast indexed count |
 | GET | `/api/media/formats` | All distinct formats in the database (`SELECT DISTINCT` on indexed column) |
