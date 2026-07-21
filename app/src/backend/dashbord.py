@@ -53,7 +53,19 @@ from datetime import timedelta
 import tkinter as tk
 from tkinter import ttk
 
+import app_paths
+
 log = logging.getLogger("luminary.dashbord")
+
+try:
+    # Only needed for the titlebar icon on non-Windows platforms (see
+    # _set_window_icon) — Pillow itself is a required project dependency
+    # already, this just guards against an unusual build missing the
+    # ImageTk submodule specifically.
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 # Colors used for the status dot and the Start/Stop button — kept as plain
 # hex so they render consistently across platforms/themes (ttk's own
@@ -167,6 +179,35 @@ def _fmt(value, suffix="", empty="—"):
     return f"{value}{suffix}"
 
 
+def _set_window_icon(root: tk.Tk):
+    """
+    Sets the Dashboard window's titlebar icon to the bundled Luminary icon:
+    app_paths.RESOURCES_DIR / "images" / "luminary.ico" — which resolves to
+    app/src/frontend/images/luminary.ico in dev mode, or
+    resources/images/luminary.ico in a frozen build (see app_paths.py).
+
+    Best-effort, same philosophy as tray.py's _load_icon_image(): a missing
+    or corrupt icon file should never prevent the Dashboard from opening.
+    """
+    ico_path = app_paths.RESOURCES_DIR / "images" / "luminary.ico"
+    if not ico_path.is_file():
+        log.info("No titlebar icon found at %s — using the platform default.", ico_path)
+        return
+    try:
+        if os.name == "nt":
+            # .ico loads natively via iconbitmap on Windows.
+            root.iconbitmap(default=str(ico_path))
+        elif PIL_AVAILABLE:
+            # iconbitmap only understands .ico on Windows (and .xbm on X11),
+            # so on Linux/macOS use Pillow + iconphoto instead.
+            image = Image.open(ico_path)
+            photo = ImageTk.PhotoImage(image)
+            root._icon_photo_ref = photo  # keep a reference — Tk drops GC'd images
+            root.iconphoto(True, photo)
+    except Exception:
+        log.warning("Could not set the Dashboard titlebar icon from %s", ico_path, exc_info=True)
+
+
 # ── the window itself ────────────────────────────────────────────────────────
 
 class DashboardWindow:
@@ -186,6 +227,7 @@ class DashboardWindow:
         self.root.title("Luminary Dashboard")
         self.root.geometry("460x560")
         self.root.resizable(False, False)  # fixed-size window, per request
+        _set_window_icon(self.root)
 
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
