@@ -575,6 +575,34 @@
   .filter-chip.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
   .filter-sep { width: 1px; height: 20px; background: var(--border); }
 
+  /* ── GROUP-BY (All / Years / Months) ── */
+  #groupby-row { display: flex; align-items: center; gap: 6px; }
+  .groupby-chip {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: calc(11px * var(--font-scale));
+    cursor: pointer;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    transition: all 0.15s;
+  }
+  .groupby-chip:hover { border-color: var(--border-hover); color: var(--text); }
+  .groupby-chip.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+
+  /* ── GROUP BREADCRUMB (shown once drilled into a year and/or month) ── */
+  #group-breadcrumb {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    font-size: calc(12px * var(--font-scale));
+    color: var(--text-dim);
+  }
+  #group-breadcrumb .crumb-link { color: var(--accent); cursor: pointer; }
+  #group-breadcrumb .crumb-link:hover { text-decoration: underline; }
+  #group-breadcrumb .crumb-sep { color: var(--text-muted); }
+  #group-breadcrumb .crumb-current { color: var(--text); font-weight: 600; }
+
   select.filter-select {
     background: var(--surface2);
     border: 1px solid var(--border);
@@ -641,6 +669,59 @@
     grid-auto-rows: 220px;
     gap: 10px;
   }
+
+  /* ── YEAR / MONTH STACK-CARD GRID ── */
+  #group-grid {
+    display: none;
+    grid-template-columns: repeat(4, 1fr);
+    grid-auto-rows: 240px;
+    gap: 26px 20px;
+  }
+  .group-stack-card { cursor: pointer; }
+  .stack-photos {
+    position: relative;
+    width: 100%;
+    height: 184px;
+  }
+  .stack-photo {
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 3px solid var(--bg);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+    background: var(--surface2);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+  .stack-photo img { width: 100%; height: 100%; display: block; object-fit: cover; }
+  .stack-photo-0 { z-index: 4; }
+  .stack-photo-1 { z-index: 3; transform: translate(10px, 8px) rotate(2.5deg); }
+  .stack-photo-2 { z-index: 2; transform: translate(20px, 16px) rotate(-3.5deg); }
+  .stack-photo-3 { z-index: 1; transform: translate(30px, 24px) rotate(4.5deg); }
+  .group-stack-card:hover .stack-photo-0 { box-shadow: 0 10px 22px rgba(0,0,0,0.45); }
+  .group-stack-card:hover .stack-photo-1 { transform: translate(14px, 11px) rotate(3.5deg); }
+  .group-stack-card:hover .stack-photo-2 { transform: translate(28px, 22px) rotate(-5deg); }
+  .group-stack-card:hover .stack-photo-3 { transform: translate(42px, 33px) rotate(6.5deg); }
+  .stack-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: calc(28px * var(--font-scale));
+  }
+  .stack-info { margin-top: 14px; position: relative; z-index: 5; }
+  .stack-label {
+    font-size: calc(15px * var(--font-scale));
+    color: var(--text);
+    font-weight: 600;
+  }
+  .stack-count {
+    font-size: calc(11px * var(--font-scale));
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  @media (max-width: 1200px) { #group-grid { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 900px)  { #group-grid { grid-template-columns: repeat(2, 1fr); } }
 
   .media-item {
     position: relative;
@@ -1469,6 +1550,7 @@
     #sidebar { transform: translateX(-100%); }
     #main { margin-left: 0; }
     #gallery-grid { grid-template-columns: repeat(2, 1fr); }
+    #group-grid { grid-template-columns: repeat(2, 1fr); }
   }
 
   /* ── PHOTO PICKER ── */

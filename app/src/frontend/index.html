@@ -100,6 +100,12 @@
     <span class="filter-chip" data-sort="date-asc" onclick="setSort('date-asc',this)">Oldest First</span>
     <span class="filter-chip" data-sort="name" onclick="setSort('name',this)">Name</span>
     <div class="filter-sep"></div>
+    <div id="groupby-row">
+      <span class="groupby-chip active" id="groupby-chip-all" onclick="setGroupMode('all', this)">All</span>
+      <span class="groupby-chip" id="groupby-chip-years" onclick="setGroupMode('years', this)">Years</span>
+      <span class="groupby-chip" id="groupby-chip-months" onclick="setGroupMode('months', this)">Months</span>
+    </div>
+    <div class="filter-sep"></div>
     <select class="filter-select" id="filter-format" onchange="applyFilters()">
       <option value="">All Formats</option>
     </select>
@@ -150,8 +156,11 @@
       <div class="empty-sub">Add directories to media.json and hit Sync to index your photos.</div>
     </div>
 
+    <div id="group-breadcrumb"></div>
+
     <div id="gallery-grid"></div>
     <div id="load-more-trigger"></div>
+    <div id="group-grid"></div>
 
     <!-- MAP VIEW -->
     <div id="map-view">

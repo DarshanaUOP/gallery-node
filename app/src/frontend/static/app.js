@@ -19,6 +19,11 @@ let config = {};
 let currentView = 'all';      // 'all' | 'hidden' | album id
 let currentSort = 'date-desc';
 let showHidden = false;
+
+// Year/Month grouping (only meaningful within 'all' / 'hidden' — see setView).
+let groupMode  = 'all';       // 'all' | 'years' | 'months'
+let drillYear  = null;        // 'YYYY'   — set after clicking a year stack card
+let drillMonth = null;        // 'YYYY-MM' — set after clicking a month stack card
 let ctxTarget = null;          // media item for context menu
 let currentAlbumId = null;
 let filteredMedia = [];
@@ -160,8 +165,18 @@ function _serverFilters() {
   if (cam)  params.camera   = cam;
   if (loc)  params.location = loc;
   if (q)    params.q        = q;
-  if (from) params.dateFrom = from;
-  if (to)   params.dateTo   = to;
+
+  // Drilled into a specific month via the Years/Months stack view — scope
+  // the flat grid to just that month, overriding the manual date inputs
+  // (drilling and manual date-range filtering are mutually exclusive UX).
+  if (drillMonth) {
+    const { from: mFrom, to: mTo } = _monthRange(drillMonth);
+    params.dateFrom = mFrom;
+    params.dateTo   = mTo;
+  } else {
+    if (from) params.dateFrom = from;
+    if (to)   params.dateTo   = to;
+  }
 
   // Album view — let server filter by album membership via JOIN
   if (currentView !== 'all' && currentView !== 'hidden') {
@@ -347,7 +362,39 @@ function clearDateFilter() {
   applyFilters();
 }
 
+// Toggles which grid is visible (flat photo grid vs. year/month stack-card
+// grid) and refreshes the breadcrumb, based on the current groupMode/
+// drillYear/drillMonth. Called at the top of applyFilters() so every existing
+// trigger (search, filter dropdowns, sort chips, hidden toggle, view switch,
+// group-mode chips, drill navigation) stays a single call to applyFilters().
+function _updateGroupViewChrome() {
+  const groupGrid   = document.getElementById('group-grid');
+  const galleryGrid = document.getElementById('gallery-grid');
+  const loadMore    = document.getElementById('load-more-trigger');
+  const statsBar    = document.getElementById('stats-bar');
+  const crumb       = document.getElementById('group-breadcrumb');
+
+  const showFlatGrid = (groupMode === 'all' || !!drillMonth);
+  groupGrid.style.display   = showFlatGrid ? 'none' : 'grid';
+  galleryGrid.style.display = showFlatGrid ? '' : 'none';
+  loadMore.style.display    = showFlatGrid ? '' : 'none';
+  statsBar.style.display    = showFlatGrid ? '' : 'none';
+
+  const showCrumb = !!drillMonth || !!drillYear;
+  crumb.style.display = showCrumb ? 'flex' : 'none';
+  if (showCrumb) crumb.innerHTML = _groupBreadcrumbHtml();
+
+  return showFlatGrid;
+}
+
 function applyFilters() {
+  if (!_updateGroupViewChrome()) {
+    // Grouped (Years/Months) view, not drilled into a specific month yet —
+    // refresh the stack cards instead of the flat photo grid.
+    loadGroupCards();
+    return;
+  }
+
   // Reset pagination state and reload from server with current filters applied.
   // The server handles format/camera/location/search/hidden — we only do
   // album-membership filtering client-side (albums are small, already in memory).
@@ -462,6 +509,124 @@ function createCard(item, idx) {
 
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─────────────────────────────────────────────
+//  YEAR / MONTH GROUPING
+// ─────────────────────────────────────────────
+
+// Switches the top-level grouping mode ("All" | "Years" | "Months"),
+// clearing any active drill-down since it no longer applies.
+function setGroupMode(mode, el) {
+  groupMode  = mode;
+  drillYear  = null;
+  drillMonth = null;
+  document.querySelectorAll('.groupby-chip').forEach(c => c.classList.remove('active'));
+  if (el) el.classList.add('active');
+  applyFilters();
+}
+
+// Fetches year or month buckets (count + up to 4 preview thumbnails each)
+// from the server and renders them as stack cards. Never loads the photos
+// inside a bucket — only the small preview set the server already picked.
+async function loadGroupCards() {
+  const groupGrid = document.getElementById('group-grid');
+  groupGrid.innerHTML = '';
+  document.getElementById('empty-state').style.display = 'none';
+
+  const atMonthLevel = (groupMode === 'months') || (groupMode === 'years' && drillYear);
+  const groupBy = atMonthLevel ? 'month' : 'year';
+
+  const p = new URLSearchParams({ groupBy, ..._serverFilters() });
+  if (groupBy === 'month' && groupMode === 'years' && drillYear) {
+    p.set('year', drillYear);
+  }
+
+  try {
+    const r = await fetch(`${API_BASE}/api/media/groups?${p.toString()}`);
+    const data = await r.json();
+    const groups = data.groups || [];
+    if (groups.length === 0) {
+      document.getElementById('empty-state').style.display = 'flex';
+      return;
+    }
+    groups.forEach(g => groupGrid.appendChild(createGroupCard(g, groupBy)));
+  } catch {
+    document.getElementById('empty-state').style.display = 'flex';
+  }
+}
+
+function createGroupCard(group, groupBy) {
+  const div = document.createElement('div');
+  div.className = 'group-stack-card';
+
+  const label = groupBy === 'year' ? group.key : _monthLabel(group.key);
+  const previews = (group.preview || []).slice(0, 4);
+  const stackHtml = previews.length
+    ? previews.map((item, i) =>
+        `<div class="stack-photo stack-photo-${i}"><img src="${thumbUrl(item.uniqueName)}" alt="" loading="lazy"></div>`
+      ).join('')
+    : `<div class="stack-photo stack-photo-0 stack-empty">⬡</div>`;
+
+  div.innerHTML = `
+    <div class="stack-photos">${stackHtml}</div>
+    <div class="stack-info">
+      <div class="stack-label">${escHtml(label)}</div>
+      <div class="stack-count">${group.count} photo${group.count === 1 ? '' : 's'}</div>
+    </div>
+  `;
+
+  div.addEventListener('click', () => {
+    if (groupBy === 'year') {
+      drillYear = group.key;
+    } else {
+      drillMonth = group.key;
+    }
+    applyFilters();
+  });
+
+  return div;
+}
+
+function _monthLabel(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+}
+
+// Inclusive [from, to] "YYYY-MM-DD" bounds for one calendar month, computed
+// with local-date integer math only (no ISO/UTC conversion) to sidestep
+// timezone-shift bugs.
+function _monthRange(ym) {
+  const [y, m] = ym.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const pad = n => String(n).padStart(2, '0');
+  return { from: `${y}-${pad(m)}-01`, to: `${y}-${pad(m)}-${pad(daysInMonth)}` };
+}
+
+function _groupBreadcrumbHtml() {
+  const rootLabel = groupMode === 'years' ? 'Years' : 'Months';
+  const parts = [`<span class="crumb-link" onclick="groupGoRoot()">‹ ${rootLabel}</span>`];
+  if (drillYear) {
+    parts.push('<span class="crumb-sep">/</span>');
+    parts.push(drillMonth
+      ? `<span class="crumb-link" onclick="groupGoYear()">${escHtml(drillYear)}</span>`
+      : `<span class="crumb-current">${escHtml(drillYear)}</span>`);
+  }
+  if (drillMonth) {
+    parts.push(`<span class="crumb-sep">/</span><span class="crumb-current">${escHtml(_monthLabel(drillMonth))}</span>`);
+  }
+  return parts.join('');
+}
+
+function groupGoRoot() {
+  drillYear  = null;
+  drillMonth = null;
+  applyFilters();
+}
+
+function groupGoYear() {
+  drillMonth = null;
+  applyFilters();
 }
 
 // ─────────────────────────────────────────────
@@ -707,12 +872,28 @@ function setView(view, el) {
   document.querySelectorAll('.nav-item, .album-nav-item').forEach(n => n.classList.remove('active'));
   if (el) el.classList.add('active');
 
+  // Year/Month grouping only applies within All Photos / Hidden — reset it
+  // on every nav switch so leaving (or re-entering) those views always
+  // starts from the flat grid.
+  groupMode  = 'all';
+  drillYear  = null;
+  drillMonth = null;
+  document.querySelectorAll('.groupby-chip').forEach(c => c.classList.remove('active'));
+  document.getElementById('groupby-chip-all')?.classList.add('active');
+
   const albumHeader = document.getElementById('album-header');
   const galleryGrid = document.getElementById('gallery-grid');
   const loadMore    = document.getElementById('load-more-trigger');
   const filterbar   = document.getElementById('filterbar');
   const statsBar    = document.getElementById('stats-bar');
   const mapView     = document.getElementById('map-view');
+  const groupbyRow  = document.getElementById('groupby-row');
+  const groupGrid   = document.getElementById('group-grid');
+  const groupCrumb  = document.getElementById('group-breadcrumb');
+
+  groupGrid.style.display  = 'none';
+  groupCrumb.style.display = 'none';
+  groupbyRow.style.display = (view === 'all' || view === 'hidden') ? '' : 'none';
 
   if (view === 'map') {
     if (selectMode) toggleSelectMode();
