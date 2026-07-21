@@ -47,12 +47,23 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import webbrowser
 from datetime import timedelta
 
 import tkinter as tk
 from tkinter import ttk
 
 log = logging.getLogger("luminary.dashbord")
+
+# Colors used for the status dot and the Start/Stop button — kept as plain
+# hex so they render consistently across platforms/themes (ttk's own
+# styling doesn't reliably support colored button backgrounds everywhere,
+# so these two controls use plain tk widgets instead of ttk ones).
+COLOR_RUNNING = "#2ecc71"  # green
+COLOR_STOPPED = "#9e9e9e"  # ash/gray
+COLOR_STOP_BTN  = "#e74c3c"  # red — shown when the button's action is "Stop"
+COLOR_START_BTN = "#2ecc71"  # green — shown when the button's action is "Start"
+GLOBE_ICON = "\U0001F310"  # 🌐 — used as the "open in browser" button's icon
 
 try:
     import psutil
@@ -173,8 +184,8 @@ class DashboardWindow:
 
         self.root = tk.Tk()
         self.root.title("Luminary Dashboard")
-        self.root.geometry("440x520")
-        self.root.minsize(380, 440)
+        self.root.geometry("460x560")
+        self.root.resizable(False, False)  # fixed-size window, per request
 
         notebook = ttk.Notebook(self.root)
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
@@ -186,6 +197,7 @@ class DashboardWindow:
 
         self._home_vars = {}
         self._media_vars = {}
+        self._current_address = None
         self._build_home_tab()
         self._build_media_tab()
 
@@ -211,10 +223,41 @@ class DashboardWindow:
     def _build_home_tab(self):
         frame = ttk.Frame(self.home_tab, padding=10)
         frame.pack(fill="both", expand=True)
+        frame.grid_columnconfigure(1, weight=1)
+
+        # ── Row 0: server status — colored dot + text on the left, a
+        # Start/Stop button (colored red/green by action) on the right ──
+        ttk.Label(frame, text="Server status", font=("", 9, "bold")).grid(
+            row=0, column=0, sticky="w", padx=(0, 12), pady=3)
+
+        status_frame = ttk.Frame(frame)
+        status_frame.grid(row=0, column=1, sticky="w", pady=3)
+        self._status_dot = tk.Label(status_frame, text="\u25CF", font=("", 12), fg=COLOR_STOPPED)
+        self._status_dot.pack(side="left")
+        self._status_text_var = tk.StringVar(value="Stopped")
+        tk.Label(status_frame, textvariable=self._status_text_var).pack(side="left", padx=(4, 0))
+
+        self._toggle_btn = tk.Button(
+            frame, text="Start", bg=COLOR_START_BTN, fg="white",
+            relief="flat", padx=10, command=self._on_toggle_clicked,
+        )
+        self._toggle_btn.grid(row=0, column=2, sticky="e", padx=(10, 0), pady=3)
+
+        # ── Row 1: address — the URL text on the left, a globe button on
+        # the right to open it in the default browser ──
+        ttk.Label(frame, text="Address", font=("", 9, "bold")).grid(
+            row=1, column=0, sticky="w", padx=(0, 12), pady=3)
+        self._address_var = tk.StringVar(value="\u2014")
+        ttk.Label(frame, textvariable=self._address_var).grid(
+            row=1, column=1, sticky="w", pady=3)
+
+        self._open_browser_btn = tk.Button(
+            frame, text=GLOBE_ICON, relief="flat", padx=6,
+            command=self._on_open_browser_clicked, state="disabled",
+        )
+        self._open_browser_btn.grid(row=1, column=2, sticky="e", padx=(10, 0), pady=3)
 
         rows = [
-            ("status",      "Server status"),
-            ("address",     "Address"),
             ("uptime",      "Uptime"),
             ("pid",         "Process ID"),
             ("cpu",         "CPU usage"),
@@ -223,7 +266,7 @@ class DashboardWindow:
             ("sync",        "Background sync"),
             ("last_sync",   "Last sync result"),
         ]
-        for i, (key, label) in enumerate(rows):
+        for i, (key, label) in enumerate(rows, start=2):
             self._home_vars[key] = self._add_row(frame, i, label)
 
     def _build_media_tab(self):
@@ -285,8 +328,24 @@ class DashboardWindow:
 
     def _apply_home(self, d: dict):
         v = self._home_vars
-        v["status"].set("● Running" if d["running"] else "○ Stopped")
-        v["address"].set(f"http://localhost:{d['port']}/" if d["running"] else "—")
+        running = d["running"]
+
+        self._status_dot.config(fg=COLOR_RUNNING if running else COLOR_STOPPED)
+        self._status_text_var.set("Running" if running else "Stopped")
+
+        # Toggle button: label + color reflect the *action* it performs next,
+        # not the current state — "Stop" in red while running, "Start" in
+        # green while stopped. Re-enabled here too, in case it was disabled
+        # while a start/stop was in flight (see _on_toggle_clicked).
+        if running:
+            self._toggle_btn.config(text="Stop", bg=COLOR_STOP_BTN, state="normal")
+        else:
+            self._toggle_btn.config(text="Start", bg=COLOR_START_BTN, state="normal")
+
+        self._current_address = f"http://localhost:{d['port']}/" if running else None
+        self._address_var.set(self._current_address or "—")
+        self._open_browser_btn.config(state="normal" if running else "disabled")
+
         v["uptime"].set(_fmt_uptime(d["uptime"]))
         v["pid"].set(str(d["pid"]))
         v["cpu"].set(_fmt(d["cpu_percent"], "%") if PSUTIL_AVAILABLE else "psutil not installed")
@@ -301,6 +360,33 @@ class DashboardWindow:
                                 f"{r.get('total', '—')} total")
         else:
             v["last_sync"].set("No sync run yet this session")
+
+    def _on_toggle_clicked(self):
+        """
+        Starts/stops the backend. Runs on a background thread — the real
+        controller.stop() does a thread join with a timeout of several
+        seconds, and calling that directly from the Tk main thread would
+        freeze the whole window for as long as it takes. The button is
+        disabled for the duration and re-enabled by the next _apply_home()
+        once a fresh status has been fetched.
+        """
+        self._toggle_btn.config(state="disabled")
+
+        def worker():
+            try:
+                if self.controller.running:
+                    self.controller.stop()
+                else:
+                    self.controller.start()
+            except Exception:
+                log.exception("Failed to toggle the Luminary server from the Dashboard")
+            self._schedule_fetch()
+
+        threading.Thread(target=worker, name="luminary-dashboard-toggle", daemon=True).start()
+
+    def _on_open_browser_clicked(self):
+        if self._current_address:
+            webbrowser.open(self._current_address)
 
     def _apply_media(self, d: dict):
         v = self._media_vars
