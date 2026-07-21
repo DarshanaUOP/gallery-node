@@ -375,7 +375,7 @@ function _updateGroupViewChrome() {
   const crumb       = document.getElementById('group-breadcrumb');
 
   const showFlatGrid = (groupMode === 'all' || !!drillMonth);
-  groupGrid.style.display   = showFlatGrid ? 'none' : '';
+  groupGrid.style.display   = showFlatGrid ? 'none' : 'grid';
   galleryGrid.style.display = showFlatGrid ? '' : 'none';
   loadMore.style.display    = showFlatGrid ? '' : 'none';
   statsBar.style.display    = showFlatGrid ? '' : 'none';
