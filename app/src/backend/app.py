@@ -273,6 +273,25 @@ def _init_schema():
             PRIMARY KEY (album_id, uniqueName)
         );
         CREATE INDEX IF NOT EXISTS idx_album_media_album ON album_media(album_id);
+
+        -- Bell-icon notifications (e.g. a synced location or file going
+        -- missing on disk). 'location_path' / 'unique_name' identify the
+        -- target this notification is about, used both for de-duplication
+        -- (see create_notification()) and for wiring up the "Relocate" action.
+        CREATE TABLE IF NOT EXISTS notifications (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            type          TEXT NOT NULL,
+            title         TEXT NOT NULL,
+            message       TEXT,
+            location_path TEXT,
+            unique_name   TEXT,
+            action        TEXT,
+            action_label  TEXT,
+            is_read       INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_unread   ON notifications(is_read);
+        CREATE INDEX IF NOT EXISTS idx_notifications_location ON notifications(location_path);
     """)
     conn.commit()
 
@@ -528,37 +547,223 @@ def _delete_thumb_files(unique_name: str):
         log.warning("Could not scan thumbnail cache dir for %s: %s", unique_name, e)
 
 
-def _prune_missing_media(source_roots, emit=None) -> int:
+def _check_missing_media(source_roots, emit=None) -> int:
     """
     For every media record whose source_root was confirmed reachable this
-    sync run, check whether the original file still exists on disk. Records
-    whose file is gone (deleted/renamed) are removed, along with their
-    cached thumbnails. Scoping to *reachable* roots only means a source that
-    is temporarily offline/unmounted won't have its entire library wiped —
-    the same caution the scan loop already applies via os.path.isdir().
+    sync run, check whether the original file still exists on disk.
+
+    Previously this deleted those records outright. It no longer does —
+    a subfolder rename, a temporarily-offline network share, or any other
+    transient hiccup used to silently wipe indexed history. Instead, one
+    aggregated notification per affected location is raised (see
+    create_notification()) so the user can review it from the bell icon
+    and relocate the folder if it moved, without losing the index.
+
+    Returns the total number of missing files detected (used only for the
+    sync summary counter — nothing is deleted here).
     """
     if not source_roots:
         return 0
     conn = get_db_conn()
     placeholders = ",".join("?" for _ in source_roots)
     rows = conn.execute(
-        f"SELECT uniqueName, file_path, name FROM media WHERE source_root IN ({placeholders})",
+        f"SELECT uniqueName, file_path, name, source_root FROM media WHERE source_root IN ({placeholders})",
         source_roots,
     ).fetchall()
 
-    missing = []
+    missing_by_root = {}
     for r in rows:
         full_path = os.path.join(r["file_path"] or "", r["name"] or "")
         if not r["file_path"] or not r["name"] or not os.path.isfile(full_path):
-            missing.append(r["uniqueName"])
+            missing_by_root.setdefault(r["source_root"], []).append(r["uniqueName"])
 
-    if missing:
-        log.info("Sync: %d file(s) no longer found on disk — removing from library", len(missing))
+    total_missing = sum(len(v) for v in missing_by_root.values())
+
+    for root, names in missing_by_root.items():
+        raw_path = _configured_path_for_source_root(root)
+        count = len(names)
+        log.info("Sync: %d file(s) missing under %s — notifying instead of deleting", count, root)
         if emit:
-            emit("log", msg=f"Removed {len(missing)} missing file(s) from library")
-        delete_media_records(missing)
+            emit("log", msg=f"{count} file(s) missing under {raw_path} — see notifications")
+        create_notification(
+            "file_missing",
+            title=f"{count} file{'s' if count != 1 else ''} could not be found",
+            message=(
+                f"Luminary could not find {count} previously-synced file"
+                f"{'s' if count != 1 else ''} under \"{raw_path}\". "
+                f"They're still in your library — relocate the folder if it moved."
+            ),
+            location_path=raw_path,
+            action="relocate",
+            action_label="View Location",
+        )
 
-    return len(missing)
+    return total_missing
+
+
+# ─────────────────────────────────────────────
+#  NOTIFICATIONS
+# ─────────────────────────────────────────────
+
+def _configured_path_for_source_root(source_root: str) -> str:
+    """
+    Map a resolved source_root (as stored on media rows) back to the raw,
+    user-typed path as configured in media.json — this is what the
+    Locations Manager UI keys its rows on, so notifications can point back
+    at the right row. Falls back to source_root itself if no configured
+    entry resolves to it (e.g. the location was since removed).
+    """
+    sources = load_json(MEDIA_JSON, [])
+    for s in sources:
+        raw = (s.get("path") or "").rstrip("/\\")
+        if not raw:
+            continue
+        try:
+            if str(Path(raw).resolve()) == source_root:
+                return raw
+        except (OSError, RuntimeError):
+            continue
+    return source_root
+
+
+def create_notification(ntype, title, message, location_path=None, unique_name=None,
+                         action=None, action_label=None) -> int:
+    """
+    Insert a new notification — unless an unread one already exists for the
+    same (type, target) pair, in which case its title/message/timestamp are
+    refreshed instead. This is what keeps a folder that's still unreachable
+    on every sync run (or a file that keeps failing to load) from spamming
+    the bell with duplicate entries. Returns the notification id.
+    """
+    conn = get_db_conn()
+    with _db_lock:
+        with conn:
+            row = None
+            if location_path:
+                row = conn.execute(
+                    "SELECT id FROM notifications WHERE type=? AND location_path=? AND is_read=0",
+                    (ntype, location_path),
+                ).fetchone()
+            elif unique_name:
+                row = conn.execute(
+                    "SELECT id FROM notifications WHERE type=? AND unique_name=? AND is_read=0",
+                    (ntype, unique_name),
+                ).fetchone()
+
+            if row:
+                conn.execute(
+                    "UPDATE notifications SET title=?, message=?, created_at=datetime('now') WHERE id=?",
+                    (title, message, row["id"]),
+                )
+                return row["id"]
+
+            cur = conn.execute(
+                """INSERT INTO notifications
+                       (type, title, message, location_path, unique_name, action, action_label)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (ntype, title, message, location_path, unique_name, action, action_label),
+            )
+            return cur.lastrowid
+
+
+def get_notifications(limit: int = 100) -> list:
+    """Most recent notifications first, unread ones bubbled to the top."""
+    conn = get_db_conn()
+    rows = conn.execute(
+        "SELECT * FROM notifications ORDER BY is_read ASC, created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_unread_notification_count() -> int:
+    conn = get_db_conn()
+    return conn.execute("SELECT COUNT(*) FROM notifications WHERE is_read = 0").fetchone()[0]
+
+
+def mark_notification_read(notif_id: int) -> bool:
+    conn = get_db_conn()
+    with _db_lock:
+        with conn:
+            cur = conn.execute("UPDATE notifications SET is_read = 1 WHERE id = ?", (notif_id,))
+    return cur.rowcount > 0
+
+
+def mark_all_notifications_read() -> int:
+    conn = get_db_conn()
+    with _db_lock:
+        with conn:
+            cur = conn.execute("UPDATE notifications SET is_read = 1 WHERE is_read = 0")
+    return cur.rowcount
+
+
+def resolve_location_notifications(location_path: str) -> None:
+    """Clear unread notifications tied to a location once it's reachable again or has been relocated."""
+    if not location_path:
+        return
+    conn = get_db_conn()
+    with _db_lock:
+        with conn:
+            conn.execute(
+                "UPDATE notifications SET is_read = 1 WHERE location_path = ? AND is_read = 0",
+                (location_path,),
+            )
+
+
+def relocate_media_source(old_path: str, new_path: str) -> dict:
+    """
+    Repoint every indexed media record whose source_root matches old_path to
+    new_path, instead of requiring a full re-sync/re-hash — used when the
+    user tells Luminary where a renamed/moved watched folder went, via the
+    "Relocate" action on a notification or in the Locations Manager.
+    Also rewrites the matching entry in media.json so future syncs look in
+    the new place. Returns {updated, old_root, new_root}.
+    """
+    old_root = str(Path(old_path.rstrip("/\\")).resolve())
+    new_root = str(Path(new_path.rstrip("/\\")).resolve())
+
+    conn = get_db_conn()
+    rows = conn.execute(
+        "SELECT uniqueName, file_path, metadata_json FROM media WHERE source_root = ?",
+        (old_root,),
+    ).fetchall()
+
+    updated = 0
+    with _db_lock:
+        with conn:
+            for r in rows:
+                old_file_path = r["file_path"] or ""
+                if old_file_path == old_root:
+                    new_file_path = new_root
+                elif old_file_path.startswith(old_root):
+                    new_file_path = new_root + old_file_path[len(old_root):]
+                else:
+                    new_file_path = old_file_path  # shouldn't happen — leave untouched
+
+                try:
+                    meta = json.loads(r["metadata_json"]) if r["metadata_json"] else {}
+                except (TypeError, ValueError):
+                    meta = {}
+                file_meta = meta.setdefault("file", {})
+                file_meta["source_root"] = new_root
+                file_meta["path"] = new_file_path
+
+                conn.execute(
+                    "UPDATE media SET source_root = ?, file_path = ?, metadata_json = ? WHERE uniqueName = ?",
+                    (new_root, new_file_path, json.dumps(meta, default=str), r["uniqueName"]),
+                )
+                updated += 1
+
+    # Point media.json at the new location too, so the next sync (and the
+    # Locations Manager) reflect it instead of flagging it missing again.
+    sources = load_json(MEDIA_JSON, [])
+    old_norm = old_path.rstrip("/\\")
+    for s in sources:
+        if (s.get("path") or "").rstrip("/\\") == old_norm:
+            s["path"] = new_path
+    save_json(MEDIA_JSON, sources)
+
+    return {"updated": updated, "old_root": old_root, "new_root": new_root}
 
 
 def get_existing_hashes_and_paths() -> tuple:
@@ -1484,13 +1689,13 @@ def sync_library(progress=None) -> dict:
         {f.lower() for f in cfg.get("supported_video_formats", [])}
     )
 
-    # ── Phase 1: figure out which sources are reachable right now, and prune
-    # any DB records under them whose file is gone — BEFORE computing the
+    # ── Phase 1: figure out which sources are reachable right now, and check
+    # for any DB records under them whose file is gone — BEFORE computing the
     # dedup hash/path snapshot below. This ordering matters: on a rename,
     # the new filename hashes identically to the old (now-stale) row. If we
-    # pruned *after* scanning, that stale row would still be in the dedup
+    # checked *after* scanning, that stale row would still be in the dedup
     # snapshot, the renamed file would look like a duplicate and get
-    # skipped, and the add would only happen on the *next* sync. Pruning
+    # skipped, and the add would only happen on the *next* sync. Checking
     # first means the rename is detected as new content in this same run.
     reachable_roots = []
     for source in sources:
@@ -1499,8 +1704,11 @@ def sync_library(progress=None) -> dict:
         dir_path = source.get("path", "").rstrip("/\\")
         if os.path.isdir(dir_path):
             reachable_roots.append(str(Path(dir_path).resolve()))
+            # Directory is back — clear any stale "can't find this location"
+            # notification from a previous run.
+            resolve_location_notifications(dir_path)
 
-    removed = _prune_missing_media(reachable_roots, emit=emit) if reachable_roots else 0
+    missing = _check_missing_media(reachable_roots, emit=emit) if reachable_roots else 0
 
     existing_hashes, existing_paths = get_existing_hashes_and_paths()
 
@@ -1520,6 +1728,17 @@ def sync_library(progress=None) -> dict:
         if not os.path.isdir(dir_path):
             emit("log", msg=f"Not found: {dir_path}")
             log.warning("Directory not found: %s", dir_path)
+            create_notification(
+                "location_missing",
+                title=f"Location unreachable: {src_name}",
+                message=(
+                    f"Luminary can't find \"{dir_path}\". If you moved or renamed "
+                    f"this folder, relocate it to keep your synced photos linked."
+                ),
+                location_path=dir_path,
+                action="relocate",
+                action_label="Relocate",
+            )
             continue
 
         source_root  = str(Path(dir_path).resolve())
@@ -1606,9 +1825,9 @@ def sync_library(progress=None) -> dict:
         upsert_media_rows(new_entries)
 
     total = get_media_count()
-    log.info("Sync complete — scanned %d, added %d, removed %d, total %d", scanned, added, removed, total)
-    emit("log", msg=f"Sync complete — {added} new, {removed} removed, {total} total")
-    return {"added": added, "scanned": scanned, "removed": removed, "total": total}
+    log.info("Sync complete — scanned %d, added %d, missing %d, total %d", scanned, added, missing, total)
+    emit("log", msg=f"Sync complete — {added} new, {missing} missing, {total} total")
+    return {"added": added, "scanned": scanned, "missing": missing, "total": total}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1831,17 +2050,12 @@ if FLASK_AVAILABLE:
         """
         Return (full_path, item) or raise 404. Uses indexed SQLite primary key lookup.
 
-        Self-healing: if the DB record exists but the underlying file is gone
-        (deleted/renamed since the last sync), the record and its cached
-        thumbnail are removed on the spot — this is what actually purges an
-        item when a user simply browses to it (e.g. via /api/image/<uniqueName>),
-        without waiting for the next full sync.
-
-        Safety: if the file's source_root itself isn't reachable (e.g. a
-        network drive that's temporarily unmounted), we do NOT delete —
-        that would look identical to "every file in this source is missing"
-        and wipe the whole source. We only prune when the source directory
-        is confirmed up but the individual file specifically is not.
+        No longer self-healing by deletion: if the DB record exists but the
+        underlying file can't be found (deleted/renamed/moved since the last
+        sync), the record is kept — only a notification is raised (with a
+        "Relocate" action pointing at the owning location) so the user can
+        fix it from the bell icon instead of silently losing the index entry
+        the moment they happen to browse to it.
         """
         from flask import abort
         item = get_media_by_unique_name(unique_name)
@@ -1852,11 +2066,35 @@ if FLASK_AVAILABLE:
         full_path = os.path.join(file_dir, item["name"])
         if not os.path.isfile(full_path):
             source_root = file_meta.get("source_root", "")
-            if not source_root or os.path.isdir(source_root):
-                log.warning("File not found on disk — removing stale record: %s", full_path)
-                delete_media_records([unique_name])
+            if source_root and not os.path.isdir(source_root):
+                raw_path = _configured_path_for_source_root(source_root)
+                log.warning("File not found and source root unreachable: %s", full_path)
+                create_notification(
+                    "location_missing",
+                    title=f"Location unreachable: {os.path.basename(raw_path) or raw_path}",
+                    message=(
+                        f"Luminary can't find \"{raw_path}\". If you moved or renamed "
+                        f"this folder, relocate it to keep your synced photos linked."
+                    ),
+                    location_path=raw_path,
+                    action="relocate",
+                    action_label="Relocate",
+                )
             else:
-                log.warning("File not found and source root unreachable — leaving record intact: %s", full_path)
+                raw_path = _configured_path_for_source_root(source_root) if source_root else None
+                log.warning("File not found on disk — keeping record, notifying: %s", full_path)
+                create_notification(
+                    "file_missing",
+                    title=f"\"{item['name']}\" could not be found",
+                    message=(
+                        f"Luminary could not find this file on disk. "
+                        f"It's still in your library — relocate the folder if it moved."
+                    ),
+                    location_path=raw_path,
+                    unique_name=unique_name,
+                    action="relocate" if raw_path else None,
+                    action_label="View Location" if raw_path else None,
+                )
             abort(404)
         return full_path, item
 
@@ -2183,13 +2421,16 @@ if FLASK_AVAILABLE:
     def api_locations_get():
         """
         Return current contents of media.json.
-        Each entry: { name, path, visibility, root, label, synced_count }
+        Each entry: { name, path, visibility, root, label, synced_count, exists }
         'root' and 'label' aliases are included so this endpoint can be used
         directly by the location filter dropdowns without a separate /api/media/locations call.
         'synced_count' is how many media rows are currently indexed under
         that path — the frontend uses it to decide whether removing the
         location needs the stronger "this will discard indexed files"
         confirmation, and to show the count inside that message.
+        'exists' is whether the configured path can currently be found on
+        disk — the frontend uses this to flag the row red and offer a
+        "Relocate" action when a watched folder has been moved or renamed.
         """
         sources = load_json(MEDIA_JSON, [])
         result  = []
@@ -2204,6 +2445,7 @@ if FLASK_AVAILABLE:
                 "root":         path,
                 "label":        label,
                 "synced_count": count_media_by_source_root(path),
+                "exists":       bool(path) and os.path.isdir(path),
             })
         return jsonify(result)
 
@@ -2256,6 +2498,54 @@ if FLASK_AVAILABLE:
 
         log.info("Location removed: %s — discarded %d indexed record(s)", path, deleted)
         return jsonify({"ok": True, "deleted": deleted})
+
+    @app.route("/api/location/relocate", methods=["POST"])
+    def api_location_relocate():
+        """
+        Repoint a location to a new folder on disk. Body: { old_path, new_path }
+
+        Used by the "Relocate" action — either from a red loc-row in the
+        Locations Manager, or from a notification's action button. Updates
+        every already-indexed media row under old_path in place (source_root,
+        file_path, and the embedded metadata) and rewrites media.json, so
+        nothing needs to be re-scanned or re-hashed. Also clears any
+        outstanding notifications tied to the old path.
+        Returns { ok: true, updated: N, old_root, new_root }.
+        """
+        body     = request.get_json(force=True) or {}
+        old_path = (body.get("old_path") or "").strip()
+        new_path = (body.get("new_path") or "").strip()
+        if not old_path or not new_path:
+            return jsonify({"error": "old_path and new_path are required"}), 400
+        if not os.path.isdir(new_path):
+            return jsonify({"error": f"Not a directory: {new_path}"}), 400
+
+        result = relocate_media_source(old_path, new_path)
+        resolve_location_notifications(old_path)
+
+        log.info(
+            "Relocated location %s -> %s (%d record(s) updated)",
+            old_path, new_path, result["updated"],
+        )
+        return jsonify({"ok": True, **result})
+
+    @app.route("/api/notifications", methods=["GET"])
+    def api_notifications_get():
+        """Return recent notifications (unread first) and the current unread count."""
+        return jsonify({
+            "items":        get_notifications(limit=100),
+            "unread_count": get_unread_notification_count(),
+        })
+
+    @app.route("/api/notifications/<int:notif_id>/read", methods=["POST"])
+    def api_notification_read(notif_id):
+        ok = mark_notification_read(notif_id)
+        return jsonify({"ok": ok, "unread_count": get_unread_notification_count()})
+
+    @app.route("/api/notifications/read-all", methods=["POST"])
+    def api_notifications_read_all():
+        updated = mark_all_notifications_read()
+        return jsonify({"ok": True, "updated": updated, "unread_count": 0})
 
     @app.route("/api/browse", methods=["GET"])
     def api_browse():
@@ -2365,7 +2655,7 @@ if FLASK_AVAILABLE:
                     running=False, done=True,
                     result=result,
                     current_file="", current_source="",
-                    log=f"✓ Complete — {result['added']} new, {result.get('removed', 0)} removed, {result['total']} total",
+                    log=f"✓ Complete — {result['added']} new, {result.get('missing', 0)} missing, {result['total']} total",
                 )
             except Exception as e:
                 log.exception("Background sync failed")

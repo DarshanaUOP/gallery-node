@@ -65,6 +65,8 @@ async function init() {
   setupIntersectionObserver();
   setupGalleryImageObserver();
   setupDateFilterBounds();
+  loadNotifications();
+  setInterval(loadNotifications, 30000);
 }
 
 // Caps both date-range inputs at today — media can't be dated in the future.
@@ -2324,6 +2326,142 @@ function toast(msg, type = 'info') {
 }
 
 // ─────────────────────────────────────────────
+//  NOTIFICATIONS
+// ─────────────────────────────────────────────
+let notifications = [];   // most recent local snapshot from /api/notifications
+
+async function loadNotifications() {
+  try {
+    const r = await fetch(`${API_BASE}/api/notifications`);
+    if (!r.ok) return;
+    const data = await r.json();
+    notifications = data.items || [];
+    updateNotifBadge(data.unread_count);
+    if (document.getElementById('notifications-panel').classList.contains('open')) {
+      renderNotificationsPanel();
+    }
+  } catch {
+    // Silent — the bell just won't update this cycle. Not worth a toast,
+    // this polls every 30s and errors are almost always "server not up yet".
+  }
+}
+
+function updateNotifBadge(count) {
+  const n = count !== undefined ? count : notifications.filter(x => !x.is_read).length;
+  const badge = document.getElementById('notif-badge');
+  if (n > 0) {
+    badge.style.display   = 'flex';
+    badge.textContent = n > 9 ? '9+' : String(n);
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function toggleNotificationsPanel(e) {
+  if (e) e.stopPropagation();
+  const panel = document.getElementById('notifications-panel');
+  if (panel.classList.contains('open')) {
+    closeNotificationsPanel();
+  } else {
+    panel.classList.add('open');
+    renderNotificationsPanel();
+  }
+}
+
+function closeNotificationsPanel() {
+  document.getElementById('notifications-panel').classList.remove('open');
+}
+
+// Click-outside-to-close, same idea as the modal-overlay handlers elsewhere.
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('notifications-panel');
+  const btn   = document.getElementById('notif-bell-btn');
+  if (!panel || !btn) return;
+  if (panel.classList.contains('open') && !panel.contains(e.target) && !btn.contains(e.target)) {
+    closeNotificationsPanel();
+  }
+});
+
+function renderNotificationsPanel() {
+  const list = document.getElementById('notifications-list');
+  list.innerHTML = '';
+
+  if (!notifications.length) {
+    list.innerHTML = '<div class="notif-empty">You\'re all caught up</div>';
+    return;
+  }
+
+  notifications.forEach(n => {
+    const item = document.createElement('div');
+    item.className = 'notif-item' + (n.is_read ? '' : ' unread');
+    item.innerHTML = `
+      <div class="notif-item-row">
+        <div class="notif-item-title">${escHtml(n.title || '')}</div>
+        <button class="notif-item-dismiss" title="Mark as read"
+                onclick="event.stopPropagation(); markNotificationRead(${n.id})">✕</button>
+      </div>
+      ${n.message ? `<div class="notif-item-msg">${escHtml(n.message)}</div>` : ''}
+      <div class="notif-item-footer">
+        <span class="notif-item-time">${formatNotifTime(n.created_at)}</span>
+        ${n.action ? `<button class="notif-item-action-btn"
+                              onclick="event.stopPropagation(); handleNotificationAction(${n.id})">${escHtml(n.action_label || 'View')}</button>` : ''}
+      </div>`;
+    list.appendChild(item);
+  });
+}
+
+async function markNotificationRead(id) {
+  try {
+    await fetch(`${API_BASE}/api/notifications/${id}/read`, { method: 'POST' });
+  } catch {
+    // Local state below still updates so the UI stays responsive even if
+    // the request fails — the next poll will reconcile either way.
+  }
+  const n = notifications.find(x => x.id === id);
+  if (n) n.is_read = true;
+  updateNotifBadge();
+  renderNotificationsPanel();
+}
+
+async function markAllNotificationsRead() {
+  try {
+    await fetch(`${API_BASE}/api/notifications/read-all`, { method: 'POST' });
+  } catch { /* see markNotificationRead */ }
+  notifications.forEach(n => { n.is_read = true; });
+  updateNotifBadge();
+  renderNotificationsPanel();
+}
+
+// Runs a notification's action button — currently only 'relocate', which
+// jumps to the Locations Manager and highlights the affected row.
+function handleNotificationAction(id) {
+  const n = notifications.find(x => x.id === id);
+  if (!n) return;
+  markNotificationRead(id);
+  closeNotificationsPanel();
+  if (n.action === 'relocate' && n.location_path) {
+    openLocationsManager(n.location_path);
+  }
+}
+
+function formatNotifTime(iso) {
+  if (!iso) return '';
+  try {
+    // SQLite's datetime('now') returns UTC with no timezone suffix — add
+    // one so Date parses it as UTC instead of local time.
+    const d = new Date(iso.replace(' ', 'T') + 'Z');
+    const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (mins < 1)  return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24)  return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  } catch {
+    return '';
+  }
+}
+
+// ─────────────────────────────────────────────
 //  SETTINGS PANEL
 // ─────────────────────────────────────────────
 let _settingsCurrent = {};   // live copy while panel is open
@@ -2599,7 +2737,7 @@ function applyConfigToUI(cfg) {
 // ─────────────────────────────────────────────
 let locationsData = [];   // working copy while modal is open
 
-async function openLocationsManager() {
+async function openLocationsManager(highlightPath = null) {
   try {
     const r = await fetch(`${API_BASE}/api/locations`);
     if (!r.ok) throw new Error('Backend returned ' + r.status);
@@ -2613,6 +2751,24 @@ async function openLocationsManager() {
   document.getElementById('loc-new-path').value = '';
   document.getElementById('loc-new-vis').checked = true;
   document.getElementById('locations-modal').classList.add('open');
+
+  if (highlightPath) {
+    setTimeout(() => {
+      const row = document.querySelector(`.loc-row[data-path="${cssEscape(highlightPath)}"]`);
+      if (row) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        row.classList.add('loc-row-flash');
+        setTimeout(() => row.classList.remove('loc-row-flash'), 2000);
+      }
+    }, 60);
+  }
+}
+
+// Minimal CSS.escape fallback (older WebViews on some Linux/embedded builds
+// may not expose window.CSS.escape).
+function cssEscape(str) {
+  if (window.CSS && CSS.escape) return CSS.escape(str);
+  return String(str).replace(/["\\]/g, '\\$&');
 }
 
 function renderLocationsList() {
@@ -2625,9 +2781,13 @@ function renderLocationsList() {
   }
 
   locationsData.forEach((loc, idx) => {
+    const missing = loc.exists === false;
     const row = document.createElement('div');
-    row.className = 'loc-row' + (loc.visibility === false ? ' loc-hidden-row' : '');
-    row.dataset.idx = idx;
+    row.className = 'loc-row'
+      + (loc.visibility === false ? ' loc-hidden-row' : '')
+      + (missing ? ' loc-row-missing' : '');
+    row.dataset.idx  = idx;
+    row.dataset.path = loc.path || '';
 
     row.innerHTML = `
       <div class="loc-fields">
@@ -2635,10 +2795,19 @@ function renderLocationsList() {
                value="${escHtml(loc.name || '')}"
                placeholder="Label"
                oninput="locationsData[${idx}].name = this.value">
-        <input class="loc-path-input" type="text"
-               value="${escHtml(loc.path || '')}"
-               placeholder="Absolute path"
-               oninput="locationsData[${idx}].path = this.value">
+        <div class="path-input-row">
+          <input class="loc-path-input" type="text"
+                 value="${escHtml(loc.path || '')}"
+                 placeholder="Absolute path"
+                 oninput="locationsData[${idx}].path = this.value">
+          ${missing
+            ? `<button type="button" class="btn btn-ghost loc-relocate-btn"
+                       onclick="openFolderBrowser(${idx})" title="Point this location at its new folder">Relocate</button>`
+            : ''}
+        </div>
+        ${missing
+          ? `<div class="loc-missing-note">⚠ Can't find this folder — it may have been moved or renamed.</div>`
+          : ''}
         <label class="loc-vis-toggle">
           <input type="checkbox" ${loc.visibility !== false ? 'checked' : ''}
                  onchange="locationsData[${idx}].visibility = this.checked; this.closest('.loc-row').classList.toggle('loc-hidden-row', !this.checked)">
@@ -2757,15 +2926,20 @@ async function saveLocations() {
 }
 
 // ─────────────────────────────────────────────
-//  FOLDER BROWSER  (Browse… next to Absolute path)
+//  FOLDER BROWSER  (Browse… next to Absolute path, and Relocate on a
+//  missing location — both reuse this same picker)
 // ─────────────────────────────────────────────
-let folderBrowserPath = null;   // currently listed directory (null = start screen, e.g. Windows drive list)
+let folderBrowserPath       = null;   // currently listed directory (null = start screen, e.g. Windows drive list)
+let folderBrowserRelocateIdx = null;  // null = "Browse…" mode (fills loc-new-path); otherwise index into locationsData being relocated
 
-function openFolderBrowser() {
-  // Start from whatever's already typed in the path field, if it looks
-  // like something worth listing; otherwise let the backend pick a default
-  // (home directory, or the drive list on Windows).
-  const typed = document.getElementById('loc-new-path').value.trim();
+function openFolderBrowser(relocateIdx = null) {
+  folderBrowserRelocateIdx = relocateIdx;
+  // Start from whatever's already typed in the relevant path field, if it
+  // looks like something worth listing; otherwise let the backend pick a
+  // default (home directory, or the drive list on Windows).
+  const typed = relocateIdx !== null
+    ? (locationsData[relocateIdx]?.path || '').trim()
+    : document.getElementById('loc-new-path').value.trim();
   document.getElementById('folder-browser-modal').classList.add('open');
   loadFolderBrowser(typed || null);
 }
@@ -2818,13 +2992,47 @@ async function loadFolderBrowser(path) {
   }
 }
 
-function confirmFolderBrowser() {
+async function confirmFolderBrowser() {
   if (!folderBrowserPath) {
     toast('Choose a folder first', 'error');
     return;
   }
+
+  if (folderBrowserRelocateIdx !== null) {
+    const idx = folderBrowserRelocateIdx;
+    const newPath = folderBrowserPath;
+    folderBrowserRelocateIdx = null;
+    closeModal('folder-browser-modal');
+    await performRelocate(idx, newPath);
+    return;
+  }
+
   document.getElementById('loc-new-path').value = folderBrowserPath;
   closeModal('folder-browser-modal');
+}
+
+// Repoints a location (and every already-indexed media row under it) to a
+// new folder on disk — the backend half of the "Relocate" action, for both
+// a red loc-row in the Locations Manager and a notification's action button.
+async function performRelocate(idx, newPath) {
+  const loc = locationsData[idx];
+  if (!loc) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/location/relocate`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ old_path: loc.path, new_path: newPath }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(data.error || 'Failed to relocate location', 'error'); return; }
+
+    toast(`Relocated — ${data.updated} file${data.updated !== 1 ? 's' : ''} repointed`, 'success');
+    await openLocationsManager();
+    populateLocationFilter();
+    loadNotifications();
+  } catch {
+    toast('Could not relocate — is app.py running?', 'error');
+  }
 }
 
 // ─────────────────────────────────────────────

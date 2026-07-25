@@ -76,8 +76,20 @@
     <button class="btn btn-ghost" onclick="openCreateAlbum()">＋ Album</button>
     <button class="btn btn-ghost" onclick="openLocationsManager()">⊞ Locations</button>
     <button class="btn btn-ghost" id="select-mode-btn" onclick="toggleSelectMode()">☑ Select</button>
+    <button class="btn btn-ghost btn-icon-only" id="notif-bell-btn" onclick="toggleNotificationsPanel(event)" title="Notifications">
+      🔔<span class="notif-badge" id="notif-badge" style="display:none">0</span>
+    </button>
     <button class="btn btn-ghost" id="theme-mode-toggle-btn" onclick="toggleThemeMode()" title="Toggle dark / light theme">☀️</button>
     <button class="btn btn-accent" onclick="triggerSync()">↻ Sync</button>
+  </div>
+
+  <!-- NOTIFICATIONS PANEL -->
+  <div id="notifications-panel" class="notifications-panel">
+    <div class="notif-panel-header">
+      <span>Notifications</span>
+      <button class="notif-mark-all" onclick="markAllNotificationsRead()">Mark all read</button>
+    </div>
+    <div id="notifications-list" class="notifications-list"></div>
   </div>
 
   <!-- SELECTION ACTION BAR — shown only while multi-select mode is active -->

@@ -413,6 +413,8 @@ The backend will:
 
 New media appears in the gallery immediately — no page refresh needed.
 
+If a configured source directory can't be found (moved/renamed/unmounted), or files that were previously indexed under a directory that *is* still reachable have gone missing, Luminary no longer deletes those records. Instead it raises a notification (🔔 in the top bar) with a **Relocate** action — see [Notifications](#notifications) below. The sync summary counter that used to read "Removed" now reads **Missing** for the same reason.
+
 ---
 
 ## Features
@@ -462,7 +464,14 @@ New media appears in the gallery immediately — no page refresh needed.
 Accessible via **⚙ Settings** in the sidebar. Covers all configuration keys — appearance, sorting, performance, media types, sync behaviour, metadata, and server settings. Changes are saved immediately to `data/configuration.json` and most take effect without a restart.
 
 ### Locations Manager
-Accessible via **⊞ Locations** in the top bar. Add, edit, rename, delete, and toggle visibility of source directories without editing `data/media.json` directly.
+Accessible via **⊞ Locations** in the top bar. Add, edit, rename, delete, and toggle visibility of source directories without editing `data/media.json` directly. A location that can't currently be found on disk (folder moved, renamed, or unmounted) is shown with a red row and a warning note, and a **Relocate** button appears next to its path field — pick the folder's new location and every already-indexed record under it is repointed in place (no re-scan/re-hash needed).
+
+### Notifications
+The 🔔 bell icon in the top bar shows a badge with the unread count and opens a panel listing recent notifications, newest/unread first. Currently raised for:
+- **Location unreachable** — a configured source directory couldn't be found during Sync, or while browsing to an item stored under it. Action: **Relocate**, which opens the Locations Manager with the affected row highlighted.
+- **File(s) not found** — an individual file (or a batch of them, aggregated into one notification) is missing even though its source directory is still reachable. Action: **View Location**.
+
+In both cases the underlying database records are kept, not deleted — relocating or fixing the folder restores access without losing history. Click a notification's action button to jump to and resolve it, the ✕ to dismiss without acting, or **Mark all read** to clear the badge. Notifications are polled every 30 seconds.
 
 ### Thumbnail Cache
 Thumbnails are generated once on first request and cached to the fixed `thumbnails/` location under the user data directory. HEIC files and video frames (extracted at 10% of duration via ffmpeg) are cached the same way. Subsequent requests serve from disk instantly.
@@ -510,7 +519,7 @@ All media endpoints support server-side filtering via query parameters.
 | Method | Path | Description |
 |---|---|---|
 | POST | `/api/sync` | Start a background sync of all visible sources. Returns `202 {status: "started"}` immediately, or `409` if a sync is already running |
-| GET | `/api/sync/status` | Poll current sync state — `{running, done, scanned, added, total_at_start, current_file, current_source, log (last 50 lines), result, error}` |
+| GET | `/api/sync/status` | Poll current sync state — `{running, done, scanned, added, total_at_start, current_file, current_source, log (last 50 lines), result, error}`. `result.missing` is the count of files that couldn't be found on disk this run (they're kept and notified about, not deleted — see [Notifications](#notifications)) |
 | GET | `/api/sync/stream` | Server-Sent Events stream of live sync progress — `connected`, `progress`, `log`, `complete`, `heartbeat` events; closes automatically when sync finishes |
 
 ### Albums
@@ -538,8 +547,18 @@ Folders group albums for display in the sidebar (collapsible tree). A folder can
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/locations` | Returns `data/media.json` entries with `root` and `label` aliases added |
+| GET | `/api/locations` | Returns `data/media.json` entries with `root`/`label` aliases, `synced_count` (indexed rows under that path), and `exists` (whether the path currently resolves to a real directory on disk) added |
 | POST | `/api/locations` | Overwrites `data/media.json` with the submitted array |
+| POST | `/api/location/delete` | `{"path": "…"}` — removes the location from `data/media.json` and discards every indexed record under it (and their cached thumbnails). Original files on disk are never touched. Returns `{ok, deleted}` |
+| POST | `/api/location/relocate` | `{"old_path": "…", "new_path": "…"}` — repoints every indexed record under `old_path` to `new_path` in place (source root, file path, and embedded metadata) and updates the matching `data/media.json` entry, without needing a re-scan. Also clears any outstanding notifications for `old_path`. Returns `{ok, updated, old_root, new_root}` |
+
+### Notifications
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/notifications` | `{items: [{id, type, title, message, location_path, unique_name, action, action_label, is_read, created_at}], unread_count}` — most recent first, unread bubbled to the top |
+| POST | `/api/notifications/<id>/read` | Marks one notification as read. Returns `{ok, unread_count}` |
+| POST | `/api/notifications/read-all` | Marks every notification as read. Returns `{ok, updated, unread_count: 0}` |
 
 ### Files
 
@@ -557,7 +576,7 @@ Folders group albums for display in the sidebar (collapsible tree). A folder can
 |---|---|---|
 | `config/configuration.json` | ✓ | App settings — shipped with the project, tracked in git, edit directly |
 | `data/media.json` | ✗ | Source directory list — auto-created with `~/Pictures` entry on first run |
-| `data/luminary.db` | ✗ | SQLite database — media records + albums + folders |
+| `data/luminary.db` | ✗ | SQLite database — media records + albums + folders + notifications |
 | `data/luminary.db-wal` / `-shm` | ✗ | SQLite WAL files — transient, safe to delete when server is stopped |
 | `thumbnails/` | ✗ | Thumbnail cache — auto-created on first run, fully git-ignored |
 | `cache/` | ✗ | Scratch cache for temp video frame extraction — auto-created, fully git-ignored |
@@ -573,6 +592,11 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 - Verify paths in `data/media.json` are absolute and the directories exist
 - Confirm `"visibility": true` on the desired sources
 - Check the terminal or `logs/log-YYYY-MM-DD.log` for scan errors
+
+**Photos disappeared / lightbox shows a broken image after moving a folder**
+- This is expected now — Luminary no longer deletes indexed records when a source file or folder can't be found. Check the 🔔 bell icon in the top bar for a notification with a **Relocate** / **View Location** action
+- Clicking the action opens the Locations Manager with the affected row shown in red; use its **Relocate** button to point Luminary at the folder's new path — already-indexed records are repointed in place, no re-sync needed
+- If the row isn't red but a file is still missing, the folder itself is reachable and only that specific file is gone (deleted, or renamed outside Luminary) — check it manually
 
 **Thumbnails not appearing / HEIC images not loading**
 - Install `pillow-heif`: `pip install pillow-heif`
