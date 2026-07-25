@@ -724,16 +724,30 @@ def relocate_media_source(old_path: str, new_path: str) -> dict:
     by whatever moved/renamed it (the common case for a plain move/rename),
     since matching is done by relative path, not a recursive filename scan.
 
+    IMPORTANT: old_path is matched as-is (rstripped, not re-resolved) — not
+    re-run through Path.resolve(). old_path's folder is, by definition,
+    gone (that's the whole reason this is being called), and resolving a
+    path that no longer exists can't canonicalize through any symlink or
+    mount point the way it could when the folder was scanned and its
+    source_root first stored — so re-resolving here could produce a string
+    that no longer matches any row at all, silently finding zero records.
+    Matching on the raw configured path avoids that, and mirrors the same
+    exact-OR-prefix comparison already used elsewhere for this (see
+    count_media_by_source_root / delete_media_by_source_root). new_path, by
+    contrast, is known to exist (checked by the caller), so it's safe to
+    resolve.
+
     Also rewrites the matching entry in media.json so future syncs look in
     the new place. Returns {updated, still_missing, old_root, new_root}.
     """
-    old_root = str(Path(old_path.rstrip("/\\")).resolve())
+    old_root = old_path.rstrip("/\\")
     new_root = str(Path(new_path.rstrip("/\\")).resolve())
 
     conn = get_db_conn()
     rows = conn.execute(
-        "SELECT uniqueName, file_path, name, metadata_json FROM media WHERE source_root = ?",
-        (old_root,),
+        "SELECT uniqueName, file_path, name, metadata_json, source_root FROM media "
+        "WHERE source_root = ? OR source_root LIKE ?",
+        (old_root, old_root + "/%"),
     ).fetchall()
 
     updated       = 0
@@ -741,11 +755,12 @@ def relocate_media_source(old_path: str, new_path: str) -> dict:
     with _db_lock:
         with conn:
             for r in rows:
+                row_root      = r["source_root"] or old_root
                 old_file_path = r["file_path"] or ""
-                if old_file_path == old_root:
+                if old_file_path == row_root:
                     new_file_path = new_root
-                elif old_file_path.startswith(old_root):
-                    new_file_path = new_root + old_file_path[len(old_root):]
+                elif old_file_path.startswith(row_root):
+                    new_file_path = new_root + old_file_path[len(row_root):]
                 else:
                     new_file_path = old_file_path  # shouldn't happen — leave untouched
 
@@ -770,12 +785,17 @@ def relocate_media_source(old_path: str, new_path: str) -> dict:
 
     # Point media.json at the new location too, so the next sync (and the
     # Locations Manager) reflect it instead of flagging it missing again.
-    sources = load_json(MEDIA_JSON, [])
-    old_norm = old_path.rstrip("/\\")
-    for s in sources:
-        if (s.get("path") or "").rstrip("/\\") == old_norm:
-            s["path"] = new_path
-    save_json(MEDIA_JSON, sources)
+    # Only when at least one file was actually matched — if nothing matched,
+    # the folder the user picked probably wasn't the right one, and leaving
+    # the config path alone means the row stays red so they can try again
+    # instead of the app silently pointing itself at the wrong place.
+    if updated > 0:
+        sources = load_json(MEDIA_JSON, [])
+        old_norm = old_root
+        for s in sources:
+            if (s.get("path") or "").rstrip("/\\") == old_norm:
+                s["path"] = new_path
+        save_json(MEDIA_JSON, sources)
 
     return {"updated": updated, "still_missing": still_missing, "old_root": old_root, "new_root": new_root}
 
