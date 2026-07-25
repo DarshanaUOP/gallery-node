@@ -586,6 +586,11 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 **Video thumbnails not generating**
 - ffmpeg must be on `PATH`: `which ffmpeg`
 
+**Terminal window flashes open/closed repeatedly while generating video thumbnails (Windows)**
+- Every `ffmpeg`/`ffprobe` call is a console-subsystem process, so Windows opens a console for each one unless told not to — this showed up as a visible terminal flash per video thumbnail
+- Fixed as of the current `app.py`, which passes `creationflags=subprocess.CREATE_NO_WINDOW` on every `subprocess.run()` call into `ffmpeg`/`ffprobe`/ImageMagick; confirm you're on a build that includes this fix if you still see it
+- No effect on Linux/macOS — the flag is Windows-only and is skipped entirely on other platforms
+
 **Filters returning no results**
 - Format, Camera, and Location dropdowns are populated from the full database — if they're empty, no media has been synced yet
 - After changing `data/media.json`, run Sync to index the new files

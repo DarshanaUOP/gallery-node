@@ -15,6 +15,7 @@ import logging
 import sqlite3
 import platform
 import threading
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from collections import deque
@@ -25,6 +26,20 @@ import app_paths
 #    written (see app_paths.py for the full frozen-vs-dev / migration logic) ──
 app_paths.ensure_dirs()
 app_paths.migrate_legacy_internal_data()  # no-op unless this is a frozen build's first launch
+
+# ── kwargs to suppress the console window Windows otherwise pops up for every
+#    subprocess.run() call into a console-subsystem exe (ffmpeg, ffprobe,
+#    ImageMagick). Our own process runs windowless (pythonw / PyInstaller
+#    --windowed), but that does NOT stop Windows from allocating a brand new
+#    console for each *child* process unless told not to — hence a terminal
+#    window flashing open/closed for every single thumbnail. CREATE_NO_WINDOW
+#    is the documented fix for exactly this. The flag only exists in the
+#    subprocess module on Windows, so it's resolved once here rather than at
+#    every call site.
+if platform.system() == "Windows":
+    _SUBPROCESS_NO_WINDOW_KWARGS = {"creationflags": subprocess.CREATE_NO_WINDOW}
+else:
+    _SUBPROCESS_NO_WINDOW_KWARGS = {}
 
 # ── optional deps (graceful degradation) ──────────────────────────────────────
 try:
@@ -1129,7 +1144,6 @@ def extract_gps(gps_info: dict) -> dict:
 
 def extract_video_metadata(filepath: str) -> dict:
     """Extract video metadata using ffprobe. Falls back to filesystem stats."""
-    import subprocess
     p    = Path(filepath)
     stat = p.stat()
     meta = {
@@ -1152,7 +1166,7 @@ def extract_video_metadata(filepath: str) -> dict:
             "-show_streams", "-show_format",
             str(filepath)
         ]
-        r = subprocess.run(cmd, capture_output=True, timeout=15)
+        r = subprocess.run(cmd, capture_output=True, timeout=15, **_SUBPROCESS_NO_WINDOW_KWARGS)
         if r.returncode == 0:
             info = json.loads(r.stdout)
             fmt  = info.get("format", {})
@@ -1255,7 +1269,7 @@ def open_image_any_format(filepath: str):
             pass
 
         # Strategy 3: system tools — ImageMagick or ffmpeg
-        import subprocess, tempfile
+        import tempfile
         for cmd_fn in [
             lambda s, d: ["magick", s, d],
             lambda s, d: ["convert", s, d],
@@ -1265,7 +1279,7 @@ def open_image_any_format(filepath: str):
                 with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False, dir=str(app_paths.CACHE_DIR)) as tmp:
                     tmp_path = tmp.name
                 r = subprocess.run(cmd_fn(filepath, tmp_path),
-                                   capture_output=True, timeout=30)
+                                   capture_output=True, timeout=30, **_SUBPROCESS_NO_WINDOW_KWARGS)
                 if r.returncode == 0 and os.path.isfile(tmp_path):
                     img = PilImage.open(tmp_path).copy()
                     os.unlink(tmp_path)
@@ -1952,7 +1966,7 @@ if FLASK_AVAILABLE:
         Result is cached to disk so decoding only happens once.
         """
         from flask import Response, abort
-        import subprocess, tempfile
+        import tempfile
         cfg        = load_config()
         size       = int(request.args.get("size",    cfg.get("thumbnail_size",    400)))
         quality    = int(request.args.get("quality", cfg.get("thumbnail_quality", 60)))
@@ -1986,7 +2000,7 @@ if FLASK_AVAILABLE:
                     "-q:v", "3",
                     tmp_path
                 ]
-                r = subprocess.run(cmd, capture_output=True, timeout=30)
+                r = subprocess.run(cmd, capture_output=True, timeout=30, **_SUBPROCESS_NO_WINDOW_KWARGS)
                 if r.returncode == 0 and os.path.isfile(tmp_path):
                     with open(tmp_path, "rb") as f:
                         data = f.read()
