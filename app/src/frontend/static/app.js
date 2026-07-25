@@ -1293,6 +1293,7 @@ function renderLightbox() {
   // Reset zoom state on every navigation
   lbZoomReset(true);
   document.getElementById('lb-zoom-bar').classList.remove('visible');
+  _clearLbMissingFilePopup();
 
   if (item.type === 'video') {
     const prev = lb.querySelector('video');
@@ -1337,11 +1338,7 @@ function renderLightbox() {
              document.getElementById('lb-zoom-bar').classList.add('visible');
              lbInitZoom();
            "
-           onerror="
-             this.remove();
-             var t=document.getElementById('lb-thumb');
-             if(t){t.style.filter='none';t.style.transform='scale(1)';}
-           ">`;
+           onerror="handleLbFullImageError()">`;
   }
 
   document.getElementById('lb-filename').textContent = item.name;
@@ -1670,12 +1667,61 @@ function _lbDetachEvents() {
   if (box._lbDblClick)    { box.removeEventListener('dblclick',   box._lbDblClick); }
 }
 
+// Fired by the full-size <img>'s onerror when a file the DB still has
+// indexed can't actually be loaded (deleted/moved/renamed on disk). The
+// backend has already logged a "file not found" notification by the time
+// this 404s — this just gives immediate in-lightbox feedback and backs out
+// of the view automatically instead of leaving a permanently broken image.
+let lbMissingFileTimer = null;
+
+function handleLbFullImageError() {
+  const img = document.getElementById('lb-full');
+  if (img) img.remove();
+  const t = document.getElementById('lb-thumb');
+  if (t) { t.style.filter = 'none'; t.style.transform = 'scale(1)'; }
+
+  showLbMissingFilePopup();
+  loadNotifications();   // pick up the notification the backend just raised
+}
+
+function showLbMissingFilePopup() {
+  if (document.getElementById('lb-missing-popup')) return;   // already showing
+  const lb = document.getElementById('lightbox');
+  if (!lb) return;
+
+  const popup = document.createElement('div');
+  popup.id = 'lb-missing-popup';
+  popup.className = 'lb-missing-popup';
+  popup.innerHTML = `
+    <div class="lb-missing-popup-icon">⚠</div>
+    <div class="lb-missing-popup-title">File not found</div>
+    <div class="lb-missing-popup-msg">
+      This file couldn't be located on disk — it may have been moved, renamed, or deleted.
+      Check 🔔 Notifications to relocate it.
+    </div>
+    <div class="lb-missing-popup-sub">Closing automatically…</div>`;
+  lb.appendChild(popup);
+
+  lbMissingFileTimer = setTimeout(() => {
+    closeLightbox();
+  }, 5000);
+}
+
+function _clearLbMissingFilePopup() {
+  if (lbMissingFileTimer) {
+    clearTimeout(lbMissingFileTimer);
+    lbMissingFileTimer = null;
+  }
+  document.getElementById('lb-missing-popup')?.remove();
+}
+
 function closeLightbox() {
   _lbDetachEvents();
   const vid = document.getElementById('lb-content')?.querySelector('video');
   if (vid) { vid.pause(); vid.src = ''; vid.load(); }
   document.getElementById('lightbox').classList.remove('open');
   _destroyMiniMap('lb-detail-minimap');
+  _clearLbMissingFilePopup();
 }
 
 function lbNav(dir) {
@@ -3003,7 +3049,7 @@ async function confirmFolderBrowser() {
     const newPath = folderBrowserPath;
     folderBrowserRelocateIdx = null;
     closeModal('folder-browser-modal');
-    await performRelocate(idx, newPath);
+    setPendingRelocatePath(idx, newPath);
     return;
   }
 
@@ -3011,9 +3057,41 @@ async function confirmFolderBrowser() {
   closeModal('folder-browser-modal');
 }
 
-// Repoints a location (and every already-indexed media row under it) to a
-// new folder on disk — the backend half of the "Relocate" action, for both
-// a red loc-row in the Locations Manager and a notification's action button.
+// After the user picks a folder for a missing location, don't hit the
+// backend yet — show the chosen path and flip the button to "Validate" so
+// they can confirm before Luminary starts matching files against it.
+function setPendingRelocatePath(idx, newPath) {
+  const loc = locationsData[idx];
+  if (!loc) return;
+  loc._pendingRelocatePath = newPath;
+
+  const row = document.querySelector(`.loc-row[data-idx="${idx}"]`);
+  if (!row) return;
+
+  const pathInput = row.querySelector('.loc-path-input');
+  if (pathInput) pathInput.value = newPath;
+
+  const btn = row.querySelector('.loc-relocate-btn');
+  if (btn) {
+    btn.textContent = 'Validate';
+    btn.classList.add('loc-validate-btn');
+    btn.title = 'Check each file against this folder and relink matches';
+    btn.onclick = () => validateRelocation(idx);
+  }
+}
+
+// "Validate" — crosschecks every DB record under the old location against
+// the picked folder, one file at a time, and relinks only the ones found.
+async function validateRelocation(idx) {
+  const loc = locationsData[idx];
+  const newPath = loc && loc._pendingRelocatePath;
+  if (!loc || !newPath) return;
+  await performRelocate(idx, newPath);
+}
+
+// Repoints a location's already-indexed media rows to a new folder on
+// disk — the backend half of the "Validate" action, for both a red
+// loc-row in the Locations Manager and a notification's action button.
 async function performRelocate(idx, newPath) {
   const loc = locationsData[idx];
   if (!loc) return;
@@ -3026,12 +3104,18 @@ async function performRelocate(idx, newPath) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) { toast(data.error || 'Failed to relocate location', 'error'); return; }
 
-    toast(`Relocated — ${data.updated} file${data.updated !== 1 ? 's' : ''} repointed`, 'success');
-    await openLocationsManager();
+    const matched = data.updated || 0;
+    const missing = data.still_missing || 0;
+    const msg = missing > 0
+      ? `Validated — ${matched} file${matched !== 1 ? 's' : ''} relinked, ${missing} still not found`
+      : `Validated — ${matched} file${matched !== 1 ? 's' : ''} relinked`;
+    toast(msg, missing > 0 ? 'info' : 'success');
+
+    await openLocationsManager();   // re-fetch resets exists/pending state for every row
     populateLocationFilter();
     loadNotifications();
   } catch {
-    toast('Could not relocate — is app.py running?', 'error');
+    toast('Could not validate — is app.py running?', 'error');
   }
 }
 

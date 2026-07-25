@@ -1243,6 +1243,49 @@
   }
   #lightbox.open { display: flex; }
 
+  /* Custom "file not found" popup shown over the lightbox — replaces the
+     browser's default broken-image icon, and auto-closes the lightbox. */
+  .lb-missing-popup {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 850;
+    width: 340px;
+    max-width: 86vw;
+    background: var(--surface);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    padding: 24px 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 8px;
+  }
+  .lb-missing-popup-icon {
+    font-size: 28px;
+    color: var(--danger);
+    line-height: 1;
+  }
+  .lb-missing-popup-title {
+    font-size: calc(14px * var(--font-scale));
+    color: var(--text);
+    font-weight: 600;
+  }
+  .lb-missing-popup-msg {
+    font-size: calc(11.5px * var(--font-scale));
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+  .lb-missing-popup-sub {
+    margin-top: 6px;
+    font-size: calc(10px * var(--font-scale));
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    opacity: 0.8;
+  }
+
   /* ── LEFT: media area — takes all remaining space ─────────────────────────── */
   #lb-left {
     flex: 1;
@@ -2140,6 +2183,18 @@
     transition: all 0.15s;
   }
   .loc-relocate-btn:hover { background: rgba(var(--accent-rgb),0.15); border-color: var(--accent); }
+
+  /* After a folder is picked, the same button becomes "Validate" in green */
+  .loc-relocate-btn.loc-validate-btn {
+    color: var(--success);
+    border-color: rgba(var(--accent-rgb),0);
+    border: 1px solid var(--success);
+    background: rgba(62,192,120,0.1);
+  }
+  .loc-relocate-btn.loc-validate-btn:hover {
+    background: rgba(62,192,120,0.2);
+    border-color: var(--success);
+  }
 
   /* Momentary highlight when a notification's action deep-links to a row */
   .loc-row.loc-row-flash { animation: locRowFlash 1.8s ease; }

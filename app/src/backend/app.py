@@ -712,23 +712,32 @@ def resolve_location_notifications(location_path: str) -> None:
 
 def relocate_media_source(old_path: str, new_path: str) -> dict:
     """
-    Repoint every indexed media record whose source_root matches old_path to
-    new_path, instead of requiring a full re-sync/re-hash — used when the
-    user tells Luminary where a renamed/moved watched folder went, via the
-    "Relocate" action on a notification or in the Locations Manager.
+    "Validate" a relocated location: for every indexed media record whose
+    source_root matches old_path, check — one file at a time — whether a
+    file of the same name exists at the corresponding relative path under
+    new_path. Only records that actually resolve there get repointed; a
+    record whose file still can't be found at the new location is left
+    untouched (still flagged missing) rather than blindly rewritten, so a
+    partial/incorrect folder pick doesn't silently mislink history.
+
+    This assumes the folder's internal subdirectory structure was preserved
+    by whatever moved/renamed it (the common case for a plain move/rename),
+    since matching is done by relative path, not a recursive filename scan.
+
     Also rewrites the matching entry in media.json so future syncs look in
-    the new place. Returns {updated, old_root, new_root}.
+    the new place. Returns {updated, still_missing, old_root, new_root}.
     """
     old_root = str(Path(old_path.rstrip("/\\")).resolve())
     new_root = str(Path(new_path.rstrip("/\\")).resolve())
 
     conn = get_db_conn()
     rows = conn.execute(
-        "SELECT uniqueName, file_path, metadata_json FROM media WHERE source_root = ?",
+        "SELECT uniqueName, file_path, name, metadata_json FROM media WHERE source_root = ?",
         (old_root,),
     ).fetchall()
 
-    updated = 0
+    updated       = 0
+    still_missing = 0
     with _db_lock:
         with conn:
             for r in rows:
@@ -739,6 +748,11 @@ def relocate_media_source(old_path: str, new_path: str) -> dict:
                     new_file_path = new_root + old_file_path[len(old_root):]
                 else:
                     new_file_path = old_file_path  # shouldn't happen — leave untouched
+
+                candidate = os.path.join(new_file_path, r["name"] or "")
+                if not os.path.isfile(candidate):
+                    still_missing += 1
+                    continue  # this specific file wasn't found at the new location
 
                 try:
                     meta = json.loads(r["metadata_json"]) if r["metadata_json"] else {}
@@ -763,7 +777,7 @@ def relocate_media_source(old_path: str, new_path: str) -> dict:
             s["path"] = new_path
     save_json(MEDIA_JSON, sources)
 
-    return {"updated": updated, "old_root": old_root, "new_root": new_root}
+    return {"updated": updated, "still_missing": still_missing, "old_root": old_root, "new_root": new_root}
 
 
 def get_existing_hashes_and_paths() -> tuple:
@@ -2502,15 +2516,17 @@ if FLASK_AVAILABLE:
     @app.route("/api/location/relocate", methods=["POST"])
     def api_location_relocate():
         """
-        Repoint a location to a new folder on disk. Body: { old_path, new_path }
+        Validate a relocated location against a new folder on disk.
+        Body: { old_path, new_path }
 
-        Used by the "Relocate" action — either from a red loc-row in the
-        Locations Manager, or from a notification's action button. Updates
-        every already-indexed media row under old_path in place (source_root,
-        file_path, and the embedded metadata) and rewrites media.json, so
-        nothing needs to be re-scanned or re-hashed. Also clears any
-        outstanding notifications tied to the old path.
-        Returns { ok: true, updated: N, old_root, new_root }.
+        Used by the "Validate" action in the Locations Manager (after
+        "Relocate" is clicked and a new folder is picked), or from a
+        notification's action button. Every already-indexed media row under
+        old_path is checked one file at a time against new_path — only rows
+        whose file actually resolves there get repointed (source_root,
+        file_path, and the embedded metadata); everything else is left
+        as-is. Also rewrites media.json so nothing needs to be re-scanned.
+        Returns { ok: true, updated, still_missing, old_root, new_root }.
         """
         body     = request.get_json(force=True) or {}
         old_path = (body.get("old_path") or "").strip()
@@ -2523,9 +2539,22 @@ if FLASK_AVAILABLE:
         result = relocate_media_source(old_path, new_path)
         resolve_location_notifications(old_path)
 
+        if result["still_missing"] > 0:
+            create_notification(
+                "file_missing",
+                title=f"{result['still_missing']} file(s) still not found",
+                message=(
+                    f"After relocating to \"{new_path}\", {result['still_missing']} "
+                    f"file(s) could not be matched there and remain unlinked."
+                ),
+                location_path=new_path,
+                action="relocate",
+                action_label="View Location",
+            )
+
         log.info(
-            "Relocated location %s -> %s (%d record(s) updated)",
-            old_path, new_path, result["updated"],
+            "Relocated location %s -> %s (%d matched, %d still missing)",
+            old_path, new_path, result["updated"], result["still_missing"],
         )
         return jsonify({"ok": True, **result})
 
