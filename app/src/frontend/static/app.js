@@ -2991,9 +2991,11 @@ function openFolderBrowser(relocateIdx = null) {
 }
 
 async function loadFolderBrowser(path) {
-  const listEl = document.getElementById('folder-browser-list');
-  const pathEl = document.getElementById('folder-browser-path');
+  const listEl     = document.getElementById('folder-browser-list');
+  const pathEl     = document.getElementById('folder-browser-path');
+  const fallbackEl = document.getElementById('folder-browser-fallback-note');
   listEl.innerHTML = '<div class="folder-browser-msg">Loading…</div>';
+  fallbackEl.style.display = 'none';
 
   try {
     const url = path ? `${API_BASE}/api/browse?path=${encodeURIComponent(path)}`
@@ -3008,6 +3010,16 @@ async function loadFolderBrowser(path) {
 
     folderBrowserPath = data.path || null;
     pathEl.textContent = data.path || 'Select a starting point';
+
+    // The exact folder we asked for wasn't there (e.g. Relocate opened on
+    // a location that's been moved/renamed) — the backend walked up to the
+    // nearest ancestor that still exists instead of dead-ending. Explain
+    // why we're not starting exactly where they expected.
+    if (data.fallback_from) {
+      fallbackEl.textContent =
+        `⚠ Couldn't find "${data.fallback_from}" — starting from the nearest folder that still exists. Navigate down to find the new location.`;
+      fallbackEl.style.display = 'block';
+    }
 
     listEl.innerHTML = '';
 

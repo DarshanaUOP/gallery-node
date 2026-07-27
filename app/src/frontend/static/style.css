@@ -2219,6 +2219,16 @@
   }
 
   /* ── FOLDER BROWSER MODAL ── */
+  .folder-browser-fallback-note {
+    font-size: calc(11px * var(--font-scale));
+    color: var(--danger);
+    background: rgba(200,126,126,0.08);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    line-height: 1.5;
+  }
   .folder-browser-path {
     font-family: var(--font-mono);
     font-size: calc(11px * var(--font-scale));

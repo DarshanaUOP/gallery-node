@@ -2634,6 +2634,27 @@ if FLASK_AVAILABLE:
         updated = mark_all_notifications_read()
         return jsonify({"ok": True, "updated": updated, "unread_count": 0})
 
+    def _nearest_existing_ancestor(path_str: str) -> tuple:
+        """
+        Walk up from path_str until a directory that actually exists is
+        found. Used by /api/browse so opening the folder picker on an old,
+        now-gone location (the common "Relocate" starting point) doesn't
+        dead-end at a bare error — it starts the user at the nearest
+        ancestor folder that's still there, e.g. "a/b/c/d/photos" -> ...
+        -> "a/b/c/d" -> "a/b/c" -> "a/b" -> "a" (stopping at the first one
+        that exists). Returns (existing_path, original_path_if_different_else_None).
+        """
+        p = Path(path_str)
+        requested = p
+        while p.parent != p:
+            try:
+                if p.exists():
+                    break
+            except OSError:
+                pass  # can't stat this component either — keep walking up
+            p = p.parent
+        return p, (requested if p != requested else None)
+
     @app.route("/api/browse", methods=["GET"])
     def api_browse():
         """
@@ -2646,6 +2667,12 @@ if FLASK_AVAILABLE:
           path — absolute directory to list. Omitted/blank starts at the
                  user's home directory (or, on Windows, returns the drive
                  list so the user has somewhere to start from).
+
+        If the requested path doesn't exist (e.g. Relocate is opened on a
+        location whose folder was moved/renamed), this walks up to the
+        nearest existing ancestor instead of erroring out, and reports the
+        fallback via "fallback_from" so the frontend can tell the user why
+        they didn't land exactly where they expected.
         """
         raw = request.args.get("path", "").strip()
 
@@ -2663,6 +2690,12 @@ if FLASK_AVAILABLE:
             target = Path(raw).resolve(strict=False)
         except (OSError, RuntimeError):
             return jsonify({"error": f"Invalid path: {raw}"}), 400
+
+        fallback_from = None
+        if not target.exists():
+            target, requested = _nearest_existing_ancestor(target)
+            if requested is not None:
+                fallback_from = str(requested)
 
         if not target.exists():
             return jsonify({"error": f"Path does not exist: {target}"}), 404
@@ -2692,9 +2725,10 @@ if FLASK_AVAILABLE:
             platform.system() == "Windows" and str(target).rstrip("\\").endswith(":")
         )
         return jsonify({
-            "path":   str(target),
-            "parent": None if at_root else str(parent),
-            "dirs":   [{"name": name, "path": str(target / name)} for name in names],
+            "path":          str(target),
+            "parent":        None if at_root else str(parent),
+            "dirs":          [{"name": name, "path": str(target / name)} for name in names],
+            "fallback_from": fallback_from,
         })
 
     @app.route("/api/sync", methods=["POST"])
