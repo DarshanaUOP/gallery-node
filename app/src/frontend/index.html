@@ -426,17 +426,32 @@
   </div>
 </div>
 
-<!-- RESOLVE MISMATCH MODAL — subfolder-level drift found by the "Resolve" button -->
+<!-- RESOLVE MODAL — indexed subfolders no longer found on disk (renamed/moved) -->
 <div class="modal-overlay" id="resolve-mismatch-modal">
   <div class="modal" style="position:relative;width:600px;max-width:96vw">
     <button class="modal-close" onclick="closeModal('resolve-mismatch-modal')">✕</button>
-    <h2>Folder Structure Changed</h2>
+    <h2>Missing Subfolders</h2>
     <p style="font-size:11px;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
-      This location's own path is still valid, but its contents don't fully match what's indexed.
+      This location's own path is still valid, but some of its indexed subfolders can no longer be found — they may have been renamed or moved.
     </p>
     <div id="resolve-mismatch-list"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('resolve-mismatch-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- SYNC NEW FOLDERS MODAL — folders on disk not indexed at all yet -->
+<div class="modal-overlay" id="sync-new-folders-modal">
+  <div class="modal" style="position:relative;width:600px;max-width:96vw">
+    <button class="modal-close" onclick="closeModal('sync-new-folders-modal')">✕</button>
+    <h2>New Folders Found</h2>
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
+      These folders exist on disk under this location but aren't indexed yet. Sync just the ones you want.
+    </p>
+    <div id="sync-new-folders-list"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('sync-new-folders-modal')">Close</button>
     </div>
   </div>
 </div>

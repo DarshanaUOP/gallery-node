@@ -2200,6 +2200,30 @@
   }
   .loc-resolve-btn:hover { background: rgba(200,126,126,0.15); border-color: var(--danger); }
 
+  /* Cool-color "Sync" button — checks for folders on disk that aren't
+     indexed at all yet, and indexes just those (companion to Resolve,
+     which only handles the opposite case: indexed folders gone missing). */
+  .loc-sync-btn {
+    background: none;
+    border: 1px solid rgba(90,170,220,0.5);
+    color: #5aaadc;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: calc(11px * var(--font-scale));
+    padding: 6px 12px;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .loc-sync-btn:hover { background: rgba(90,170,220,0.15); border-color: #5aaadc; }
+
+  .btn-sync {
+    background: rgba(90,170,220,0.12);
+    border: 1px solid rgba(90,170,220,0.5);
+    color: #5aaadc;
+  }
+  .btn-sync:hover { background: rgba(90,170,220,0.22); border-color: #5aaadc; }
+  .btn-sync:disabled { opacity: 0.6; cursor: default; }
+
   /* ── RESOLVE MISMATCH MODAL ── */
   .resolve-mismatch-group-title {
     font-size: 10px;
