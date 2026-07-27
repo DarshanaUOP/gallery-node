@@ -2987,10 +2987,16 @@ function openFolderBrowser(relocateIdx = null) {
     ? (locationsData[relocateIdx]?.path || '').trim()
     : document.getElementById('loc-new-path').value.trim();
   document.getElementById('folder-browser-modal').classList.add('open');
-  loadFolderBrowser(typed || null);
+  // Only let the backend fall back to the nearest existing ancestor when
+  // this is a Relocate — its old folder is *expected* to be gone, so
+  // dead-ending on an error would be a UX trap. For the plain "Browse…"
+  // used when adding/editing a location, a nonexistent path is very
+  // likely just a typo and should surface as a clear error instead of
+  // silently landing somewhere else.
+  loadFolderBrowser(typed || null, relocateIdx !== null);
 }
 
-async function loadFolderBrowser(path) {
+async function loadFolderBrowser(path, allowFallback = false) {
   const listEl     = document.getElementById('folder-browser-list');
   const pathEl     = document.getElementById('folder-browser-path');
   const fallbackEl = document.getElementById('folder-browser-fallback-note');
@@ -2998,8 +3004,11 @@ async function loadFolderBrowser(path) {
   fallbackEl.style.display = 'none';
 
   try {
-    const url = path ? `${API_BASE}/api/browse?path=${encodeURIComponent(path)}`
-                      : `${API_BASE}/api/browse`;
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    if (allowFallback) params.set('allow_fallback', '1');
+    const qs  = params.toString();
+    const url = `${API_BASE}/api/browse${qs ? '?' + qs : ''}`;
     const r = await fetch(url);
     const data = await r.json();
 
@@ -3027,7 +3036,7 @@ async function loadFolderBrowser(path) {
       const up = document.createElement('div');
       up.className = 'folder-browser-item folder-browser-up';
       up.textContent = '⬆ .. (up a level)';
-      up.onclick = () => loadFolderBrowser(data.parent);
+      up.onclick = () => loadFolderBrowser(data.parent, allowFallback);
       listEl.appendChild(up);
     }
 
@@ -3041,7 +3050,7 @@ async function loadFolderBrowser(path) {
         const item = document.createElement('div');
         item.className = 'folder-browser-item';
         item.textContent = '📁 ' + d.name;
-        item.onclick = () => loadFolderBrowser(d.path);
+        item.onclick = () => loadFolderBrowser(d.path, allowFallback);
         listEl.appendChild(item);
       });
     }

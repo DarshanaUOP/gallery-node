@@ -2664,17 +2664,26 @@ if FLASK_AVAILABLE:
         media root.
 
         Query params:
-          path — absolute directory to list. Omitted/blank starts at the
-                 user's home directory (or, on Windows, returns the drive
-                 list so the user has somewhere to start from).
-
-        If the requested path doesn't exist (e.g. Relocate is opened on a
-        location whose folder was moved/renamed), this walks up to the
-        nearest existing ancestor instead of erroring out, and reports the
-        fallback via "fallback_from" so the frontend can tell the user why
-        they didn't land exactly where they expected.
+          path           — absolute directory to list. Omitted/blank starts
+                           at the user's home directory (or, on Windows,
+                           returns the drive list so the user has somewhere
+                           to start from).
+          allow_fallback — "1" to walk up to the nearest existing ancestor
+                           instead of erroring when `path` doesn't exist,
+                           reporting the fallback via "fallback_from" in the
+                           response. Used only when the folder browser is
+                           opened from "Relocate" on an already-broken
+                           location (its old folder is expected to be gone
+                           — that's the point of relocating it), so the user
+                           lands somewhere useful instead of a dead end.
+                           Omitted/"0" for the plain "Browse…" used when
+                           adding/editing a location path, where a
+                           nonexistent path is very likely just a typo and
+                           should surface as a clear error instead of
+                           silently jumping to a different folder.
         """
-        raw = request.args.get("path", "").strip()
+        raw            = request.args.get("path", "").strip()
+        allow_fallback = request.args.get("allow_fallback", "").strip() == "1"
 
         if not raw:
             if platform.system() == "Windows":
@@ -2692,7 +2701,7 @@ if FLASK_AVAILABLE:
             return jsonify({"error": f"Invalid path: {raw}"}), 400
 
         fallback_from = None
-        if not target.exists():
+        if allow_fallback and not target.exists():
             target, requested = _nearest_existing_ancestor(target)
             if requested is not None:
                 fallback_from = str(requested)
