@@ -2244,6 +2244,7 @@ function closeModal(id) {
 document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('click', e => {
     if (e.target === m) {
+      if (m.id === 'folder-browser-modal') { closeFolderBrowserModal(); return; }
       m.classList.remove('open');
       if (m.id === 'danger-confirm-modal') _dangerConfirmCallback = null;
       if (m.id === 'meta-modal') _destroyMiniMap('meta-minimap');
@@ -3038,6 +3039,7 @@ async function saveLocations() {
 let folderBrowserPath       = null;   // currently listed directory (null = start screen, e.g. Windows drive list)
 let folderBrowserRelocateIdx = null;  // null = "Browse…" mode (fills loc-new-path); otherwise index into locationsData being relocated
 let folderBrowserSubfolderOldPath = null;  // set instead of folderBrowserRelocateIdx when relocating a single subfolder from the Resolve popup
+let folderBrowserReturnModalId = null;     // a modal to reopen once the folder browser closes (see closeFolderBrowserModal)
 
 function openFolderBrowser(relocateIdx = null) {
   folderBrowserRelocateIdx = relocateIdx;
@@ -3058,14 +3060,37 @@ function openFolderBrowser(relocateIdx = null) {
   loadFolderBrowser(typed || null, relocateIdx !== null);
 }
 
-// Same picker, opened from the Resolve mismatch popup to relocate one
-// subfolder (not the whole location). oldPath is expected to be gone —
-// same reasoning as the whole-location Relocate case above.
+// Same picker, opened from the Resolve popup to relocate one subfolder
+// (not the whole location). oldPath is expected to be gone — same
+// reasoning as the whole-location Relocate case above.
 function openFolderBrowserForSubfolder(oldPath) {
   folderBrowserRelocateIdx = null;
   folderBrowserSubfolderOldPath = oldPath;
+
+  // Both modals sit in the same stacking layer, and resolve-mismatch-modal
+  // comes later in the DOM than folder-browser-modal — so if it's left
+  // open, it stays visually on top and swallows every click meant for the
+  // folder browser underneath it. Close it first and remember to bring it
+  // back (see closeFolderBrowserModal) once the user is done here.
+  const mismatchModal = document.getElementById('resolve-mismatch-modal');
+  if (mismatchModal && mismatchModal.classList.contains('open')) {
+    mismatchModal.classList.remove('open');
+    folderBrowserReturnModalId = 'resolve-mismatch-modal';
+  }
+
   document.getElementById('folder-browser-modal').classList.add('open');
   loadFolderBrowser(oldPath || null, true);
+}
+
+// Closes the folder browser and — if it was opened on top of another modal
+// (see openFolderBrowserForSubfolder) — reopens that modal so the user
+// lands back where they were, instead of everything just disappearing.
+function closeFolderBrowserModal() {
+  closeModal('folder-browser-modal');
+  if (folderBrowserReturnModalId) {
+    document.getElementById(folderBrowserReturnModalId)?.classList.add('open');
+    folderBrowserReturnModalId = null;
+  }
 }
 
 async function loadFolderBrowser(path, allowFallback = false) {
@@ -3141,7 +3166,7 @@ async function confirmFolderBrowser() {
     const oldPath = folderBrowserSubfolderOldPath;
     const newPath = folderBrowserPath;
     folderBrowserSubfolderOldPath = null;
-    closeModal('folder-browser-modal');
+    closeFolderBrowserModal();
     await performSubfolderRelocate(oldPath, newPath);
     return;
   }
@@ -3150,13 +3175,13 @@ async function confirmFolderBrowser() {
     const idx = folderBrowserRelocateIdx;
     const newPath = folderBrowserPath;
     folderBrowserRelocateIdx = null;
-    closeModal('folder-browser-modal');
+    closeFolderBrowserModal();
     setPendingRelocatePath(idx, newPath);
     return;
   }
 
   document.getElementById('loc-new-path').value = folderBrowserPath;
-  closeModal('folder-browser-modal');
+  closeFolderBrowserModal();
 }
 
 // After the user picks a folder for a missing location, don't hit the

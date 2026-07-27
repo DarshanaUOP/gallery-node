@@ -414,13 +414,13 @@
 <!-- FOLDER BROWSER MODAL -->
 <div class="modal-overlay" id="folder-browser-modal">
   <div class="modal" id="folder-browser-inner" style="position:relative;width:520px;max-width:96vw">
-    <button class="modal-close" onclick="closeModal('folder-browser-modal')">✕</button>
+    <button class="modal-close" onclick="closeFolderBrowserModal()">✕</button>
     <h2>Choose a Folder</h2>
     <div id="folder-browser-fallback-note" class="folder-browser-fallback-note" style="display:none"></div>
     <div id="folder-browser-path" class="folder-browser-path"></div>
     <div id="folder-browser-list" class="folder-browser-list"></div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('folder-browser-modal')">Cancel</button>
+      <button class="btn btn-ghost" onclick="closeFolderBrowserModal()">Cancel</button>
       <button class="btn btn-accent" onclick="confirmFolderBrowser()">Select This Folder</button>
     </div>
   </div>
