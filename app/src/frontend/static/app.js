@@ -1309,7 +1309,7 @@ function renderLightbox() {
                preload="${config.video_preload || 'metadata'}"
                ${config.video_autoplay ? 'autoplay muted' : ''}
                playsinline
-               onerror="document.getElementById('lb-video-err').style.display='flex'">
+               onerror="handleLbVideoError('${videoSrc}')">
           <source src="${videoSrc}" type="${videoMime}">
         </video>
         <div id="lb-video-err" style="display:none;flex-direction:column;align-items:center;
@@ -1682,6 +1682,31 @@ function handleLbFullImageError() {
 
   showLbMissingFilePopup();
   loadNotifications();   // pick up the notification the backend just raised
+}
+
+// Fired by the <video>'s onerror. A <video> element's error event doesn't
+// distinguish "the file isn't there" from "the browser can't decode this
+// format" — both just fire onerror — so a quick HEAD request tells them
+// apart: a 404 means /api/video (via _resolve_path on the backend) couldn't
+// find the file on disk, in which case we show the same shared "file not
+// found" popup and auto-close as the image case. Anything else falls back
+// to the existing "this browser can't play this format" message.
+async function handleLbVideoError(videoSrc) {
+  try {
+    const r = await fetch(videoSrc, { method: 'HEAD' });
+    if (r.status === 404) {
+      const vid = document.getElementById('lb-video');
+      if (vid) { vid.pause(); vid.style.display = 'none'; }
+      showLbMissingFilePopup();
+      loadNotifications();   // pick up the notification the backend just raised
+      return;
+    }
+  } catch {
+    // Couldn't even reach the backend — fall through to the generic
+    // unsupported-format message below rather than assuming a specific cause.
+  }
+  const err = document.getElementById('lb-video-err');
+  if (err) err.style.display = 'flex';
 }
 
 function showLbMissingFilePopup() {
