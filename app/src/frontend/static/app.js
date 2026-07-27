@@ -1303,27 +1303,40 @@ function renderLightbox() {
     const ext       = item.name.split('.').pop().toLowerCase();
     const unsupported = ['avi','mkv','wmv','flv','ts','mts'];
     const needsWarning = unsupported.includes(ext);
+
+    // Placeholder while we verify the file exists — see note below.
     lb.innerHTML = `
-      <div id="lb-video-wrap">
-        <video id="lb-video" controls
-               preload="${config.video_preload || 'metadata'}"
-               ${config.video_autoplay ? 'autoplay muted' : ''}
-               playsinline
-               onerror="handleLbVideoError('${videoSrc}')">
-          <source src="${videoSrc}" type="${videoMime}">
-        </video>
-        <div id="lb-video-err" style="display:none;flex-direction:column;align-items:center;
-             gap:8px;color:var(--text-muted);font-size:12px;text-align:center;padding:20px">
-          <span style="font-size:32px">⚠</span>
-          <span>This browser cannot play <strong style="color:var(--text)">.${ext.toUpperCase()}</strong> files.</span>
-          <span>Convert to MP4/WebM, or open directly in a media player.</span>
-          <a href="${videoSrc}" download="${escHtml(item.name)}"
-             style="color:var(--accent);text-decoration:none;border:1px solid var(--accent);
-                    padding:6px 16px;border-radius:4px;margin-top:4px">⬇ Download file</a>
-        </div>
-        ${needsWarning ? `<div style="font-size:11px;color:var(--danger);opacity:0.8;text-align:center">
-          ⚠ .${ext.toUpperCase()} may not play in browsers — MP4 or WebM recommended</div>` : ''}
-      </div>`;
+      <div id="lb-video-wrap" style="display:flex;align-items:center;justify-content:center;
+           min-height:200px;color:var(--text-muted);font-size:12px">Loading…</div>`;
+
+    // Verify the file is actually there with a single HEAD request BEFORE
+    // handing the URL to the <video> element. If we skip straight to
+    // <video src="...">, a missing file means the browser's own media
+    // engine ends up hammering /api/video on our behalf — Chrome/Firefox
+    // issue their own probe + range requests and will retry more than
+    // once before finally firing 'error' — all for a file we could have
+    // already confirmed was missing with one request. Checking first means
+    // a missing file never reaches the <video> element at all: one HEAD
+    // request, one verdict, "File not found" shown immediately with no
+    // further /api/video traffic.
+    const lbIndexAtRequest = lbIndex;   // guard against a stale response after nav
+    fetch(videoSrc, { method: 'HEAD' })
+      .then(r => {
+        if (lbIndex !== lbIndexAtRequest) return;   // user navigated away meanwhile
+        if (r.status === 404) {
+          showLbMissingFilePopup();
+          loadNotifications();   // pick up the notification the backend just raised
+          return;
+        }
+        _renderLbVideoPlayer(videoSrc, videoMime, ext, needsWarning, item.name);
+      })
+      .catch(() => {
+        if (lbIndex !== lbIndexAtRequest) return;
+        // Couldn't reach the backend at all — don't assume "missing file",
+        // that's a different failure mode. Try to render the player as
+        // normal; a real network problem will surface there instead.
+        _renderLbVideoPlayer(videoSrc, videoMime, ext, needsWarning, item.name);
+      });
   } else {
     lb.innerHTML = `
       <img id="lb-thumb" src="${thumbUrl(item.uniqueName)}" alt="${name}"
@@ -1347,6 +1360,36 @@ function renderLightbox() {
 
   // Build rich details panel
   _renderLbDetails(item);
+}
+
+// Builds and mounts the actual <video> element into the lightbox. Only
+// ever called after renderLightbox's HEAD check has confirmed the file
+// exists — so if onerror fires here, it's a genuine playback/codec issue,
+// not a missing file, and handleLbVideoError doesn't need to re-check.
+function _renderLbVideoPlayer(videoSrc, videoMime, ext, needsWarning, itemName) {
+  const lb = document.getElementById('lb-content');
+  if (!lb) return;
+  lb.innerHTML = `
+    <div id="lb-video-wrap">
+      <video id="lb-video" controls
+             preload="${config.video_preload || 'metadata'}"
+             ${config.video_autoplay ? 'autoplay muted' : ''}
+             playsinline
+             onerror="handleLbVideoError()">
+        <source src="${videoSrc}" type="${videoMime}">
+      </video>
+      <div id="lb-video-err" style="display:none;flex-direction:column;align-items:center;
+           gap:8px;color:var(--text-muted);font-size:12px;text-align:center;padding:20px">
+        <span style="font-size:32px">⚠</span>
+        <span>This browser cannot play <strong style="color:var(--text)">.${ext.toUpperCase()}</strong> files.</span>
+        <span>Convert to MP4/WebM, or open directly in a media player.</span>
+        <a href="${videoSrc}" download="${escHtml(itemName)}"
+           style="color:var(--accent);text-decoration:none;border:1px solid var(--accent);
+                  padding:6px 16px;border-radius:4px;margin-top:4px">⬇ Download file</a>
+      </div>
+      ${needsWarning ? `<div style="font-size:11px;color:var(--danger);opacity:0.8;text-align:center">
+        ⚠ .${ext.toUpperCase()} may not play in browsers — MP4 or WebM recommended</div>` : ''}
+    </div>`;
 }
 
 // ─────────────────────────────────────────────
@@ -1684,27 +1727,13 @@ function handleLbFullImageError() {
   loadNotifications();   // pick up the notification the backend just raised
 }
 
-// Fired by the <video>'s onerror. A <video> element's error event doesn't
-// distinguish "the file isn't there" from "the browser can't decode this
-// format" — both just fire onerror — so a quick HEAD request tells them
-// apart: a 404 means /api/video (via _resolve_path on the backend) couldn't
-// find the file on disk, in which case we show the same shared "file not
-// found" popup and auto-close as the image case. Anything else falls back
-// to the existing "this browser can't play this format" message.
-async function handleLbVideoError(videoSrc) {
-  try {
-    const r = await fetch(videoSrc, { method: 'HEAD' });
-    if (r.status === 404) {
-      const vid = document.getElementById('lb-video');
-      if (vid) { vid.pause(); vid.style.display = 'none'; }
-      showLbMissingFilePopup();
-      loadNotifications();   // pick up the notification the backend just raised
-      return;
-    }
-  } catch {
-    // Couldn't even reach the backend — fall through to the generic
-    // unsupported-format message below rather than assuming a specific cause.
-  }
+// Fired by the <video>'s onerror. renderLightbox already ran a HEAD check
+// before this element was ever mounted, so a missing file never gets this
+// far — an error here means the browser genuinely can't decode the format,
+// so we just show the "can't play this format" message directly. No extra
+// request needed (and no more repeated hits to /api/video for a file we
+// already know is fine).
+function handleLbVideoError() {
   const err = document.getElementById('lb-video-err');
   if (err) err.style.display = 'flex';
 }
