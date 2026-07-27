@@ -752,6 +752,7 @@ def relocate_media_source(old_path: str, new_path: str) -> dict:
 
     updated       = 0
     still_missing = 0
+    matched_roots = set()   # the actual source_root value(s) of rows we relinked — see note below
     with _db_lock:
         with conn:
             for r in rows:
@@ -782,6 +783,7 @@ def relocate_media_source(old_path: str, new_path: str) -> dict:
                     (new_root, new_file_path, json.dumps(meta, default=str), r["uniqueName"]),
                 )
                 updated += 1
+                matched_roots.add(row_root)
 
     # Point media.json at the new location too, so the next sync (and the
     # Locations Manager) reflect it instead of flagging it missing again.
@@ -791,11 +793,47 @@ def relocate_media_source(old_path: str, new_path: str) -> dict:
     # instead of the app silently pointing itself at the wrong place.
     if updated > 0:
         sources = load_json(MEDIA_JSON, [])
-        old_norm = old_root
+
+        # Match against old_root (what the caller sent) OR any source_root
+        # value we actually just relinked rows from. The two are usually
+        # the same string, but matching only against old_root risks a
+        # silent no-op write if it doesn't line up exactly with a config
+        # entry's stored path (e.g. a LIKE-prefix match found a deeper
+        # source_root than old_root itself, or the entry was already
+        # touched by an earlier attempt) — in that case rows would get
+        # relinked in the database while media.json quietly stayed
+        # unchanged, which is exactly the bug this guards against.
+        candidates = {old_root} | matched_roots
+        touched = False
         for s in sources:
-            if (s.get("path") or "").rstrip("/\\") == old_norm:
+            if (s.get("path") or "").rstrip("/\\") in candidates:
                 s["path"] = new_path
-        save_json(MEDIA_JSON, sources)
+                touched = True
+
+        if not touched:
+            # Path text didn't line up with any configured entry at all.
+            # Fall back to whichever entry is currently pointing at a
+            # directory that doesn't exist (and isn't already new_path) —
+            # if there's exactly one, that's unambiguously the one being
+            # fixed, so update it rather than leaving media.json stale.
+            broken = [
+                s for s in sources
+                if (s.get("path") or "").rstrip("/\\") != new_root
+                and not os.path.isdir(s.get("path") or "")
+            ]
+            if len(broken) == 1:
+                broken[0]["path"] = new_path
+                touched = True
+                log.info("Relocate: matched config entry by elimination (single broken location)")
+
+        if touched:
+            save_json(MEDIA_JSON, sources)
+        else:
+            log.warning(
+                "Relocate: %d record(s) relinked in the database, but no media.json "
+                "entry could be matched to update — config may need manual editing.",
+                updated,
+            )
 
     return {"updated": updated, "still_missing": still_missing, "old_root": old_root, "new_root": new_root}
 
