@@ -2904,6 +2904,9 @@ function renderLocationsList() {
             ? `<button type="button" class="btn btn-ghost loc-relocate-btn"
                        onclick="openFolderBrowser(${idx})" title="Point this location at its new folder">Relocate</button>`
             : ''}
+          <button type="button" class="loc-resolve-btn"
+                  onclick="openResolveMismatch(${idx})"
+                  title="Check for subfolders that were renamed/moved or added without the location itself going missing">Resolve</button>
         </div>
         ${missing
           ? `<div class="loc-missing-note">⚠ Can't find this folder — it may have been moved or renamed.</div>`
@@ -3031,9 +3034,11 @@ async function saveLocations() {
 // ─────────────────────────────────────────────
 let folderBrowserPath       = null;   // currently listed directory (null = start screen, e.g. Windows drive list)
 let folderBrowserRelocateIdx = null;  // null = "Browse…" mode (fills loc-new-path); otherwise index into locationsData being relocated
+let folderBrowserSubfolderOldPath = null;  // set instead of folderBrowserRelocateIdx when relocating a single subfolder from the Resolve popup
 
 function openFolderBrowser(relocateIdx = null) {
   folderBrowserRelocateIdx = relocateIdx;
+  folderBrowserSubfolderOldPath = null;
   // Start from whatever's already typed in the relevant path field, if it
   // looks like something worth listing; otherwise let the backend pick a
   // default (home directory, or the drive list on Windows).
@@ -3048,6 +3053,16 @@ function openFolderBrowser(relocateIdx = null) {
   // likely just a typo and should surface as a clear error instead of
   // silently landing somewhere else.
   loadFolderBrowser(typed || null, relocateIdx !== null);
+}
+
+// Same picker, opened from the Resolve mismatch popup to relocate one
+// subfolder (not the whole location). oldPath is expected to be gone —
+// same reasoning as the whole-location Relocate case above.
+function openFolderBrowserForSubfolder(oldPath) {
+  folderBrowserRelocateIdx = null;
+  folderBrowserSubfolderOldPath = oldPath;
+  document.getElementById('folder-browser-modal').classList.add('open');
+  loadFolderBrowser(oldPath || null, true);
 }
 
 async function loadFolderBrowser(path, allowFallback = false) {
@@ -3116,6 +3131,15 @@ async function loadFolderBrowser(path, allowFallback = false) {
 async function confirmFolderBrowser() {
   if (!folderBrowserPath) {
     toast('Choose a folder first', 'error');
+    return;
+  }
+
+  if (folderBrowserSubfolderOldPath !== null) {
+    const oldPath = folderBrowserSubfolderOldPath;
+    const newPath = folderBrowserPath;
+    folderBrowserSubfolderOldPath = null;
+    closeModal('folder-browser-modal');
+    await performSubfolderRelocate(oldPath, newPath);
     return;
   }
 
@@ -3191,6 +3215,161 @@ async function performRelocate(idx, newPath) {
     loadNotifications();
   } catch {
     toast('Could not validate — is app.py running?', 'error');
+  }
+}
+
+// ─────────────────────────────────────────────
+//  RESOLVE MISMATCH  (red "Resolve" button next to loc-path-input)
+//
+//  Catches subfolder-level drift that never makes the location itself show
+//  red: e.g. location "/a/b" contains subfolders "c" and "d" — "/a/b" is
+//  still a valid path, so the location manager never flags it, even though
+//  renaming "/a/b/c" to "/a/b/c-1" leaves every file that was under "c"
+//  unresolvable and leaves "c-1" completely unindexed. Resolve runs a
+//  read-only diagnostic scan and, if it finds anything, shows a custom
+//  popup (not a native confirm/alert) to relocate the missing side or
+//  rescan the new side — or ignore and move on.
+// ─────────────────────────────────────────────
+let resolveMismatchLocIdx = null;   // which locationsData row the open popup belongs to
+
+async function openResolveMismatch(idx) {
+  const loc = locationsData[idx];
+  if (!loc || !loc.path) return;
+
+  resolveMismatchLocIdx = idx;
+  const list = document.getElementById('resolve-mismatch-list');
+  list.innerHTML = '<div class="resolve-mismatch-empty">Scanning…</div>';
+  document.getElementById('resolve-mismatch-modal').classList.add('open');
+
+  try {
+    const r = await fetch(`${API_BASE}/api/location/resolve`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ path: loc.path }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      closeModal('resolve-mismatch-modal');
+      toast(data.error || 'Could not scan this location', 'error');
+      return;
+    }
+    renderResolveMismatch(data);
+  } catch {
+    closeModal('resolve-mismatch-modal');
+    toast('Could not reach the backend — is app.py running?', 'error');
+  }
+}
+
+function renderResolveMismatch(data) {
+  const list = document.getElementById('resolve-mismatch-list');
+  const missing = data.missing || [];
+  const fresh   = data.new || [];
+
+  if (missing.length === 0 && fresh.length === 0) {
+    list.innerHTML = '<div class="resolve-mismatch-empty">✓ No mismatch found — everything on disk matches the index.</div>';
+    return;
+  }
+
+  let html = '';
+
+  if (missing.length) {
+    html += `<div class="resolve-mismatch-group-title">Indexed but no longer found (${missing.length})</div>`;
+    missing.forEach(m => {
+      html += `
+        <div class="resolve-mismatch-row is-missing" data-path="${escHtml(m.path)}">
+          <div class="resolve-mismatch-info">
+            <div class="resolve-mismatch-path">${escHtml(m.rel)}</div>
+            <div class="resolve-mismatch-meta">${m.count} indexed file${m.count !== 1 ? 's' : ''} — folder missing or renamed</div>
+          </div>
+          <div class="resolve-mismatch-actions">
+            <button class="btn btn-ghost" onclick="ignoreResolveMismatchRow(this)">Ignore</button>
+            <button class="btn btn-accent" onclick="openFolderBrowserForSubfolder(${JSON.stringify(m.path)})">Relocate</button>
+          </div>
+        </div>`;
+    });
+  }
+
+  if (fresh.length) {
+    html += `<div class="resolve-mismatch-group-title">On disk but not indexed (${fresh.length})</div>`;
+    fresh.forEach(n => {
+      html += `
+        <div class="resolve-mismatch-row is-new">
+          <div class="resolve-mismatch-info">
+            <div class="resolve-mismatch-path">${escHtml(n.rel)}</div>
+            <div class="resolve-mismatch-meta">${n.count} file${n.count !== 1 ? 's' : ''} not yet in your library</div>
+          </div>
+          <div class="resolve-mismatch-actions">
+            <button class="btn btn-ghost" onclick="ignoreResolveMismatchRow(this)">Ignore</button>
+            <button class="btn btn-accent" onclick="rescanResolveSubfolder(this, ${JSON.stringify(n.path)})">Rescan</button>
+          </div>
+        </div>`;
+    });
+  }
+
+  list.innerHTML = html;
+}
+
+// "Ignore" on one row just dismisses that row from the popup — no backend
+// call, nothing changes. The user can always reopen Resolve later.
+function ignoreResolveMismatchRow(btn) {
+  btn.closest('.resolve-mismatch-row')?.remove();
+}
+
+async function rescanResolveSubfolder(btn, subfolderPath) {
+  const loc = locationsData[resolveMismatchLocIdx];
+  if (!loc) return;
+  const row = btn.closest('.resolve-mismatch-row');
+  btn.disabled = true;
+  btn.textContent = 'Scanning…';
+  try {
+    const r = await fetch(`${API_BASE}/api/location/rescan-subfolder`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ root: loc.path, path: subfolderPath }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(data.error || 'Failed to rescan folder', 'error'); btn.disabled = false; btn.textContent = 'Rescan'; return; }
+
+    toast(`Rescanned — ${data.added || 0} new file${(data.added || 0) !== 1 ? 's' : ''} indexed`, 'success');
+    row?.remove();
+    await loadDB();
+    renderAll();
+    populateLocationFilter();
+  } catch {
+    toast('Could not reach the backend — is app.py running?', 'error');
+    btn.disabled = false;
+    btn.textContent = 'Rescan';
+  }
+}
+
+// Called from confirmFolderBrowser() once a new folder is picked for a
+// subfolder-level Relocate (the missing side of the Resolve popup).
+async function performSubfolderRelocate(oldPath, newPath) {
+  try {
+    const r = await fetch(`${API_BASE}/api/location/relocate-subfolder`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ old_path: oldPath, new_path: newPath }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(data.error || 'Failed to relocate folder', 'error'); return; }
+
+    const matched = data.updated || 0;
+    const missing = data.still_missing || 0;
+    const msg = missing > 0
+      ? `Relocated — ${matched} file${matched !== 1 ? 's' : ''} relinked, ${missing} still not found`
+      : `Relocated — ${matched} file${matched !== 1 ? 's' : ''} relinked`;
+    toast(msg, missing > 0 ? 'info' : 'success');
+
+    // Drop the row it corresponds to, if the popup's still open.
+    document.querySelector(`#resolve-mismatch-list .resolve-mismatch-row[data-path="${cssEscape(oldPath)}"]`)?.remove();
+
+    await loadDB();
+    renderAll();
+    populateLocationFilter();
+    loadNotifications();
+  } catch {
+    toast('Could not reach the backend — is app.py running?', 'error');
   }
 }
 

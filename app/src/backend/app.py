@@ -838,6 +838,234 @@ def relocate_media_source(old_path: str, new_path: str) -> dict:
     return {"updated": updated, "still_missing": still_missing, "old_root": old_root, "new_root": new_root}
 
 
+def relocate_media_subfolder(old_dir: str, new_dir: str) -> dict:
+    """
+    Like relocate_media_source, but scoped to a single subfolder inside a
+    location rather than the whole configured location — used by the
+    Locations Manager's "Resolve" flow.
+
+    Why this exists as a separate function: a location like "/a/b" is
+    scanned recursively, so every file under it (including "/a/b/c/...")
+    shares the SAME source_root ("/a/b") — only file_path differs per
+    subfolder. If the user later renames just "/a/b/c" to "/a/b/c-1", the
+    location's own path ("/a/b") is still perfectly valid, so it never
+    shows up red in the Locations Manager — only the individual files
+    under the renamed subfolder start 404ing. relocate_media_source can't
+    fix that: it matches rows by source_root, and source_root here never
+    changed. This matches by file_path instead, so it can repoint just the
+    affected subfolder's rows. media.json is never touched — the location's
+    configured path is still correct, only rows are relinked.
+    """
+    old_root = old_dir.rstrip("/\\")
+    new_root = str(Path(new_dir.rstrip("/\\")).resolve())
+
+    conn = get_db_conn()
+    rows = conn.execute(
+        "SELECT uniqueName, file_path, name, metadata_json FROM media "
+        "WHERE file_path = ? OR file_path LIKE ?",
+        (old_root, old_root + "/%"),
+    ).fetchall()
+
+    updated       = 0
+    still_missing = 0
+    with _db_lock:
+        with conn:
+            for r in rows:
+                old_file_path = r["file_path"] or ""
+                if old_file_path == old_root:
+                    new_file_path = new_root
+                elif old_file_path.startswith(old_root):
+                    new_file_path = new_root + old_file_path[len(old_root):]
+                else:
+                    new_file_path = old_file_path  # shouldn't happen — leave untouched
+
+                candidate = os.path.join(new_file_path, r["name"] or "")
+                if not os.path.isfile(candidate):
+                    still_missing += 1
+                    continue
+
+                try:
+                    meta = json.loads(r["metadata_json"]) if r["metadata_json"] else {}
+                except (TypeError, ValueError):
+                    meta = {}
+                file_meta = meta.setdefault("file", {})
+                file_meta["path"] = new_file_path
+
+                conn.execute(
+                    "UPDATE media SET file_path = ?, metadata_json = ? WHERE uniqueName = ?",
+                    (new_file_path, json.dumps(meta, default=str), r["uniqueName"]),
+                )
+                updated += 1
+
+    return {"updated": updated, "still_missing": still_missing, "old_path": old_root, "new_path": new_root}
+
+
+def diagnose_location_structure(configured_path: str) -> dict:
+    """
+    Compare what SQLite has indexed for a location against what's actually
+    on disk right now, one directory at a time, to catch subfolder-level
+    drift that the plain "does the location's own path still exist?" check
+    can't see. This is exactly the "/a/b/c renamed to /a/b/c-1" case: "/a/b"
+    (the configured location) is still there, so the location never shows
+    red — but "/a/b/c"'s rows are now orphaned, and "/a/b/c-1" sits on disk
+    completely unindexed. Read-only — makes no database or media.json changes.
+
+    Returns:
+      {
+        root:    <resolved source_root>,
+        missing: [{path, rel, count}],  # indexed subfolders no longer on disk
+        new:     [{path, rel, count}],  # subfolders on disk with media, not indexed at all
+      }
+    """
+    root = (configured_path or "").rstrip("/\\")
+    if not root or not os.path.isdir(root):
+        return {"root": root, "missing": [], "new": []}
+    source_root = str(Path(root).resolve())
+
+    cfg = load_config()
+    supported = (
+        {f.lower() for f in cfg.get("supported_image_formats", [])} |
+        {f.lower() for f in cfg.get("supported_video_formats", [])}
+    )
+    follow_links = cfg.get("follow_symlinks", True)
+    skip_hidden  = cfg.get("skip_hidden_dirs", True)
+    max_depth    = int(cfg.get("max_scan_depth", 0))
+    source_depth = source_root.rstrip("/").count("/")
+
+    conn = get_db_conn()
+    rows = conn.execute(
+        "SELECT file_path, COUNT(*) as cnt FROM media "
+        "WHERE (source_root = ? OR source_root LIKE ?) AND file_path != '' "
+        "GROUP BY file_path",
+        (source_root, source_root + "/%"),
+    ).fetchall()
+    indexed_dirs = {(r["file_path"] or "").rstrip("/\\"): r["cnt"] for r in rows}
+
+    # Indexed directories that no longer exist on disk at all.
+    missing = []
+    for path, cnt in indexed_dirs.items():
+        if path and not os.path.isdir(path):
+            rel = path[len(source_root):].lstrip("/\\") if path.startswith(source_root) else path
+            missing.append({"path": path, "rel": rel or ".", "count": cnt})
+
+    # Walk the real tree looking for directories that hold qualifying media
+    # but aren't represented in the index under this location at all —
+    # either a genuinely new folder, or the new name a renamed one landed
+    # under.
+    new_dirs = []
+    for cur_root, dirs, files in os.walk(root, followlinks=follow_links):
+        if skip_hidden:
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+        if max_depth > 0:
+            cur = str(Path(cur_root).resolve()).rstrip("/").count("/") - source_depth
+            if cur >= max_depth:
+                dirs.clear()
+        resolved_cur = str(Path(cur_root).resolve()).rstrip("/\\")
+        qualifying = [f for f in files if Path(f).suffix.lstrip(".").lower() in supported]
+        if not qualifying or resolved_cur in indexed_dirs:
+            continue
+        rel = resolved_cur[len(source_root):].lstrip("/\\") if resolved_cur.startswith(source_root) else resolved_cur
+        new_dirs.append({"path": resolved_cur, "rel": rel or ".", "count": len(qualifying)})
+
+    missing.sort(key=lambda d: d["rel"])
+    new_dirs.sort(key=lambda d: d["rel"])
+    return {"root": source_root, "missing": missing, "new": new_dirs}
+
+
+def rescan_subfolder(source_root: str, walk_dir: str) -> dict:
+    """
+    Index new media found under one subfolder of an already-configured
+    location, without re-walking the entire location the way a full Sync
+    would. Used by the Locations Manager's "Resolve" flow for a subfolder
+    diagnose_location_structure() found on disk but not in the index at
+    all (a genuinely new folder, or the new name a renamed one landed
+    under). Deliberately kept as its own self-contained pass — mirroring
+    the relevant slice of sync_library's inner loop — rather than folding
+    this into sync_library itself, since that function is the hot path for
+    the full multi-location Sync and isn't worth risking for a scoped,
+    occasional operation like this.
+
+    source_root is the location's own resolved root (kept as-is, exactly
+    like a normal sync would set it) so relative_path/subfolder on any new
+    rows are computed against the location, not against walk_dir — new
+    rows behave identically to ones a full sync would have produced.
+    """
+    cfg = load_config()
+    supported = (
+        {f.lower() for f in cfg.get("supported_image_formats", [])} |
+        {f.lower() for f in cfg.get("supported_video_formats", [])}
+    )
+    follow_links = cfg.get("follow_symlinks", True)
+    skip_hidden  = cfg.get("skip_hidden_dirs", True)
+    dedup_method = cfg.get("dedup_method", "both")
+
+    existing_hashes, existing_paths = get_existing_hashes_and_paths()
+
+    new_entries = []
+    scanned = 0
+    added   = 0
+
+    for root, dirs, files in os.walk(walk_dir, followlinks=follow_links):
+        if skip_hidden:
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+        for filename in sorted(files):
+            ext = Path(filename).suffix.lstrip(".").lower()
+            if ext not in supported:
+                continue
+
+            full_path     = os.path.join(root, filename)
+            resolved_path = str(Path(full_path).resolve())
+            scanned += 1
+
+            if dedup_method in ("path", "both") and resolved_path in existing_paths:
+                continue
+            if dedup_method in ("hash", "both"):
+                fhash = file_hash(full_path)
+                if fhash in existing_hashes:
+                    continue
+            else:
+                fhash = file_hash(full_path)
+
+            media_type = "video" if is_video(full_path) else "image"
+            try:
+                meta = extract_metadata(full_path)
+            except Exception as e:
+                log.warning("Metadata failed for %s: %s", full_path, e)
+                meta = {"file": {}, "date": {}}
+
+            meta["file"]["path"] = str(Path(full_path).parent) + os.sep
+            try:
+                rel = str(Path(full_path).relative_to(source_root))
+                meta["file"]["relative_path"] = rel
+                meta["file"]["source_root"]   = source_root
+                rel_dir = str(Path(rel).parent)
+                meta["file"]["subfolder"] = "" if rel_dir == "." else rel_dir
+            except ValueError:
+                meta["file"]["relative_path"] = filename
+                meta["file"]["source_root"]   = source_root
+                meta["file"]["subfolder"]     = ""
+
+            entry = {
+                "name":       filename,
+                "uniqueName": str(uuid.uuid4()),
+                "hash":       fhash,
+                "type":       media_type,
+                "isHidden":   False,
+                "metadata":   meta,
+            }
+            new_entries.append(entry)
+            existing_hashes.add(fhash)
+            existing_paths.add(resolved_path)
+            added += 1
+
+    if new_entries:
+        upsert_media_rows(new_entries)
+
+    log.info("Rescanned subfolder %s (location %s) — scanned %d, added %d",
+              walk_dir, source_root, scanned, added)
+    return {"scanned": scanned, "added": added}
+
+
 def get_existing_hashes_and_paths() -> tuple:
     """
     Return (set of hashes, set of resolved full paths) for dedup checks.
@@ -2614,6 +2842,83 @@ if FLASK_AVAILABLE:
             "Relocated location %s -> %s (%d matched, %d still missing)",
             old_path, new_path, result["updated"], result["still_missing"],
         )
+        return jsonify({"ok": True, **result})
+
+    @app.route("/api/location/resolve", methods=["POST"])
+    def api_location_resolve():
+        """
+        Diagnostic scan for one configured location. Body: { path }
+
+        Compares what's indexed in SQLite against what's actually on disk
+        one directory at a time, to catch subfolder-level drift a plain
+        "does the location's own path still exist?" check can't see — e.g.
+        a subfolder renamed/moved while the location's own top-level path
+        stayed valid. Read-only; makes no changes.
+        Returns { root, missing: [{path, rel, count}], new: [{path, rel, count}] }.
+        """
+        body = request.get_json(force=True) or {}
+        path = (body.get("path") or "").strip()
+        if not path:
+            return jsonify({"error": "path is required"}), 400
+        return jsonify(diagnose_location_structure(path))
+
+    @app.route("/api/location/relocate-subfolder", methods=["POST"])
+    def api_location_relocate_subfolder():
+        """
+        Repoint just one subfolder's indexed rows at a new folder — the
+        subfolder-scoped counterpart to /api/location/relocate, used when a
+        subfolder was renamed/moved but its parent location's own path is
+        still valid. Body: { old_path, new_path }.
+        Returns { ok: true, updated, still_missing, old_path, new_path }.
+        """
+        body     = request.get_json(force=True) or {}
+        old_path = (body.get("old_path") or "").strip()
+        new_path = (body.get("new_path") or "").strip()
+        if not old_path or not new_path:
+            return jsonify({"error": "old_path and new_path are required"}), 400
+        if not os.path.isdir(new_path):
+            return jsonify({"error": f"Not a directory: {new_path}"}), 400
+
+        result = relocate_media_subfolder(old_path, new_path)
+        if result["still_missing"] > 0:
+            create_notification(
+                "file_missing",
+                title=f"{result['still_missing']} file(s) still not found",
+                message=(
+                    f"After relocating to \"{new_path}\", {result['still_missing']} "
+                    f"file(s) could not be matched there and remain unlinked."
+                ),
+                location_path=new_path,
+                action="relocate",
+                action_label="View Location",
+            )
+        log.info(
+            "Relocated subfolder %s -> %s (%d matched, %d still missing)",
+            old_path, new_path, result["updated"], result["still_missing"],
+        )
+        return jsonify({"ok": True, **result})
+
+    @app.route("/api/location/rescan-subfolder", methods=["POST"])
+    def api_location_rescan_subfolder():
+        """
+        Index new media found under one subfolder of a configured location,
+        without re-walking the whole location. Body: { root, path } where
+        root is the location's configured path and path is the subfolder
+        (as returned by /api/location/resolve's "new" list) to scan.
+        Returns { ok: true, scanned, added }.
+        """
+        body      = request.get_json(force=True) or {}
+        root      = (body.get("root") or "").strip()
+        subfolder = (body.get("path") or "").strip()
+        if not root or not subfolder:
+            return jsonify({"error": "root and path are required"}), 400
+        if not os.path.isdir(root):
+            return jsonify({"error": f"Not a directory: {root}"}), 400
+        if not os.path.isdir(subfolder):
+            return jsonify({"error": "That folder is no longer there"}), 400
+
+        source_root = str(Path(root).resolve())
+        result = rescan_subfolder(source_root, subfolder)
         return jsonify({"ok": True, **result})
 
     @app.route("/api/notifications", methods=["GET"])

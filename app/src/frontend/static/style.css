@@ -2184,6 +2184,62 @@
   }
   .loc-relocate-btn:hover { background: rgba(var(--accent-rgb),0.15); border-color: var(--accent); }
 
+  /* Always-available red "Resolve" button — checks for subfolder-level
+     drift (renamed/new subfolders) that doesn't make the location itself
+     show as missing, since its own top-level path is still valid. */
+  .loc-resolve-btn {
+    background: none;
+    border: 1px solid rgba(200,126,126,0.4);
+    color: var(--danger);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: calc(11px * var(--font-scale));
+    padding: 6px 12px;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .loc-resolve-btn:hover { background: rgba(200,126,126,0.15); border-color: var(--danger); }
+
+  /* ── RESOLVE MISMATCH MODAL ── */
+  .resolve-mismatch-group-title {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 14px 0 8px;
+  }
+  .resolve-mismatch-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    background: var(--surface2);
+  }
+  .resolve-mismatch-row.is-missing { border-color: rgba(200,126,126,0.4); }
+  .resolve-mismatch-row.is-new     { border-color: rgba(var(--accent-rgb),0.4); }
+  .resolve-mismatch-info { flex: 1; min-width: 0; }
+  .resolve-mismatch-path {
+    font-family: var(--font-mono);
+    font-size: calc(11.5px * var(--font-scale));
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  .resolve-mismatch-meta {
+    font-size: calc(10.5px * var(--font-scale));
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .resolve-mismatch-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .resolve-mismatch-empty {
+    font-size: calc(11.5px * var(--font-scale));
+    color: var(--text-muted);
+    text-align: center;
+    padding: 18px 0;
+  }
+
   /* After a folder is picked, the same button becomes "Validate" in green */
   .loc-relocate-btn.loc-validate-btn {
     color: var(--success);

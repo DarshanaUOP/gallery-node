@@ -426,6 +426,22 @@
   </div>
 </div>
 
+<!-- RESOLVE MISMATCH MODAL — subfolder-level drift found by the "Resolve" button -->
+<div class="modal-overlay" id="resolve-mismatch-modal">
+  <div class="modal" style="position:relative;width:600px;max-width:96vw">
+    <button class="modal-close" onclick="closeModal('resolve-mismatch-modal')">✕</button>
+    <h2>Folder Structure Changed</h2>
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
+      This location's own path is still valid, but its contents don't fully match what's indexed.
+    </p>
+    <div id="resolve-mismatch-list"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('resolve-mismatch-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
+
 <!-- SETTINGS PANEL -->
 <div id="settings-overlay" class="modal-overlay">
   <div id="settings-panel" class="modal" style="position:relative;width:640px;max-width:96vw;max-height:88vh;overflow-y:auto">
