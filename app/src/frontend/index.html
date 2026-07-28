@@ -118,15 +118,21 @@
       <span class="groupby-chip" id="groupby-chip-months" onclick="setGroupMode('months', this)">Months</span>
     </div>
     <div class="filter-sep"></div>
-    <select class="filter-select" id="filter-format" onchange="applyFilters()">
-      <option value="">All Formats</option>
-    </select>
-    <select class="filter-select" id="filter-camera" onchange="applyFilters()">
-      <option value="">All Cameras</option>
-    </select>
-    <select class="filter-select" id="filter-location" onchange="applyFilters()" style="max-width:200px">
-      <option value="">All Locations</option>
-    </select>
+    <span class="filter-select-wrap" id="filter-format-wrap">
+      <select class="filter-select" id="filter-format" onchange="applyFilters()">
+        <option value="">All Formats</option>
+      </select>
+    </span>
+    <span class="filter-select-wrap" id="filter-camera-wrap">
+      <select class="filter-select" id="filter-camera" onchange="applyFilters()">
+        <option value="">All Cameras</option>
+      </select>
+    </span>
+    <span class="filter-select-wrap" id="filter-location-wrap" style="max-width:200px">
+      <select class="filter-select" id="filter-location" onchange="applyFilters()">
+        <option value="">All Locations</option>
+      </select>
+    </span>
     <div class="filter-sep"></div>
     <div id="filter-date-range">
       <input type="date" class="filter-select filter-date" id="filter-date-from"
