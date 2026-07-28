@@ -2904,7 +2904,7 @@ function renderLocationsList() {
                  title="Check for indexed subfolders that are no longer on disk (renamed/moved) without the location itself going missing">Resolve</button>`
       : `<button type="button" class="loc-sync-btn loc-action-btn"
                  onclick="openSyncNewFolders(${idx})"
-                 title="Check for folders on disk that aren't indexed yet, and sync just those">Sync</button>`;
+                 title="Check for folders on disk that aren't indexed yet, and rescan just those">Rescan</button>`;
 
     row.innerHTML = `
       <div class="loc-row-line1">
@@ -3039,7 +3039,7 @@ async function saveLocations() {
     if (!r.ok) throw new Error('Backend returned ' + r.status);
     closeModal('locations-modal');
     populateLocationFilter();  // refresh dropdown with updated labels
-    toast('media.json saved — run Sync to index changes', 'success');
+    toast('Media Locations saved — run Sync to index changes', 'success');
   } catch {
     toast('Could not save — is app.py running?', 'error');
   }
@@ -3406,7 +3406,7 @@ async function refreshLocationsData() {
 }
 
 // ─────────────────────────────────────────────
-//  SYNC NEW FOLDERS  (cyan "Sync" button next to loc-path-input)
+//  SYNC NEW FOLDERS  (cyan "Rescan" button next to loc-path-input)
 //
 //  Companion to Resolve, for the opposite case: folders that exist on disk
 //  under this location but were never indexed at all — either genuinely
@@ -3478,7 +3478,7 @@ function renderSyncNewFolders(fresh) {
 
     const syncBtn = document.createElement('button');
     syncBtn.className = 'btn btn-sync';
-    syncBtn.textContent = 'Sync';
+    syncBtn.textContent = 'Rescan';
     syncBtn.onclick = () => syncOneNewFolder(syncBtn, row, n.path);
 
     actions.appendChild(ignoreBtn);
@@ -3493,7 +3493,7 @@ async function syncOneNewFolder(btn, row, subfolderPath) {
   const loc = locationsData[syncNewFoldersLocIdx];
   if (!loc) return;
   btn.disabled = true;
-  btn.textContent = 'Syncing…';
+  btn.textContent = 'Rescanning…';
   try {
     const r = await fetch(`${API_BASE}/api/location/rescan-subfolder`, {
       method:  'POST',
@@ -3501,9 +3501,9 @@ async function syncOneNewFolder(btn, row, subfolderPath) {
       body:    JSON.stringify({ root: loc.path, path: subfolderPath }),
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) { toast(data.error || 'Failed to sync folder', 'error'); btn.disabled = false; btn.textContent = 'Sync'; return; }
+    if (!r.ok) { toast(data.error || 'Failed to rescan folder', 'error'); btn.disabled = false; btn.textContent = 'Rescan'; return; }
 
-    toast(`Synced — ${data.added || 0} new file${(data.added || 0) !== 1 ? 's' : ''} indexed`, 'success');
+    toast(`Rescanned — ${data.added || 0} new file${(data.added || 0) !== 1 ? 's' : ''} indexed`, 'success');
     row.remove();
     await loadDB();
     renderAll();
@@ -3511,7 +3511,7 @@ async function syncOneNewFolder(btn, row, subfolderPath) {
   } catch {
     toast('Could not reach the backend — is app.py running?', 'error');
     btn.disabled = false;
-    btn.textContent = 'Sync';
+    btn.textContent = 'Rescan';
   }
 }
 
