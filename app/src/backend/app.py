@@ -900,6 +900,36 @@ def relocate_media_subfolder(old_dir: str, new_dir: str) -> dict:
     return {"updated": updated, "still_missing": still_missing, "old_path": old_root, "new_path": new_root}
 
 
+def count_missing_subfolders(configured_path: str) -> int:
+    """
+    Cheap existence-only check for the "Resolve" button in the Locations
+    Manager: how many of this location's indexed subfolders no longer
+    exist on disk? Unlike diagnose_location_structure(), this never walks
+    the directory tree (no "new folders" check) — it's just a DB query plus
+    an os.path.isdir() per already-indexed directory — so it's cheap enough
+    to run for every location every time the Locations Manager is opened,
+    to decide whether Resolve is worth showing, and to show an exact count.
+    """
+    root = (configured_path or "").rstrip("/\\")
+    if not root or not os.path.isdir(root):
+        return 0
+    source_root = str(Path(root).resolve())
+
+    conn = get_db_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT file_path FROM media "
+        "WHERE (source_root = ? OR source_root LIKE ?) AND file_path != ''",
+        (source_root, source_root + "/%"),
+    ).fetchall()
+
+    count = 0
+    for r in rows:
+        path = (r["file_path"] or "").rstrip("/\\")
+        if path and not os.path.isdir(path):
+            count += 1
+    return count
+
+
 def diagnose_location_structure(configured_path: str) -> dict:
     """
     Compare what SQLite has indexed for a location against what's actually
@@ -2721,7 +2751,7 @@ if FLASK_AVAILABLE:
     def api_locations_get():
         """
         Return current contents of media.json.
-        Each entry: { name, path, visibility, root, label, synced_count, exists }
+        Each entry: { name, path, visibility, root, label, synced_count, exists, missing_subfolder_count }
         'root' and 'label' aliases are included so this endpoint can be used
         directly by the location filter dropdowns without a separate /api/media/locations call.
         'synced_count' is how many media rows are currently indexed under
@@ -2731,6 +2761,10 @@ if FLASK_AVAILABLE:
         'exists' is whether the configured path can currently be found on
         disk — the frontend uses this to flag the row red and offer a
         "Relocate" action when a watched folder has been moved or renamed.
+        'missing_subfolder_count' is how many of this (otherwise valid)
+        location's indexed subfolders are no longer on disk — the frontend
+        only shows the "Resolve" button, and flags the row, when this is
+        greater than 0.
         """
         sources = load_json(MEDIA_JSON, [])
         result  = []
@@ -2738,14 +2772,20 @@ if FLASK_AVAILABLE:
             path  = (s.get("path") or "").rstrip("/\\")
             name  = (s.get("name") or "").strip()
             label = name or (path.split("/")[-1] if path else path)
+            exists = bool(path) and os.path.isdir(path)
             result.append({
-                "name":         name,
-                "path":         s.get("path", ""),
-                "visibility":   s.get("visibility", True),
-                "root":         path,
-                "label":        label,
-                "synced_count": count_media_by_source_root(path),
-                "exists":       bool(path) and os.path.isdir(path),
+                "name":                     name,
+                "path":                     s.get("path", ""),
+                "visibility":               s.get("visibility", True),
+                "root":                     path,
+                "label":                    label,
+                "synced_count":             count_media_by_source_root(path),
+                "exists":                   exists,
+                # Only worth checking (and only makes sense to show Resolve
+                # for) when the location's own path is fine — if it's
+                # missing entirely, the existing whole-location Relocate
+                # flow already covers it.
+                "missing_subfolder_count":  count_missing_subfolders(path) if exists else 0,
             })
         return jsonify(result)
 

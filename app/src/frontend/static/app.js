@@ -2883,10 +2883,11 @@ function renderLocationsList() {
 
   locationsData.forEach((loc, idx) => {
     const missing = loc.exists === false;
+    const missingSubfolders = !missing && (loc.missing_subfolder_count || 0) > 0;
     const row = document.createElement('div');
     row.className = 'loc-row'
       + (loc.visibility === false ? ' loc-hidden-row' : '')
-      + (missing ? ' loc-row-missing' : '');
+      + (missing || missingSubfolders ? ' loc-row-missing' : '');
     row.dataset.idx  = idx;
     row.dataset.path = loc.path || '';
 
@@ -2905,15 +2906,13 @@ function renderLocationsList() {
             ? `<button type="button" class="btn btn-ghost loc-relocate-btn"
                        onclick="openFolderBrowser(${idx})" title="Point this location at its new folder">Relocate</button>`
             : ''}
-          <button type="button" class="loc-resolve-btn"
-                  onclick="openResolveMismatch(${idx})"
-                  title="Check for indexed subfolders that are no longer on disk (renamed/moved) without the location itself going missing">Resolve</button>
-          <button type="button" class="loc-sync-btn"
-                  onclick="openSyncNewFolders(${idx})"
-                  title="Check for folders on disk that aren't indexed yet, and sync just those">Sync</button>
         </div>
         ${missing
           ? `<div class="loc-missing-note">⚠ Can't find this folder — it may have been moved or renamed.</div>`
+          : ''}
+        ${missingSubfolders
+          ? `<div class="loc-missing-note">⚠ ${loc.missing_subfolder_count} indexed subfolder${loc.missing_subfolder_count !== 1 ? 's' : ''}
+             no longer found on disk — click Resolve to relink ${loc.missing_subfolder_count !== 1 ? 'them' : 'it'}.</div>`
           : ''}
         <label class="loc-vis-toggle">
           <input type="checkbox" ${loc.visibility !== false ? 'checked' : ''}
@@ -2925,6 +2924,14 @@ function renderLocationsList() {
           : ''}
       </div>
       <div class="loc-actions">
+        ${missingSubfolders
+          ? `<button type="button" class="loc-resolve-btn"
+                     onclick="openResolveMismatch(${idx})"
+                     title="Check for indexed subfolders that are no longer on disk (renamed/moved) without the location itself going missing">Resolve</button>`
+          : ''}
+        <button type="button" class="loc-sync-btn"
+                onclick="openSyncNewFolders(${idx})"
+                title="Check for folders on disk that aren't indexed yet, and sync just those">Sync</button>
         <button class="loc-delete-btn" onclick="deleteLocation(${idx})">✕ Remove</button>
       </div>`;
 
@@ -3366,10 +3373,27 @@ async function performSubfolderRelocate(oldPath, newPath) {
 
     await loadDB();
     renderAll();
+    await refreshLocationsData();   // Resolve button only shows while missing subfolders remain
     populateLocationFilter();
     loadNotifications();
   } catch {
     toast('Could not reach the backend — is app.py running?', 'error');
+  }
+}
+
+// Re-fetches /api/locations and re-renders the Locations Manager list in
+// place (without closing/reopening the modal) — used after an action that
+// can change whether a row still needs its Resolve button, e.g. relocating
+// the last missing subfolder for a location.
+async function refreshLocationsData() {
+  try {
+    const r = await fetch(`${API_BASE}/api/locations`);
+    if (r.ok) {
+      locationsData = await r.json();
+      renderLocationsList();
+    }
+  } catch {
+    // Non-critical — the row will catch up next time the modal is reopened.
   }
 }
 
