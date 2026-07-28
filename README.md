@@ -430,6 +430,7 @@ If a configured source directory can't be found (moved/renamed/unmounted), or fi
 - **Group by — All / Years / Months** — chips in the filter bar, available in **All Photos** and **Hidden** (not in albums or Map). *Years* shows one stack card per year; clicking a year drills into that year's *Months*, in the same stack-card style. A *Months* chip is also available directly, showing month stacks across every year. Each stack card shows the year/month label, the photo count, and up to 4 recent thumbnails fanned like a deck — server-computed via `/api/media/groups`, so only those preview thumbnails are fetched, never the full bucket. Clicking a month card opens its photos in the normal lazily-loaded flat grid, scoped to that month; a breadcrumb (`‹ Years / 2024 / March 2024`) navigates back up. Items with no detectable date aren't shown in Years/Months (they're still visible under All)
 - **Filter dropdowns** — Format, Camera, Location; populated from the full database on load via dedicated indexed API endpoints, not from the currently loaded page
 - **Date range filter** — From/To date pickers in the filter bar restrict results to media dated within the selected (inclusive) range; ✕ clears it
+- **Active-state highlighting** — any filter dropdown or the date range gets a persistent accent border/glow the moment it holds a non-default value, and keeps it — regardless of what else you click on the page — until it's set back to its default ("All Formats"/"All Cameras"/"All Locations", or the date range is cleared). Makes it obvious at a glance which filters are currently narrowing the results
 - **Search** — full-text across filename, camera make/model, and date
 - All filters are applied server-side; each filter change re-fetches from the server at offset 0
 
@@ -439,6 +440,7 @@ If a configured source directory can't be found (moved/renamed/unmounted), or fi
 - **Zoom** — mouse wheel, +/− buttons, 1:1 actual size, fit-to-screen, drag to pan, pinch-to-zoom on touch, double-click to toggle; keyboard: `+` `-` `0` `1`
 - **Keyboard navigation** — `←` `→` to navigate, `Esc` to close
 - **Video player** — native `<video>` element with HTTP range-request streaming so the browser loads only what it needs; seeking works without downloading the full file
+- **Missing video detection** — before handing a video's URL to the `<video>` element, the lightbox does a single `HEAD` request to confirm the file still exists. If it doesn't, a "File not found" message is shown immediately and the `<video>` element is never mounted — this avoids the browser's own media engine repeatedly probing `/api/video/<id>` on its own (its normal retry/range-probing behaviour against a file that's already known to be missing)
 - **HEIC/HEIF** — decoded on the fly via pillow-heif → pyheif → ImageMagick → ffmpeg fallback chain
 - **Unsupported formats** — clear error message with a direct download link
 
@@ -464,7 +466,13 @@ If a configured source directory can't be found (moved/renamed/unmounted), or fi
 Accessible via **⚙ Settings** in the sidebar. Covers all configuration keys — appearance, sorting, performance, media types, sync behaviour, metadata, and server settings. Changes are saved immediately to `data/configuration.json` and most take effect without a restart.
 
 ### Locations Manager
-Accessible via **⊞ Locations** in the top bar. Add, edit, rename, delete, and toggle visibility of source directories without editing `data/media.json` directly. A location that can't currently be found on disk (folder moved, renamed, or unmounted) is shown with a red row and a warning note, and a **Relocate** button appears next to its path field — pick the folder's new location and every already-indexed record under it is repointed in place (no re-scan/re-hash needed).
+Accessible via **⊞ Locations** in the top bar. Add, edit, rename, delete, and toggle visibility of source directories without editing `data/media.json` directly.
+
+Each row shows a label field with a **✕ Remove** button beside it, and below that the path field with exactly one context-dependent action button beside it, in priority order:
+
+- **Relocate** (red row) — the location's own configured path can no longer be found on disk at all (folder moved, renamed, or unmounted). Pick the folder's new location and every already-indexed record under it is repointed in place — no re-scan/re-hash needed.
+- **Resolve** (red row, red button) — the location's own path is still fine, but one or more of its already-indexed *subfolders* can no longer be found. This is the case a plain "does the location's path still exist?" check misses entirely: e.g. location `/photos` contains subfolders `2023/` and `2024/` — renaming `2023` to `2023-old` leaves `/photos` perfectly valid (so the row would otherwise never turn red) while every file that was under `2023/` quietly becomes unreachable. Clicking **Resolve** opens a popup listing each affected subfolder with **Relocate** / **Ignore** actions. Subfolders that went missing *together* (e.g. renaming a parent folder that itself contains further nested subfolders) are automatically grouped into a single entry — relocating the shared parent once relinks every subfolder beneath it in one pass, as long as the corresponding path actually exists at the new location.
+- **Rescan** (cyan button, default/steady state) — shown once nothing needs fixing. Checks for folders on disk under this location that exist but were never indexed at all (newly added content, or the new name a renamed folder landed under), and offers to index just those folders — without re-scanning the entire location.
 
 ### Notifications
 The 🔔 bell icon in the top bar shows a badge with the unread count and opens a panel listing recent notifications, newest/unread first. Currently raised for:
@@ -547,10 +555,13 @@ Folders group albums for display in the sidebar (collapsible tree). A folder can
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/locations` | Returns `data/media.json` entries with `root`/`label` aliases, `synced_count` (indexed rows under that path), and `exists` (whether the path currently resolves to a real directory on disk) added |
+| GET | `/api/locations` | Returns `data/media.json` entries with `root`/`label` aliases, `synced_count` (indexed rows under that path), `exists` (whether the path currently resolves to a real directory on disk), and `missing_subfolder_count` (how many of this — otherwise valid — location's indexed subfolders can no longer be found on disk; only computed when `exists` is true) added |
 | POST | `/api/locations` | Overwrites `data/media.json` with the submitted array |
 | POST | `/api/location/delete` | `{"path": "…"}` — removes the location from `data/media.json` and discards every indexed record under it (and their cached thumbnails). Original files on disk are never touched. Returns `{ok, deleted}` |
 | POST | `/api/location/relocate` | `{"old_path": "…", "new_path": "…"}` — repoints every indexed record under `old_path` to `new_path` in place (source root, file path, and embedded metadata) and updates the matching `data/media.json` entry, without needing a re-scan. Also clears any outstanding notifications for `old_path`. Returns `{ok, updated, old_root, new_root}` |
+| POST | `/api/location/resolve` | `{"path": "…"}` — read-only diagnostic scan for one location: compares what's indexed against what's actually on disk, one directory at a time, to catch subfolder-level drift a plain "does the location's path exist?" check can't see. Indexed subfolders that are missing on disk are grouped by their topmost missing ancestor (so a parent-folder rename that took several indexed subfolders with it shows up as one actionable item, not one per affected leaf). Returns `{root, missing: [{path, rel, count, leaf_count}], new: [{path, rel, count}]}` |
+| POST | `/api/location/relocate-subfolder` | `{"old_path": "…", "new_path": "…"}` — subfolder-scoped counterpart to `/api/location/relocate`, used when a subfolder was renamed/moved but its parent location's own path is still valid. Matches rows by `file_path` prefix rather than `source_root`, so pointing it at a shared missing ancestor relinks every subfolder beneath it in one call — each row is still individually verified with a file-existence check before being relinked. Returns `{ok, updated, still_missing, old_path, new_path}` |
+| POST | `/api/location/rescan-subfolder` | `{"root": "…", "path": "…"}` — indexes new media found under one subfolder of a configured location, without re-walking the whole location the way a full Sync would. `root` is the location's configured path; `path` is the specific subfolder to scan (as returned by `/api/location/resolve`'s `new` list). Returns `{ok, scanned, added}` |
 
 ### Notifications
 
@@ -596,7 +607,11 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 **Photos disappeared / lightbox shows a broken image after moving a folder**
 - This is expected now — Luminary no longer deletes indexed records when a source file or folder can't be found. Check the 🔔 bell icon in the top bar for a notification with a **Relocate** / **View Location** action
 - Clicking the action opens the Locations Manager with the affected row shown in red; use its **Relocate** button to point Luminary at the folder's new path — already-indexed records are repointed in place, no re-sync needed
-- If the row isn't red but a file is still missing, the folder itself is reachable and only that specific file is gone (deleted, or renamed outside Luminary) — check it manually
+- If the row isn't red but a file is still missing, check whether it's a *subfolder* that moved rather than the location itself — e.g. renaming `/photos/2023` to `/photos/2023-old` leaves `/photos` perfectly valid, so the row stays green even though everything under `2023/` is now unreachable. A red **Resolve** button appears next to the path field in exactly this situation; click it to relink the affected subfolder(s)
+- If neither applies, the folder itself is reachable and only that specific file is gone (deleted, or renamed outside Luminary) — check it manually
+
+**A video keeps showing a loading spinner, or the server logs repeated `/api/video/<id>` requests for a file that no longer exists**
+- Fixed as of the current `app.js` — the lightbox does one `HEAD` request to confirm a video file still exists before ever handing its URL to the `<video>` element. If missing, "File not found" is shown immediately with no further requests. Previously, handing a missing file straight to `<video>` let the browser's own media engine retry/range-probe the URL repeatedly on its own before finally giving up
 
 **Thumbnails not appearing / HEIC images not loading**
 - Install `pillow-heif`: `pip install pillow-heif`
