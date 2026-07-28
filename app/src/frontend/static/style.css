@@ -746,24 +746,150 @@
   #group-breadcrumb .crumb-current { color: var(--text); font-weight: 600; }
 
   select.filter-select {
-    background: var(--surface2);
+    /* Native <select> chrome ignores custom background/border-color in
+       several browsers (Safari in particular) unless appearance is turned
+       off — without this, the "active" highlight below would be applied
+       by JS but silently never actually render. The dropdown arrow is
+       redrawn manually since turning appearance off removes the native one. */
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    box-sizing: border-box;
+    background-color: var(--surface2);
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'><path d='M1 1l5 5 5-5' fill='none' stroke='%23888c99' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 9px center;
+    background-size: 10px 7px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     color: var(--text-dim);
     font-family: var(--font-mono);
     font-size: calc(11px * var(--font-scale));
-    padding: 4px 10px;
+    padding: 4px 24px 4px 10px;
     outline: none;
     cursor: pointer;
+    /* Without this, the native dropdown popup falls back to a default
+       (often light) palette regardless of the app's own dark/light mode —
+       which is what made option text hard to read. This tells the browser
+       to render the popup itself in a matching palette. */
+    color-scheme: dark;
+    transition: border-color 0.15s, background-color 0.15s, color 0.15s, box-shadow 0.15s;
   }
+  html[data-mode="light"] select.filter-select { color-scheme: light; }
   select.filter-select:focus { border-color: var(--accent); }
+
+  /* The dropdown *list* rows always get a fixed, readable color/background
+     of their own — deliberately NOT inheriting the select's own text color
+     (which shifts to var(--accent) while "active", see below). That accent
+     tint is meant for the closed box only; without this override it would
+     leak into every row of the open list, which is what made the default
+     option unreadable (dim-on-dark-popup) while other rows looked
+     differently colored depending on selection/hover state. */
+  select.filter-select option {
+    background-color: var(--surface2);
+    color: var(--text);
+    font-weight: 400;
+  }
+
+  /* Fallback for any standalone .filter-select not wrapped in
+     .filter-select-wrap (e.g. the photo picker's location dropdown, which
+     doesn't participate in the active-state tracking below). */
+  select.filter-select.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background-color: var(--accent-dim);
+    font-weight: 600;
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+
+  /* The three main filter dropdowns (Format/Camera/Location) are each
+     wrapped in one of these. The wrapper — a plain <span>, not a native
+     form control — owns ALL the visible chrome (border/background/arrow/
+     active glow) instead of the <select> itself. This is deliberate: some
+     browsers only fully honor custom background/border/box-shadow on a
+     native <select> while it's focused, and quietly repaint their own
+     chrome once it loses focus — which made the "active" highlight
+     flicker off the moment the user clicked anywhere else. A plain
+     wrapper element has no such quirk, so the highlight now persists
+     exactly as long as the JS .active class says it should, focus or not.
+     See updateFilterActiveStates() in app.js. */
+  .filter-select-wrap {
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+    position: relative;
+    background-color: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    transition: border-color 0.15s, background-color 0.15s, box-shadow 0.15s;
+  }
+  .filter-select-wrap::after {
+    content: '';
+    position: absolute;
+    right: 9px;
+    top: 50%;
+    width: 10px;
+    height: 7px;
+    margin-top: -3px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'><path d='M1 1l5 5 5-5' fill='none' stroke='%23888c99' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    background-repeat: no-repeat;
+    background-size: 10px 7px;
+    pointer-events: none;
+  }
+  .filter-select-wrap select.filter-select {
+    /* The select fills the wrapper edge-to-edge with its own chrome
+       switched off — the wrapper's border/background/arrow (above) is all
+       that's ever visibly drawn, so there's nothing for browser-specific
+       select repainting to undermine. */
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    color: inherit;
+  }
+  .filter-select-wrap select.filter-select:focus { border: none; }
+
+  /* Stays clearly highlighted for as long as a non-default value is
+     selected — cleared automatically once it's back to "All Formats"/
+     "All Cameras"/"All Locations". The box-shadow ring (rather than a
+     thicker border) makes the highlight unmistakable without shifting the
+     control's size/position. */
+  .filter-select-wrap.active {
+    border-color: var(--accent);
+    background-color: var(--accent-dim);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  .filter-select-wrap.active select.filter-select {
+    color: var(--accent);
+    font-weight: 600;
+  }
 
   #filter-date-range {
     display: flex;
     align-items: center;
     gap: 6px;
+    border-radius: var(--radius);
+    transition: background-color 0.15s;
+  }
+  /* Same idea as .filter-select-wrap.active above, but spanning two inputs
+     plus the separator/clear button rather than living on a single control. */
+  #filter-date-range.active {
+    background-color: var(--accent-dim);
+    padding: 2px 4px;
+    margin: -2px -4px;
+    border-radius: var(--radius);
+  }
+  #filter-date-range.active input.filter-date {
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+    box-shadow: 0 0 0 1px var(--accent);
   }
   input.filter-date {
+    box-sizing: border-box;
     background: var(--surface2);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -774,6 +900,7 @@
     outline: none;
     cursor: pointer;
     color-scheme: dark;
+    transition: border-color 0.15s, color 0.15s, box-shadow 0.15s;
   }
   html[data-mode="light"] input.filter-date { color-scheme: light; }
   input.filter-date:focus { border-color: var(--accent); }

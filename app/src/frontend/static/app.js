@@ -69,6 +69,34 @@ async function init() {
   setInterval(loadNotifications, 30000);
 }
 
+// Keeps a visual "active" indicator (accent border/background) on each
+// filter control for as long as it holds a non-default value — cleared
+// automatically once it's back to "All Formats"/"All Cameras"/"All
+// Locations" or the date range is emptied. Safe to call any time filter
+// state might have changed, including when a value is set programmatically
+// (e.g. restoring a previous selection after repopulating a <select>'s
+// options), since that doesn't fire a native 'change' event on its own.
+function updateFilterActiveStates() {
+  ['filter-format', 'filter-camera', 'filter-location'].forEach(id => {
+    const el = document.getElementById(id);
+    // The visible highlight lives on the wrapper <span>, not the <select>
+    // itself — several browsers only fully honor custom background/border/
+    // box-shadow on a native <select> while it's focused, and quietly
+    // repaint their own chrome once it loses focus, which made the glow
+    // flicker off the moment you clicked elsewhere. A plain wrapper has no
+    // such quirk.
+    const wrap = el?.closest('.filter-select-wrap');
+    if (wrap) wrap.classList.toggle('active', !!el.value);
+  });
+
+  const fromEl = document.getElementById('filter-date-from');
+  const toEl   = document.getElementById('filter-date-to');
+  const dateRange = document.getElementById('filter-date-range');
+  if (dateRange) {
+    dateRange.classList.toggle('active', !!(fromEl?.value || toEl?.value));
+  }
+}
+
 // Caps both date-range inputs at today — media can't be dated in the future.
 function setupDateFilterBounds() {
   const today = new Date().toISOString().slice(0, 10);
@@ -390,6 +418,8 @@ function _updateGroupViewChrome() {
 }
 
 function applyFilters() {
+  updateFilterActiveStates();
+
   if (!_updateGroupViewChrome()) {
     // Grouped (Years/Months) view, not drilled into a specific month yet —
     // refresh the stack cards instead of the flat photo grid.
@@ -660,6 +690,7 @@ async function populateAllFilters() {
     populateCameraFilter(),
     populateLocationFilter(),
   ]);
+  updateFilterActiveStates();
 }
 
 async function populateFormatFilter() {
@@ -713,6 +744,7 @@ async function populateLocationFilter() {
     });
     const roots = locations.map(l => l.root);
     if (prev && roots.includes(prev)) sel.value = prev;
+    updateFilterActiveStates();
   } catch { /* backend not running */ }
 }
 
@@ -3039,7 +3071,7 @@ async function saveLocations() {
     if (!r.ok) throw new Error('Backend returned ' + r.status);
     closeModal('locations-modal');
     populateLocationFilter();  // refresh dropdown with updated labels
-    toast('Media Locations saved — run Sync to index changes', 'success');
+    toast('media.json saved — run Sync to index changes', 'success');
   } catch {
     toast('Could not save — is app.py running?', 'error');
   }
