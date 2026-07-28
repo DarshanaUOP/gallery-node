@@ -65,6 +65,8 @@ async function init() {
   setupIntersectionObserver();
   setupGalleryImageObserver();
   setupDateFilterBounds();
+  loadNotifications();
+  setInterval(loadNotifications, 30000);
 }
 
 // Caps both date-range inputs at today — media can't be dated in the future.
@@ -1291,6 +1293,7 @@ function renderLightbox() {
   // Reset zoom state on every navigation
   lbZoomReset(true);
   document.getElementById('lb-zoom-bar').classList.remove('visible');
+  _clearLbMissingFilePopup();
 
   if (item.type === 'video') {
     const prev = lb.querySelector('video');
@@ -1300,27 +1303,40 @@ function renderLightbox() {
     const ext       = item.name.split('.').pop().toLowerCase();
     const unsupported = ['avi','mkv','wmv','flv','ts','mts'];
     const needsWarning = unsupported.includes(ext);
+
+    // Placeholder while we verify the file exists — see note below.
     lb.innerHTML = `
-      <div id="lb-video-wrap">
-        <video id="lb-video" controls
-               preload="${config.video_preload || 'metadata'}"
-               ${config.video_autoplay ? 'autoplay muted' : ''}
-               playsinline
-               onerror="document.getElementById('lb-video-err').style.display='flex'">
-          <source src="${videoSrc}" type="${videoMime}">
-        </video>
-        <div id="lb-video-err" style="display:none;flex-direction:column;align-items:center;
-             gap:8px;color:var(--text-muted);font-size:12px;text-align:center;padding:20px">
-          <span style="font-size:32px">⚠</span>
-          <span>This browser cannot play <strong style="color:var(--text)">.${ext.toUpperCase()}</strong> files.</span>
-          <span>Convert to MP4/WebM, or open directly in a media player.</span>
-          <a href="${videoSrc}" download="${escHtml(item.name)}"
-             style="color:var(--accent);text-decoration:none;border:1px solid var(--accent);
-                    padding:6px 16px;border-radius:4px;margin-top:4px">⬇ Download file</a>
-        </div>
-        ${needsWarning ? `<div style="font-size:11px;color:var(--danger);opacity:0.8;text-align:center">
-          ⚠ .${ext.toUpperCase()} may not play in browsers — MP4 or WebM recommended</div>` : ''}
-      </div>`;
+      <div id="lb-video-wrap" style="display:flex;align-items:center;justify-content:center;
+           min-height:200px;color:var(--text-muted);font-size:12px">Loading…</div>`;
+
+    // Verify the file is actually there with a single HEAD request BEFORE
+    // handing the URL to the <video> element. If we skip straight to
+    // <video src="...">, a missing file means the browser's own media
+    // engine ends up hammering /api/video on our behalf — Chrome/Firefox
+    // issue their own probe + range requests and will retry more than
+    // once before finally firing 'error' — all for a file we could have
+    // already confirmed was missing with one request. Checking first means
+    // a missing file never reaches the <video> element at all: one HEAD
+    // request, one verdict, "File not found" shown immediately with no
+    // further /api/video traffic.
+    const lbIndexAtRequest = lbIndex;   // guard against a stale response after nav
+    fetch(videoSrc, { method: 'HEAD' })
+      .then(r => {
+        if (lbIndex !== lbIndexAtRequest) return;   // user navigated away meanwhile
+        if (r.status === 404) {
+          showLbMissingFilePopup();
+          loadNotifications();   // pick up the notification the backend just raised
+          return;
+        }
+        _renderLbVideoPlayer(videoSrc, videoMime, ext, needsWarning, item.name);
+      })
+      .catch(() => {
+        if (lbIndex !== lbIndexAtRequest) return;
+        // Couldn't reach the backend at all — don't assume "missing file",
+        // that's a different failure mode. Try to render the player as
+        // normal; a real network problem will surface there instead.
+        _renderLbVideoPlayer(videoSrc, videoMime, ext, needsWarning, item.name);
+      });
   } else {
     lb.innerHTML = `
       <img id="lb-thumb" src="${thumbUrl(item.uniqueName)}" alt="${name}"
@@ -1335,11 +1351,7 @@ function renderLightbox() {
              document.getElementById('lb-zoom-bar').classList.add('visible');
              lbInitZoom();
            "
-           onerror="
-             this.remove();
-             var t=document.getElementById('lb-thumb');
-             if(t){t.style.filter='none';t.style.transform='scale(1)';}
-           ">`;
+           onerror="handleLbFullImageError()">`;
   }
 
   document.getElementById('lb-filename').textContent = item.name;
@@ -1348,6 +1360,36 @@ function renderLightbox() {
 
   // Build rich details panel
   _renderLbDetails(item);
+}
+
+// Builds and mounts the actual <video> element into the lightbox. Only
+// ever called after renderLightbox's HEAD check has confirmed the file
+// exists — so if onerror fires here, it's a genuine playback/codec issue,
+// not a missing file, and handleLbVideoError doesn't need to re-check.
+function _renderLbVideoPlayer(videoSrc, videoMime, ext, needsWarning, itemName) {
+  const lb = document.getElementById('lb-content');
+  if (!lb) return;
+  lb.innerHTML = `
+    <div id="lb-video-wrap">
+      <video id="lb-video" controls
+             preload="${config.video_preload || 'metadata'}"
+             ${config.video_autoplay ? 'autoplay muted' : ''}
+             playsinline
+             onerror="handleLbVideoError()">
+        <source src="${videoSrc}" type="${videoMime}">
+      </video>
+      <div id="lb-video-err" style="display:none;flex-direction:column;align-items:center;
+           gap:8px;color:var(--text-muted);font-size:12px;text-align:center;padding:20px">
+        <span style="font-size:32px">⚠</span>
+        <span>This browser cannot play <strong style="color:var(--text)">.${ext.toUpperCase()}</strong> files.</span>
+        <span>Convert to MP4/WebM, or open directly in a media player.</span>
+        <a href="${videoSrc}" download="${escHtml(itemName)}"
+           style="color:var(--accent);text-decoration:none;border:1px solid var(--accent);
+                  padding:6px 16px;border-radius:4px;margin-top:4px">⬇ Download file</a>
+      </div>
+      ${needsWarning ? `<div style="font-size:11px;color:var(--danger);opacity:0.8;text-align:center">
+        ⚠ .${ext.toUpperCase()} may not play in browsers — MP4 or WebM recommended</div>` : ''}
+    </div>`;
 }
 
 // ─────────────────────────────────────────────
@@ -1668,12 +1710,72 @@ function _lbDetachEvents() {
   if (box._lbDblClick)    { box.removeEventListener('dblclick',   box._lbDblClick); }
 }
 
+// Fired by the full-size <img>'s onerror when a file the DB still has
+// indexed can't actually be loaded (deleted/moved/renamed on disk). The
+// backend has already logged a "file not found" notification by the time
+// this 404s — this just gives immediate in-lightbox feedback and backs out
+// of the view automatically instead of leaving a permanently broken image.
+let lbMissingFileTimer = null;
+
+function handleLbFullImageError() {
+  const img = document.getElementById('lb-full');
+  if (img) img.remove();
+  const t = document.getElementById('lb-thumb');
+  if (t) { t.style.filter = 'none'; t.style.transform = 'scale(1)'; }
+
+  showLbMissingFilePopup();
+  loadNotifications();   // pick up the notification the backend just raised
+}
+
+// Fired by the <video>'s onerror. renderLightbox already ran a HEAD check
+// before this element was ever mounted, so a missing file never gets this
+// far — an error here means the browser genuinely can't decode the format,
+// so we just show the "can't play this format" message directly. No extra
+// request needed (and no more repeated hits to /api/video for a file we
+// already know is fine).
+function handleLbVideoError() {
+  const err = document.getElementById('lb-video-err');
+  if (err) err.style.display = 'flex';
+}
+
+function showLbMissingFilePopup() {
+  if (document.getElementById('lb-missing-popup')) return;   // already showing
+  const lb = document.getElementById('lightbox');
+  if (!lb) return;
+
+  const popup = document.createElement('div');
+  popup.id = 'lb-missing-popup';
+  popup.className = 'lb-missing-popup';
+  popup.innerHTML = `
+    <div class="lb-missing-popup-icon">⚠</div>
+    <div class="lb-missing-popup-title">File not found</div>
+    <div class="lb-missing-popup-msg">
+      This file couldn't be located on disk — it may have been moved, renamed, or deleted.
+      Check 🔔 Notifications to relocate it.
+    </div>
+    <div class="lb-missing-popup-sub">Closing automatically…</div>`;
+  lb.appendChild(popup);
+
+  lbMissingFileTimer = setTimeout(() => {
+    closeLightbox();
+  }, 5000);
+}
+
+function _clearLbMissingFilePopup() {
+  if (lbMissingFileTimer) {
+    clearTimeout(lbMissingFileTimer);
+    lbMissingFileTimer = null;
+  }
+  document.getElementById('lb-missing-popup')?.remove();
+}
+
 function closeLightbox() {
   _lbDetachEvents();
   const vid = document.getElementById('lb-content')?.querySelector('video');
   if (vid) { vid.pause(); vid.src = ''; vid.load(); }
   document.getElementById('lightbox').classList.remove('open');
   _destroyMiniMap('lb-detail-minimap');
+  _clearLbMissingFilePopup();
 }
 
 function lbNav(dir) {
@@ -2142,6 +2244,7 @@ function closeModal(id) {
 document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('click', e => {
     if (e.target === m) {
+      if (m.id === 'folder-browser-modal') { closeFolderBrowserModal(); return; }
       m.classList.remove('open');
       if (m.id === 'danger-confirm-modal') _dangerConfirmCallback = null;
       if (m.id === 'meta-modal') _destroyMiniMap('meta-minimap');
@@ -2321,6 +2424,142 @@ function toast(msg, type = 'info') {
   el.innerHTML = `<span>${icons[type] || '◆'}</span> ${escHtml(msg)}`;
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+// ─────────────────────────────────────────────
+//  NOTIFICATIONS
+// ─────────────────────────────────────────────
+let notifications = [];   // most recent local snapshot from /api/notifications
+
+async function loadNotifications() {
+  try {
+    const r = await fetch(`${API_BASE}/api/notifications`);
+    if (!r.ok) return;
+    const data = await r.json();
+    notifications = data.items || [];
+    updateNotifBadge(data.unread_count);
+    if (document.getElementById('notifications-panel').classList.contains('open')) {
+      renderNotificationsPanel();
+    }
+  } catch {
+    // Silent — the bell just won't update this cycle. Not worth a toast,
+    // this polls every 30s and errors are almost always "server not up yet".
+  }
+}
+
+function updateNotifBadge(count) {
+  const n = count !== undefined ? count : notifications.filter(x => !x.is_read).length;
+  const badge = document.getElementById('notif-badge');
+  if (n > 0) {
+    badge.style.display   = 'flex';
+    badge.textContent = n > 9 ? '9+' : String(n);
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function toggleNotificationsPanel(e) {
+  if (e) e.stopPropagation();
+  const panel = document.getElementById('notifications-panel');
+  if (panel.classList.contains('open')) {
+    closeNotificationsPanel();
+  } else {
+    panel.classList.add('open');
+    renderNotificationsPanel();
+  }
+}
+
+function closeNotificationsPanel() {
+  document.getElementById('notifications-panel').classList.remove('open');
+}
+
+// Click-outside-to-close, same idea as the modal-overlay handlers elsewhere.
+document.addEventListener('click', (e) => {
+  const panel = document.getElementById('notifications-panel');
+  const btn   = document.getElementById('notif-bell-btn');
+  if (!panel || !btn) return;
+  if (panel.classList.contains('open') && !panel.contains(e.target) && !btn.contains(e.target)) {
+    closeNotificationsPanel();
+  }
+});
+
+function renderNotificationsPanel() {
+  const list = document.getElementById('notifications-list');
+  list.innerHTML = '';
+
+  if (!notifications.length) {
+    list.innerHTML = '<div class="notif-empty">You\'re all caught up</div>';
+    return;
+  }
+
+  notifications.forEach(n => {
+    const item = document.createElement('div');
+    item.className = 'notif-item' + (n.is_read ? '' : ' unread');
+    item.innerHTML = `
+      <div class="notif-item-row">
+        <div class="notif-item-title">${escHtml(n.title || '')}</div>
+        <button class="notif-item-dismiss" title="Mark as read"
+                onclick="event.stopPropagation(); markNotificationRead(${n.id})">✕</button>
+      </div>
+      ${n.message ? `<div class="notif-item-msg">${escHtml(n.message)}</div>` : ''}
+      <div class="notif-item-footer">
+        <span class="notif-item-time">${formatNotifTime(n.created_at)}</span>
+        ${n.action ? `<button class="notif-item-action-btn"
+                              onclick="event.stopPropagation(); handleNotificationAction(${n.id})">${escHtml(n.action_label || 'View')}</button>` : ''}
+      </div>`;
+    list.appendChild(item);
+  });
+}
+
+async function markNotificationRead(id) {
+  try {
+    await fetch(`${API_BASE}/api/notifications/${id}/read`, { method: 'POST' });
+  } catch {
+    // Local state below still updates so the UI stays responsive even if
+    // the request fails — the next poll will reconcile either way.
+  }
+  const n = notifications.find(x => x.id === id);
+  if (n) n.is_read = true;
+  updateNotifBadge();
+  renderNotificationsPanel();
+}
+
+async function markAllNotificationsRead() {
+  try {
+    await fetch(`${API_BASE}/api/notifications/read-all`, { method: 'POST' });
+  } catch { /* see markNotificationRead */ }
+  notifications.forEach(n => { n.is_read = true; });
+  updateNotifBadge();
+  renderNotificationsPanel();
+}
+
+// Runs a notification's action button — currently only 'relocate', which
+// jumps to the Locations Manager and highlights the affected row.
+function handleNotificationAction(id) {
+  const n = notifications.find(x => x.id === id);
+  if (!n) return;
+  markNotificationRead(id);
+  closeNotificationsPanel();
+  if (n.action === 'relocate' && n.location_path) {
+    openLocationsManager(n.location_path);
+  }
+}
+
+function formatNotifTime(iso) {
+  if (!iso) return '';
+  try {
+    // SQLite's datetime('now') returns UTC with no timezone suffix — add
+    // one so Date parses it as UTC instead of local time.
+    const d = new Date(iso.replace(' ', 'T') + 'Z');
+    const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (mins < 1)  return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24)  return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  } catch {
+    return '';
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -2599,7 +2838,7 @@ function applyConfigToUI(cfg) {
 // ─────────────────────────────────────────────
 let locationsData = [];   // working copy while modal is open
 
-async function openLocationsManager() {
+async function openLocationsManager(highlightPath = null) {
   try {
     const r = await fetch(`${API_BASE}/api/locations`);
     if (!r.ok) throw new Error('Backend returned ' + r.status);
@@ -2613,6 +2852,24 @@ async function openLocationsManager() {
   document.getElementById('loc-new-path').value = '';
   document.getElementById('loc-new-vis').checked = true;
   document.getElementById('locations-modal').classList.add('open');
+
+  if (highlightPath) {
+    setTimeout(() => {
+      const row = document.querySelector(`.loc-row[data-path="${cssEscape(highlightPath)}"]`);
+      if (row) {
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        row.classList.add('loc-row-flash');
+        setTimeout(() => row.classList.remove('loc-row-flash'), 2000);
+      }
+    }, 60);
+  }
+}
+
+// Minimal CSS.escape fallback (older WebViews on some Linux/embedded builds
+// may not expose window.CSS.escape).
+function cssEscape(str) {
+  if (window.CSS && CSS.escape) return CSS.escape(str);
+  return String(str).replace(/["\\]/g, '\\$&');
 }
 
 function renderLocationsList() {
@@ -2625,20 +2882,55 @@ function renderLocationsList() {
   }
 
   locationsData.forEach((loc, idx) => {
+    const missing = loc.exists === false;
+    const missingSubfolders = !missing && (loc.missing_subfolder_count || 0) > 0;
     const row = document.createElement('div');
-    row.className = 'loc-row' + (loc.visibility === false ? ' loc-hidden-row' : '');
-    row.dataset.idx = idx;
+    row.className = 'loc-row'
+      + (loc.visibility === false ? ' loc-hidden-row' : '')
+      + (missing || missingSubfolders ? ' loc-row-missing' : '');
+    row.dataset.idx  = idx;
+    row.dataset.path = loc.path || '';
+
+    // Exactly one action button at a time: Relocate takes priority (the
+    // root itself is gone — nothing else here can help until that's
+    // fixed), then Resolve (root's fine, but a subfolder under it isn't),
+    // and Sync as the default steady-state action once nothing's wrong.
+    const actionBtnHtml = missing
+      ? `<button type="button" class="btn btn-ghost loc-relocate-btn loc-action-btn"
+                 onclick="openFolderBrowser(${idx})" title="Point this location at its new folder">Relocate</button>`
+      : missingSubfolders
+      ? `<button type="button" class="loc-resolve-btn loc-action-btn"
+                 onclick="openResolveMismatch(${idx})"
+                 title="Check for indexed subfolders that are no longer on disk (renamed/moved) without the location itself going missing">Resolve</button>`
+      : `<button type="button" class="loc-sync-btn loc-action-btn"
+                 onclick="openSyncNewFolders(${idx})"
+                 title="Check for folders on disk that aren't indexed yet, and rescan just those">Rescan</button>`;
 
     row.innerHTML = `
-      <div class="loc-fields">
+      <div class="loc-row-line1">
         <input class="loc-name-input" type="text"
                value="${escHtml(loc.name || '')}"
                placeholder="Label"
                oninput="locationsData[${idx}].name = this.value">
-        <input class="loc-path-input" type="text"
-               value="${escHtml(loc.path || '')}"
-               placeholder="Absolute path"
-               oninput="locationsData[${idx}].path = this.value">
+        <button class="loc-delete-btn" onclick="deleteLocation(${idx})">✕ Remove</button>
+      </div>
+      <div class="loc-row-line2">
+        <div class="path-input-row">
+          <input class="loc-path-input" type="text"
+                 value="${escHtml(loc.path || '')}"
+                 placeholder="Absolute path"
+                 oninput="locationsData[${idx}].path = this.value">
+        </div>
+        ${actionBtnHtml}
+      </div>
+      <div class="loc-meta">
+        ${missing
+          ? `<div class="loc-missing-note">⚠ Can't find this folder — it may have been moved or renamed.</div>`
+          : ''}
+        ${missingSubfolders
+          ? `<div class="loc-missing-note">⚠ ${loc.missing_subfolder_count} indexed subfolder${loc.missing_subfolder_count !== 1 ? 's' : ''}
+             no longer found on disk — click Resolve to relink ${loc.missing_subfolder_count !== 1 ? 'them' : 'it'}.</div>`
+          : ''}
         <label class="loc-vis-toggle">
           <input type="checkbox" ${loc.visibility !== false ? 'checked' : ''}
                  onchange="locationsData[${idx}].visibility = this.checked; this.closest('.loc-row').classList.toggle('loc-hidden-row', !this.checked)">
@@ -2647,9 +2939,6 @@ function renderLocationsList() {
         ${(loc.synced_count || 0) > 0
           ? `<span class="loc-synced-badge">⬡ <strong>${loc.synced_count}</strong> synced file${loc.synced_count !== 1 ? 's' : ''}</span>`
           : ''}
-      </div>
-      <div class="loc-actions">
-        <button class="loc-delete-btn" onclick="deleteLocation(${idx})">✕ Remove</button>
       </div>`;
 
     list.appendChild(row);
@@ -2750,34 +3039,86 @@ async function saveLocations() {
     if (!r.ok) throw new Error('Backend returned ' + r.status);
     closeModal('locations-modal');
     populateLocationFilter();  // refresh dropdown with updated labels
-    toast('media.json saved — run Sync to index changes', 'success');
+    toast('Media Locations saved — run Sync to index changes', 'success');
   } catch {
     toast('Could not save — is app.py running?', 'error');
   }
 }
 
 // ─────────────────────────────────────────────
-//  FOLDER BROWSER  (Browse… next to Absolute path)
+//  FOLDER BROWSER  (Browse… next to Absolute path, and Relocate on a
+//  missing location — both reuse this same picker)
 // ─────────────────────────────────────────────
-let folderBrowserPath = null;   // currently listed directory (null = start screen, e.g. Windows drive list)
+let folderBrowserPath       = null;   // currently listed directory (null = start screen, e.g. Windows drive list)
+let folderBrowserRelocateIdx = null;  // null = "Browse…" mode (fills loc-new-path); otherwise index into locationsData being relocated
+let folderBrowserSubfolderOldPath = null;  // set instead of folderBrowserRelocateIdx when relocating a single subfolder from the Resolve popup
+let folderBrowserReturnModalId = null;     // a modal to reopen once the folder browser closes (see closeFolderBrowserModal)
 
-function openFolderBrowser() {
-  // Start from whatever's already typed in the path field, if it looks
-  // like something worth listing; otherwise let the backend pick a default
-  // (home directory, or the drive list on Windows).
-  const typed = document.getElementById('loc-new-path').value.trim();
+function openFolderBrowser(relocateIdx = null) {
+  folderBrowserRelocateIdx = relocateIdx;
+  folderBrowserSubfolderOldPath = null;
+  // Start from whatever's already typed in the relevant path field, if it
+  // looks like something worth listing; otherwise let the backend pick a
+  // default (home directory, or the drive list on Windows).
+  const typed = relocateIdx !== null
+    ? (locationsData[relocateIdx]?.path || '').trim()
+    : document.getElementById('loc-new-path').value.trim();
   document.getElementById('folder-browser-modal').classList.add('open');
-  loadFolderBrowser(typed || null);
+  // Only let the backend fall back to the nearest existing ancestor when
+  // this is a Relocate — its old folder is *expected* to be gone, so
+  // dead-ending on an error would be a UX trap. For the plain "Browse…"
+  // used when adding/editing a location, a nonexistent path is very
+  // likely just a typo and should surface as a clear error instead of
+  // silently landing somewhere else.
+  loadFolderBrowser(typed || null, relocateIdx !== null);
 }
 
-async function loadFolderBrowser(path) {
-  const listEl = document.getElementById('folder-browser-list');
-  const pathEl = document.getElementById('folder-browser-path');
+// Same picker, opened from the Resolve popup to relocate one subfolder
+// (not the whole location). oldPath is expected to be gone — same
+// reasoning as the whole-location Relocate case above.
+function openFolderBrowserForSubfolder(oldPath) {
+  folderBrowserRelocateIdx = null;
+  folderBrowserSubfolderOldPath = oldPath;
+
+  // Both modals sit in the same stacking layer, and resolve-mismatch-modal
+  // comes later in the DOM than folder-browser-modal — so if it's left
+  // open, it stays visually on top and swallows every click meant for the
+  // folder browser underneath it. Close it first and remember to bring it
+  // back (see closeFolderBrowserModal) once the user is done here.
+  const mismatchModal = document.getElementById('resolve-mismatch-modal');
+  if (mismatchModal && mismatchModal.classList.contains('open')) {
+    mismatchModal.classList.remove('open');
+    folderBrowserReturnModalId = 'resolve-mismatch-modal';
+  }
+
+  document.getElementById('folder-browser-modal').classList.add('open');
+  loadFolderBrowser(oldPath || null, true);
+}
+
+// Closes the folder browser and — if it was opened on top of another modal
+// (see openFolderBrowserForSubfolder) — reopens that modal so the user
+// lands back where they were, instead of everything just disappearing.
+function closeFolderBrowserModal() {
+  closeModal('folder-browser-modal');
+  if (folderBrowserReturnModalId) {
+    document.getElementById(folderBrowserReturnModalId)?.classList.add('open');
+    folderBrowserReturnModalId = null;
+  }
+}
+
+async function loadFolderBrowser(path, allowFallback = false) {
+  const listEl     = document.getElementById('folder-browser-list');
+  const pathEl     = document.getElementById('folder-browser-path');
+  const fallbackEl = document.getElementById('folder-browser-fallback-note');
   listEl.innerHTML = '<div class="folder-browser-msg">Loading…</div>';
+  fallbackEl.style.display = 'none';
 
   try {
-    const url = path ? `${API_BASE}/api/browse?path=${encodeURIComponent(path)}`
-                      : `${API_BASE}/api/browse`;
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    if (allowFallback) params.set('allow_fallback', '1');
+    const qs  = params.toString();
+    const url = `${API_BASE}/api/browse${qs ? '?' + qs : ''}`;
     const r = await fetch(url);
     const data = await r.json();
 
@@ -2789,13 +3130,23 @@ async function loadFolderBrowser(path) {
     folderBrowserPath = data.path || null;
     pathEl.textContent = data.path || 'Select a starting point';
 
+    // The exact folder we asked for wasn't there (e.g. Relocate opened on
+    // a location that's been moved/renamed) — the backend walked up to the
+    // nearest ancestor that still exists instead of dead-ending. Explain
+    // why we're not starting exactly where they expected.
+    if (data.fallback_from) {
+      fallbackEl.textContent =
+        `⚠ Couldn't find "${data.fallback_from}" — starting from the nearest folder that still exists. Navigate down to find the new location.`;
+      fallbackEl.style.display = 'block';
+    }
+
     listEl.innerHTML = '';
 
     if (data.parent !== null && data.parent !== undefined) {
       const up = document.createElement('div');
       up.className = 'folder-browser-item folder-browser-up';
       up.textContent = '⬆ .. (up a level)';
-      up.onclick = () => loadFolderBrowser(data.parent);
+      up.onclick = () => loadFolderBrowser(data.parent, allowFallback);
       listEl.appendChild(up);
     }
 
@@ -2809,7 +3160,7 @@ async function loadFolderBrowser(path) {
         const item = document.createElement('div');
         item.className = 'folder-browser-item';
         item.textContent = '📁 ' + d.name;
-        item.onclick = () => loadFolderBrowser(d.path);
+        item.onclick = () => loadFolderBrowser(d.path, allowFallback);
         listEl.appendChild(item);
       });
     }
@@ -2818,13 +3169,350 @@ async function loadFolderBrowser(path) {
   }
 }
 
-function confirmFolderBrowser() {
+async function confirmFolderBrowser() {
   if (!folderBrowserPath) {
     toast('Choose a folder first', 'error');
     return;
   }
+
+  if (folderBrowserSubfolderOldPath !== null) {
+    const oldPath = folderBrowserSubfolderOldPath;
+    const newPath = folderBrowserPath;
+    folderBrowserSubfolderOldPath = null;
+    closeFolderBrowserModal();
+    await performSubfolderRelocate(oldPath, newPath);
+    return;
+  }
+
+  if (folderBrowserRelocateIdx !== null) {
+    const idx = folderBrowserRelocateIdx;
+    const newPath = folderBrowserPath;
+    folderBrowserRelocateIdx = null;
+    closeFolderBrowserModal();
+    setPendingRelocatePath(idx, newPath);
+    return;
+  }
+
   document.getElementById('loc-new-path').value = folderBrowserPath;
-  closeModal('folder-browser-modal');
+  closeFolderBrowserModal();
+}
+
+// After the user picks a folder for a missing location, don't hit the
+// backend yet — show the chosen path and flip the button to "Validate" so
+// they can confirm before Luminary starts matching files against it.
+function setPendingRelocatePath(idx, newPath) {
+  const loc = locationsData[idx];
+  if (!loc) return;
+  loc._pendingRelocatePath = newPath;
+
+  const row = document.querySelector(`.loc-row[data-idx="${idx}"]`);
+  if (!row) return;
+
+  const pathInput = row.querySelector('.loc-path-input');
+  if (pathInput) pathInput.value = newPath;
+
+  const btn = row.querySelector('.loc-relocate-btn');
+  if (btn) {
+    btn.textContent = 'Validate';
+    btn.classList.add('loc-validate-btn');
+    btn.title = 'Check each file against this folder and relink matches';
+    btn.onclick = () => validateRelocation(idx);
+  }
+}
+
+// "Validate" — crosschecks every DB record under the old location against
+// the picked folder, one file at a time, and relinks only the ones found.
+async function validateRelocation(idx) {
+  const loc = locationsData[idx];
+  const newPath = loc && loc._pendingRelocatePath;
+  if (!loc || !newPath) return;
+  await performRelocate(idx, newPath);
+}
+
+// Repoints a location's already-indexed media rows to a new folder on
+// disk — the backend half of the "Validate" action, for both a red
+// loc-row in the Locations Manager and a notification's action button.
+async function performRelocate(idx, newPath) {
+  const loc = locationsData[idx];
+  if (!loc) return;
+  try {
+    const r = await fetch(`${API_BASE}/api/location/relocate`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ old_path: loc.path, new_path: newPath }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(data.error || 'Failed to relocate location', 'error'); return; }
+
+    const matched = data.updated || 0;
+    const missing = data.still_missing || 0;
+    const msg = missing > 0
+      ? `Validated — ${matched} file${matched !== 1 ? 's' : ''} relinked, ${missing} still not found`
+      : `Validated — ${matched} file${matched !== 1 ? 's' : ''} relinked`;
+    toast(msg, missing > 0 ? 'info' : 'success');
+
+    await openLocationsManager();   // re-fetch resets exists/pending state for every row
+    populateLocationFilter();
+    loadNotifications();
+  } catch {
+    toast('Could not validate — is app.py running?', 'error');
+  }
+}
+
+// ─────────────────────────────────────────────
+//  RESOLVE MISSING SUBFOLDERS  (red "Resolve" button next to loc-path-input)
+//
+//  Catches subfolder-level drift that never makes the location itself show
+//  red: e.g. location "/a/b" contains subfolders "c" and "d" — "/a/b" is
+//  still a valid path, so the location manager never flags it, even though
+//  renaming "/a/b/c" to "/a/b/c-1" leaves every file that was under "c"
+//  unresolvable. Resolve runs a read-only diagnostic scan and, if it finds
+//  indexed subfolders that are no longer on disk, shows a custom popup
+//  (not a native confirm/alert) to relocate each one — or ignore it.
+//
+//  Rows are built with createElement + closures (not inline onclick="..."
+//  strings) specifically so a folder path can safely contain a double
+//  quote, single quote, or anything else without corrupting the markup —
+//  the same pattern already used for the folder-browser list items below.
+// ─────────────────────────────────────────────
+let resolveMismatchLocIdx = null;   // which locationsData row the open popup belongs to
+
+async function openResolveMismatch(idx) {
+  const loc = locationsData[idx];
+  if (!loc || !loc.path) return;
+
+  resolveMismatchLocIdx = idx;
+  const list = document.getElementById('resolve-mismatch-list');
+  list.innerHTML = '<div class="resolve-mismatch-empty">Scanning…</div>';
+  document.getElementById('resolve-mismatch-modal').classList.add('open');
+
+  try {
+    const r = await fetch(`${API_BASE}/api/location/resolve`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ path: loc.path }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      closeModal('resolve-mismatch-modal');
+      toast(data.error || 'Could not scan this location', 'error');
+      return;
+    }
+    renderResolveMismatch(data.missing || []);
+  } catch {
+    closeModal('resolve-mismatch-modal');
+    toast('Could not reach the backend — is app.py running?', 'error');
+  }
+}
+
+function renderResolveMismatch(missing) {
+  const list = document.getElementById('resolve-mismatch-list');
+  list.innerHTML = '';
+
+  if (missing.length === 0) {
+    list.innerHTML = '<div class="resolve-mismatch-empty">✓ No missing subfolders found — everything indexed is still on disk.</div>';
+    return;
+  }
+
+  missing.forEach(m => {
+    const row = document.createElement('div');
+    row.className = 'resolve-mismatch-row is-missing';
+
+    const info = document.createElement('div');
+    info.className = 'resolve-mismatch-info';
+    const pathEl = document.createElement('div');
+    pathEl.className = 'resolve-mismatch-path';
+    pathEl.textContent = m.rel;
+    pathEl._fullPath = m.path;
+    const metaEl = document.createElement('div');
+    metaEl.className = 'resolve-mismatch-meta';
+    metaEl.textContent = m.leaf_count > 1
+      ? `${m.count} indexed file${m.count !== 1 ? 's' : ''} across ${m.leaf_count} subfolders — folder missing or renamed`
+      : `${m.count} indexed file${m.count !== 1 ? 's' : ''} — folder missing or renamed`;
+    info.appendChild(pathEl);
+    info.appendChild(metaEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'resolve-mismatch-actions';
+
+    const ignoreBtn = document.createElement('button');
+    ignoreBtn.className = 'btn btn-ghost';
+    ignoreBtn.textContent = 'Ignore';
+    ignoreBtn.onclick = () => row.remove();
+
+    const relocateBtn = document.createElement('button');
+    relocateBtn.className = 'btn btn-accent';
+    relocateBtn.textContent = 'Relocate';
+    relocateBtn.onclick = () => openFolderBrowserForSubfolder(m.path);
+
+    actions.appendChild(ignoreBtn);
+    actions.appendChild(relocateBtn);
+    row.appendChild(info);
+    row.appendChild(actions);
+    list.appendChild(row);
+  });
+}
+
+// Called from confirmFolderBrowser() once a new folder is picked for a
+// subfolder-level Relocate.
+async function performSubfolderRelocate(oldPath, newPath) {
+  try {
+    const r = await fetch(`${API_BASE}/api/location/relocate-subfolder`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ old_path: oldPath, new_path: newPath }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(data.error || 'Failed to relocate folder', 'error'); return; }
+
+    const matched = data.updated || 0;
+    const missing = data.still_missing || 0;
+    const msg = missing > 0
+      ? `Relocated — ${matched} file${matched !== 1 ? 's' : ''} relinked, ${missing} still not found`
+      : `Relocated — ${matched} file${matched !== 1 ? 's' : ''} relinked`;
+    toast(msg, missing > 0 ? 'info' : 'success');
+
+    // Drop the row it corresponds to, if the popup's still open — match by
+    // the exact original path we sent, not the displayed relative text.
+    document.querySelectorAll('#resolve-mismatch-list .resolve-mismatch-row').forEach(row => {
+      const pathEl = row.querySelector('.resolve-mismatch-path');
+      if (pathEl && pathEl._fullPath === oldPath) row.remove();
+    });
+
+    await loadDB();
+    renderAll();
+    await refreshLocationsData();   // Resolve button only shows while missing subfolders remain
+    populateLocationFilter();
+    loadNotifications();
+  } catch {
+    toast('Could not reach the backend — is app.py running?', 'error');
+  }
+}
+
+// Re-fetches /api/locations and re-renders the Locations Manager list in
+// place (without closing/reopening the modal) — used after an action that
+// can change whether a row still needs its Resolve button, e.g. relocating
+// the last missing subfolder for a location.
+async function refreshLocationsData() {
+  try {
+    const r = await fetch(`${API_BASE}/api/locations`);
+    if (r.ok) {
+      locationsData = await r.json();
+      renderLocationsList();
+    }
+  } catch {
+    // Non-critical — the row will catch up next time the modal is reopened.
+  }
+}
+
+// ─────────────────────────────────────────────
+//  SYNC NEW FOLDERS  (cyan "Rescan" button next to loc-path-input)
+//
+//  Companion to Resolve, for the opposite case: folders that exist on disk
+//  under this location but were never indexed at all — either genuinely
+//  new content, or the new name a renamed folder landed under. Runs the
+//  same read-only diagnostic scan and, for anything found, offers to
+//  index just that one folder without a full Sync of every location.
+// ─────────────────────────────────────────────
+let syncNewFoldersLocIdx = null;
+
+async function openSyncNewFolders(idx) {
+  const loc = locationsData[idx];
+  if (!loc || !loc.path) return;
+
+  syncNewFoldersLocIdx = idx;
+  const list = document.getElementById('sync-new-folders-list');
+  list.innerHTML = '<div class="resolve-mismatch-empty">Scanning…</div>';
+  document.getElementById('sync-new-folders-modal').classList.add('open');
+
+  try {
+    const r = await fetch(`${API_BASE}/api/location/resolve`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ path: loc.path }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      closeModal('sync-new-folders-modal');
+      toast(data.error || 'Could not scan this location', 'error');
+      return;
+    }
+    renderSyncNewFolders(data.new || []);
+  } catch {
+    closeModal('sync-new-folders-modal');
+    toast('Could not reach the backend — is app.py running?', 'error');
+  }
+}
+
+function renderSyncNewFolders(fresh) {
+  const list = document.getElementById('sync-new-folders-list');
+  list.innerHTML = '';
+
+  if (fresh.length === 0) {
+    list.innerHTML = '<div class="resolve-mismatch-empty">✓ No new folders found — everything on disk is already indexed.</div>';
+    return;
+  }
+
+  fresh.forEach(n => {
+    const row = document.createElement('div');
+    row.className = 'resolve-mismatch-row is-new';
+
+    const info = document.createElement('div');
+    info.className = 'resolve-mismatch-info';
+    const pathEl = document.createElement('div');
+    pathEl.className = 'resolve-mismatch-path';
+    pathEl.textContent = n.rel;
+    const metaEl = document.createElement('div');
+    metaEl.className = 'resolve-mismatch-meta';
+    metaEl.textContent = `${n.count} file${n.count !== 1 ? 's' : ''} not yet in your library`;
+    info.appendChild(pathEl);
+    info.appendChild(metaEl);
+
+    const actions = document.createElement('div');
+    actions.className = 'resolve-mismatch-actions';
+
+    const ignoreBtn = document.createElement('button');
+    ignoreBtn.className = 'btn btn-ghost';
+    ignoreBtn.textContent = 'Ignore';
+    ignoreBtn.onclick = () => row.remove();
+
+    const syncBtn = document.createElement('button');
+    syncBtn.className = 'btn btn-sync';
+    syncBtn.textContent = 'Rescan';
+    syncBtn.onclick = () => syncOneNewFolder(syncBtn, row, n.path);
+
+    actions.appendChild(ignoreBtn);
+    actions.appendChild(syncBtn);
+    row.appendChild(info);
+    row.appendChild(actions);
+    list.appendChild(row);
+  });
+}
+
+async function syncOneNewFolder(btn, row, subfolderPath) {
+  const loc = locationsData[syncNewFoldersLocIdx];
+  if (!loc) return;
+  btn.disabled = true;
+  btn.textContent = 'Rescanning…';
+  try {
+    const r = await fetch(`${API_BASE}/api/location/rescan-subfolder`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ root: loc.path, path: subfolderPath }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(data.error || 'Failed to rescan folder', 'error'); btn.disabled = false; btn.textContent = 'Rescan'; return; }
+
+    toast(`Rescanned — ${data.added || 0} new file${(data.added || 0) !== 1 ? 's' : ''} indexed`, 'success');
+    row.remove();
+    await loadDB();
+    renderAll();
+    populateLocationFilter();
+  } catch {
+    toast('Could not reach the backend — is app.py running?', 'error');
+    btn.disabled = false;
+    btn.textContent = 'Rescan';
+  }
 }
 
 // ─────────────────────────────────────────────

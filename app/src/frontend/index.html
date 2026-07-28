@@ -76,8 +76,20 @@
     <button class="btn btn-ghost" onclick="openCreateAlbum()">＋ Album</button>
     <button class="btn btn-ghost" onclick="openLocationsManager()">⊞ Locations</button>
     <button class="btn btn-ghost" id="select-mode-btn" onclick="toggleSelectMode()">☑ Select</button>
+    <button class="btn btn-ghost btn-icon-only" id="notif-bell-btn" onclick="toggleNotificationsPanel(event)" title="Notifications">
+      🔔<span class="notif-badge" id="notif-badge" style="display:none">0</span>
+    </button>
     <button class="btn btn-ghost" id="theme-mode-toggle-btn" onclick="toggleThemeMode()" title="Toggle dark / light theme">☀️</button>
     <button class="btn btn-accent" onclick="triggerSync()">↻ Sync</button>
+  </div>
+
+  <!-- NOTIFICATIONS PANEL -->
+  <div id="notifications-panel" class="notifications-panel">
+    <div class="notif-panel-header">
+      <span>Notifications</span>
+      <button class="notif-mark-all" onclick="markAllNotificationsRead()">Mark all read</button>
+    </div>
+    <div id="notifications-list" class="notifications-list"></div>
   </div>
 
   <!-- SELECTION ACTION BAR — shown only while multi-select mode is active -->
@@ -402,16 +414,48 @@
 <!-- FOLDER BROWSER MODAL -->
 <div class="modal-overlay" id="folder-browser-modal">
   <div class="modal" id="folder-browser-inner" style="position:relative;width:520px;max-width:96vw">
-    <button class="modal-close" onclick="closeModal('folder-browser-modal')">✕</button>
+    <button class="modal-close" onclick="closeFolderBrowserModal()">✕</button>
     <h2>Choose a Folder</h2>
+    <div id="folder-browser-fallback-note" class="folder-browser-fallback-note" style="display:none"></div>
     <div id="folder-browser-path" class="folder-browser-path"></div>
     <div id="folder-browser-list" class="folder-browser-list"></div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('folder-browser-modal')">Cancel</button>
+      <button class="btn btn-ghost" onclick="closeFolderBrowserModal()">Cancel</button>
       <button class="btn btn-accent" onclick="confirmFolderBrowser()">Select This Folder</button>
     </div>
   </div>
 </div>
+
+<!-- RESOLVE MODAL — indexed subfolders no longer found on disk (renamed/moved) -->
+<div class="modal-overlay" id="resolve-mismatch-modal">
+  <div class="modal" style="position:relative;width:600px;max-width:96vw">
+    <button class="modal-close" onclick="closeModal('resolve-mismatch-modal')">✕</button>
+    <h2>Missing Subfolders</h2>
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
+      This location's own path is still valid, but some of its indexed subfolders can no longer be found — they may have been renamed or moved.
+    </p>
+    <div id="resolve-mismatch-list"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('resolve-mismatch-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- SYNC NEW FOLDERS MODAL — folders on disk not indexed at all yet -->
+<div class="modal-overlay" id="sync-new-folders-modal">
+  <div class="modal" style="position:relative;width:600px;max-width:96vw">
+    <button class="modal-close" onclick="closeModal('sync-new-folders-modal')">✕</button>
+    <h2>New Folders Found</h2>
+    <p style="font-size:11px;color:var(--text-muted);margin-bottom:14px;line-height:1.6">
+      These folders exist on disk under this location but aren't indexed yet. Rescan just the ones you want.
+    </p>
+    <div id="sync-new-folders-list"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('sync-new-folders-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
 
 <!-- SETTINGS PANEL -->
 <div id="settings-overlay" class="modal-overlay">

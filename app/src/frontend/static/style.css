@@ -553,6 +553,148 @@
   }
   .toggle.on::after { left: 16px; background: var(--accent); }
 
+  /* ── NOTIFICATION BELL + PANEL ── */
+  .btn-icon-only {
+    position: relative;
+    padding: 7px 10px;
+    font-size: calc(13px * var(--font-scale));
+    line-height: 1;
+  }
+  .notif-badge {
+    position: absolute;
+    top: -4px; right: -4px;
+    min-width: 16px; height: 16px;
+    padding: 0 3px;
+    background: var(--danger);
+    color: #fff;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    line-height: 1;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .notifications-panel {
+    position: fixed;
+    top: 60px;
+    right: 32px;
+    width: 360px;
+    max-width: 92vw;
+    max-height: 70vh;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-8px);
+    transition: opacity 0.15s, transform 0.15s;
+    overflow: hidden;
+  }
+  .notifications-panel.open {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+  .notif-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: calc(12px * var(--font-scale));
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+  .notif-mark-all {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: calc(10px * var(--font-scale));
+    cursor: pointer;
+    padding: 0;
+  }
+  .notif-mark-all:hover { text-decoration: underline; }
+
+  .notifications-list {
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .notif-empty {
+    padding: 28px 16px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: calc(11px * var(--font-scale));
+  }
+  .notif-item {
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-left: 3px solid transparent;
+  }
+  .notif-item.unread { border-left-color: var(--accent); }
+  .notif-item-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .notif-item-title {
+    font-size: calc(12px * var(--font-scale));
+    color: var(--text);
+    font-weight: 500;
+    line-height: 1.4;
+  }
+  .notif-item-dismiss {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1;
+    padding: 2px;
+    flex-shrink: 0;
+  }
+  .notif-item-dismiss:hover { color: var(--text); }
+  .notif-item-msg {
+    font-size: calc(11px * var(--font-scale));
+    color: var(--text-muted);
+    line-height: 1.5;
+    margin-top: 4px;
+  }
+  .notif-item-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+  }
+  .notif-item-time {
+    font-size: calc(9.5px * var(--font-scale));
+    color: var(--text-muted);
+  }
+  .notif-item-action-btn {
+    background: rgba(var(--accent-rgb),0.15);
+    border: 1px solid rgba(var(--accent-rgb),0.3);
+    color: var(--accent);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: calc(10.5px * var(--font-scale));
+    padding: 4px 10px;
+    font-family: var(--font-mono);
+  }
+  .notif-item-action-btn:hover { background: rgba(var(--accent-rgb),0.25); }
+
   /* ── FILTER BAR ── */
   #filterbar {
     padding: 12px 32px;
@@ -1100,6 +1242,49 @@
     align-items: stretch;
   }
   #lightbox.open { display: flex; }
+
+  /* Custom "file not found" popup shown over the lightbox — replaces the
+     browser's default broken-image icon, and auto-closes the lightbox. */
+  .lb-missing-popup {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 850;
+    width: 340px;
+    max-width: 86vw;
+    background: var(--surface);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    padding: 24px 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 8px;
+  }
+  .lb-missing-popup-icon {
+    font-size: 28px;
+    color: var(--danger);
+    line-height: 1;
+  }
+  .lb-missing-popup-title {
+    font-size: calc(14px * var(--font-scale));
+    color: var(--text);
+    font-weight: 600;
+  }
+  .lb-missing-popup-msg {
+    font-size: calc(11.5px * var(--font-scale));
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+  .lb-missing-popup-sub {
+    margin-top: 6px;
+    font-size: calc(10px * var(--font-scale));
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    opacity: 0.8;
+  }
 
   /* ── LEFT: media area — takes all remaining space ─────────────────────────── */
   #lb-left {
@@ -1898,10 +2083,9 @@
 
   /* ── LOCATIONS MANAGER ── */
   .loc-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
+    display: flex;
+    flex-direction: column;
     gap: 8px;
-    align-items: start;
     padding: 12px 14px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -1912,7 +2096,26 @@
   .loc-row:hover { border-color: var(--border-hover); }
   .loc-row.loc-hidden-row { opacity: 0.5; }
 
-  .loc-fields { display: flex; flex-direction: column; gap: 6px; }
+  /* Line 1: name input + Remove, side by side, same height.
+     Line 2: path input + the one active action button (Sync/Relocate/
+     Resolve), directly below Remove — same right-hand column both lines. */
+  .loc-row-line1,
+  .loc-row-line2 { display: flex; gap: 8px; }
+  .loc-row-line1 .loc-name-input { flex: 1; }
+  .loc-row-line2 .path-input-row { flex: 1; margin: 0; }
+
+  .loc-meta { display: flex; flex-direction: column; gap: 6px; }
+
+  /* One shared control height so the name/path inputs and the Remove /
+     action buttons always line up cleanly, no matter which action button
+     is showing. */
+  .loc-name-input,
+  .loc-path-input,
+  .loc-delete-btn,
+  .loc-action-btn {
+    height: 34px;
+    box-sizing: border-box;
+  }
 
   .loc-name-input,
   .loc-path-input {
@@ -1922,24 +2125,15 @@
     color: var(--text);
     font-family: var(--font-mono);
     font-size: calc(12px * var(--font-scale));
-    padding: 6px 10px;
+    padding: 0 10px;
     width: 100%;
     outline: none;
     transition: border-color 0.2s;
-    box-sizing: border-box;
   }
   .loc-name-input { font-weight: 400; }
   .loc-path-input { font-size: calc(11px * var(--font-scale)); color: var(--text-dim); }
   .loc-name-input:focus,
   .loc-path-input:focus { border-color: var(--accent); }
-
-  .loc-actions {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    padding-top: 2px;
-  }
 
   .loc-vis-toggle {
     display: flex;
@@ -1963,18 +2157,133 @@
   }
   .loc-synced-badge strong { color: var(--text-dim); }
 
+  /* Remove sits at the right end of line 1; the active action button
+     (below it) shares its width/alignment so the pair always reads as one
+     clean right-hand column regardless of which action button is active. */
+  .loc-delete-btn,
+  .loc-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    min-width: 96px;
+    cursor: pointer;
+    font-size: calc(11px * var(--font-scale));
+    padding: 0 12px;
+    white-space: nowrap;
+    transition: all 0.15s;
+    border-radius: var(--radius);
+  }
+
   .loc-delete-btn {
     background: none;
     border: 1px solid rgba(200,126,126,0.3);
     color: var(--danger);
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: calc(11px * var(--font-scale));
-    padding: 4px 10px;
-    transition: all 0.15s;
-    white-space: nowrap;
   }
   .loc-delete-btn:hover { background: rgba(200,126,126,0.15); border-color: var(--danger); }
+
+  /* Location that can't currently be found on disk (folder moved/renamed) */
+  .loc-row.loc-row-missing {
+    border-color: var(--danger);
+    background: rgba(200,126,126,0.07);
+  }
+  .loc-missing-note {
+    font-size: calc(10.5px * var(--font-scale));
+    color: var(--danger);
+    line-height: 1.5;
+  }
+  .loc-relocate-btn {
+    background: none;
+    border: 1px solid rgba(var(--accent-rgb),0.4);
+    color: var(--accent);
+  }
+  .loc-relocate-btn:hover { background: rgba(var(--accent-rgb),0.15); border-color: var(--accent); }
+
+  /* Red "Resolve" button — only shown when one or more of this location's
+     already-indexed subfolders can no longer be found on disk (renamed or
+     moved), while the location's own top-level path is still valid. */
+  .loc-resolve-btn {
+    background: none;
+    border: 1px solid rgba(200,126,126,0.4);
+    color: var(--danger);
+  }
+  .loc-resolve-btn:hover { background: rgba(200,126,126,0.15); border-color: var(--danger); }
+
+  /* Cool-color "Sync" button — the default, steady-state action shown when
+     the location and all its indexed subfolders check out fine. */
+  .loc-sync-btn {
+    background: none;
+    border: 1px solid rgba(90,170,220,0.5);
+    color: #5aaadc;
+  }
+  .loc-sync-btn:hover { background: rgba(90,170,220,0.15); border-color: #5aaadc; }
+
+  .btn-sync {
+    background: rgba(90,170,220,0.12);
+    border: 1px solid rgba(90,170,220,0.5);
+    color: #5aaadc;
+  }
+  .btn-sync:hover { background: rgba(90,170,220,0.22); border-color: #5aaadc; }
+  .btn-sync:disabled { opacity: 0.6; cursor: default; }
+
+  /* ── RESOLVE MISMATCH MODAL ── */
+  .resolve-mismatch-group-title {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 14px 0 8px;
+  }
+  .resolve-mismatch-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    background: var(--surface2);
+  }
+  .resolve-mismatch-row.is-missing { border-color: rgba(200,126,126,0.4); }
+  .resolve-mismatch-row.is-new     { border-color: rgba(var(--accent-rgb),0.4); }
+  .resolve-mismatch-info { flex: 1; min-width: 0; }
+  .resolve-mismatch-path {
+    font-family: var(--font-mono);
+    font-size: calc(11.5px * var(--font-scale));
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  .resolve-mismatch-meta {
+    font-size: calc(10.5px * var(--font-scale));
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .resolve-mismatch-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .resolve-mismatch-empty {
+    font-size: calc(11.5px * var(--font-scale));
+    color: var(--text-muted);
+    text-align: center;
+    padding: 18px 0;
+  }
+
+  /* After a folder is picked, the same button becomes "Validate" in green */
+  .loc-relocate-btn.loc-validate-btn {
+    color: var(--success);
+    border-color: rgba(var(--accent-rgb),0);
+    border: 1px solid var(--success);
+    background: rgba(62,192,120,0.1);
+  }
+  .loc-relocate-btn.loc-validate-btn:hover {
+    background: rgba(62,192,120,0.2);
+    border-color: var(--success);
+  }
+
+  /* Momentary highlight when a notification's action deep-links to a row */
+  .loc-row.loc-row-flash { animation: locRowFlash 1.8s ease; }
+  @keyframes locRowFlash {
+    0%, 100% { box-shadow: none; }
+    25%      { box-shadow: 0 0 0 3px rgba(var(--accent-rgb),0.4); }
+  }
 
   /* Absolute path input + Browse… button, side by side */
   .path-input-row {
@@ -1992,6 +2301,16 @@
   }
 
   /* ── FOLDER BROWSER MODAL ── */
+  .folder-browser-fallback-note {
+    font-size: calc(11px * var(--font-scale));
+    color: var(--danger);
+    background: rgba(200,126,126,0.08);
+    border: 1px solid var(--danger);
+    border-radius: var(--radius);
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    line-height: 1.5;
+  }
   .folder-browser-path {
     font-family: var(--font-mono);
     font-size: calc(11px * var(--font-scale));
