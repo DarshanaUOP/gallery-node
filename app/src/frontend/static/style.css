@@ -2083,10 +2083,9 @@
 
   /* ── LOCATIONS MANAGER ── */
   .loc-row {
-    display: grid;
-    grid-template-columns: 1fr auto;
+    display: flex;
+    flex-direction: column;
     gap: 8px;
-    align-items: start;
     padding: 12px 14px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -2097,7 +2096,26 @@
   .loc-row:hover { border-color: var(--border-hover); }
   .loc-row.loc-hidden-row { opacity: 0.5; }
 
-  .loc-fields { display: flex; flex-direction: column; gap: 6px; }
+  /* Line 1: name input + Remove, side by side, same height.
+     Line 2: path input + the one active action button (Sync/Relocate/
+     Resolve), directly below Remove — same right-hand column both lines. */
+  .loc-row-line1,
+  .loc-row-line2 { display: flex; gap: 8px; }
+  .loc-row-line1 .loc-name-input { flex: 1; }
+  .loc-row-line2 .path-input-row { flex: 1; margin: 0; }
+
+  .loc-meta { display: flex; flex-direction: column; gap: 6px; }
+
+  /* One shared control height so the name/path inputs and the Remove /
+     action buttons always line up cleanly, no matter which action button
+     is showing. */
+  .loc-name-input,
+  .loc-path-input,
+  .loc-delete-btn,
+  .loc-action-btn {
+    height: 34px;
+    box-sizing: border-box;
+  }
 
   .loc-name-input,
   .loc-path-input {
@@ -2107,24 +2125,15 @@
     color: var(--text);
     font-family: var(--font-mono);
     font-size: calc(12px * var(--font-scale));
-    padding: 6px 10px;
+    padding: 0 10px;
     width: 100%;
     outline: none;
     transition: border-color 0.2s;
-    box-sizing: border-box;
   }
   .loc-name-input { font-weight: 400; }
   .loc-path-input { font-size: calc(11px * var(--font-scale)); color: var(--text-dim); }
   .loc-name-input:focus,
   .loc-path-input:focus { border-color: var(--accent); }
-
-  .loc-actions {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    padding-top: 2px;
-  }
 
   .loc-vis-toggle {
     display: flex;
@@ -2148,16 +2157,28 @@
   }
   .loc-synced-badge strong { color: var(--text-dim); }
 
+  /* Remove sits at the right end of line 1; the active action button
+     (below it) shares its width/alignment so the pair always reads as one
+     clean right-hand column regardless of which action button is active. */
+  .loc-delete-btn,
+  .loc-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    min-width: 96px;
+    cursor: pointer;
+    font-size: calc(11px * var(--font-scale));
+    padding: 0 12px;
+    white-space: nowrap;
+    transition: all 0.15s;
+    border-radius: var(--radius);
+  }
+
   .loc-delete-btn {
     background: none;
     border: 1px solid rgba(200,126,126,0.3);
     color: var(--danger);
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: calc(11px * var(--font-scale));
-    padding: 4px 10px;
-    transition: all 0.15s;
-    white-space: nowrap;
   }
   .loc-delete-btn:hover { background: rgba(200,126,126,0.15); border-color: var(--danger); }
 
@@ -2175,44 +2196,25 @@
     background: none;
     border: 1px solid rgba(var(--accent-rgb),0.4);
     color: var(--accent);
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: calc(11px * var(--font-scale));
-    padding: 6px 12px;
-    white-space: nowrap;
-    transition: all 0.15s;
   }
   .loc-relocate-btn:hover { background: rgba(var(--accent-rgb),0.15); border-color: var(--accent); }
 
-  /* Always-available red "Resolve" button — checks for subfolder-level
-     drift (renamed/new subfolders) that doesn't make the location itself
-     show as missing, since its own top-level path is still valid. */
+  /* Red "Resolve" button — only shown when one or more of this location's
+     already-indexed subfolders can no longer be found on disk (renamed or
+     moved), while the location's own top-level path is still valid. */
   .loc-resolve-btn {
     background: none;
     border: 1px solid rgba(200,126,126,0.4);
     color: var(--danger);
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: calc(11px * var(--font-scale));
-    padding: 6px 12px;
-    white-space: nowrap;
-    transition: all 0.15s;
   }
   .loc-resolve-btn:hover { background: rgba(200,126,126,0.15); border-color: var(--danger); }
 
-  /* Cool-color "Sync" button — checks for folders on disk that aren't
-     indexed at all yet, and indexes just those (companion to Resolve,
-     which only handles the opposite case: indexed folders gone missing). */
+  /* Cool-color "Sync" button — the default, steady-state action shown when
+     the location and all its indexed subfolders check out fine. */
   .loc-sync-btn {
     background: none;
     border: 1px solid rgba(90,170,220,0.5);
     color: #5aaadc;
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: calc(11px * var(--font-scale));
-    padding: 6px 12px;
-    white-space: nowrap;
-    transition: all 0.15s;
   }
   .loc-sync-btn:hover { background: rgba(90,170,220,0.15); border-color: #5aaadc; }
 

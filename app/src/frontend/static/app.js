@@ -2891,22 +2891,39 @@ function renderLocationsList() {
     row.dataset.idx  = idx;
     row.dataset.path = loc.path || '';
 
+    // Exactly one action button at a time: Relocate takes priority (the
+    // root itself is gone — nothing else here can help until that's
+    // fixed), then Resolve (root's fine, but a subfolder under it isn't),
+    // and Sync as the default steady-state action once nothing's wrong.
+    const actionBtnHtml = missing
+      ? `<button type="button" class="btn btn-ghost loc-relocate-btn loc-action-btn"
+                 onclick="openFolderBrowser(${idx})" title="Point this location at its new folder">Relocate</button>`
+      : missingSubfolders
+      ? `<button type="button" class="loc-resolve-btn loc-action-btn"
+                 onclick="openResolveMismatch(${idx})"
+                 title="Check for indexed subfolders that are no longer on disk (renamed/moved) without the location itself going missing">Resolve</button>`
+      : `<button type="button" class="loc-sync-btn loc-action-btn"
+                 onclick="openSyncNewFolders(${idx})"
+                 title="Check for folders on disk that aren't indexed yet, and sync just those">Sync</button>`;
+
     row.innerHTML = `
-      <div class="loc-fields">
+      <div class="loc-row-line1">
         <input class="loc-name-input" type="text"
                value="${escHtml(loc.name || '')}"
                placeholder="Label"
                oninput="locationsData[${idx}].name = this.value">
+        <button class="loc-delete-btn" onclick="deleteLocation(${idx})">✕ Remove</button>
+      </div>
+      <div class="loc-row-line2">
         <div class="path-input-row">
           <input class="loc-path-input" type="text"
                  value="${escHtml(loc.path || '')}"
                  placeholder="Absolute path"
                  oninput="locationsData[${idx}].path = this.value">
-          ${missing
-            ? `<button type="button" class="btn btn-ghost loc-relocate-btn"
-                       onclick="openFolderBrowser(${idx})" title="Point this location at its new folder">Relocate</button>`
-            : ''}
         </div>
+        ${actionBtnHtml}
+      </div>
+      <div class="loc-meta">
         ${missing
           ? `<div class="loc-missing-note">⚠ Can't find this folder — it may have been moved or renamed.</div>`
           : ''}
@@ -2922,17 +2939,6 @@ function renderLocationsList() {
         ${(loc.synced_count || 0) > 0
           ? `<span class="loc-synced-badge">⬡ <strong>${loc.synced_count}</strong> synced file${loc.synced_count !== 1 ? 's' : ''}</span>`
           : ''}
-      </div>
-      <div class="loc-actions">
-        ${missingSubfolders
-          ? `<button type="button" class="loc-resolve-btn"
-                     onclick="openResolveMismatch(${idx})"
-                     title="Check for indexed subfolders that are no longer on disk (renamed/moved) without the location itself going missing">Resolve</button>`
-          : ''}
-        <button type="button" class="loc-sync-btn"
-                onclick="openSyncNewFolders(${idx})"
-                title="Check for folders on disk that aren't indexed yet, and sync just those">Sync</button>
-        <button class="loc-delete-btn" onclick="deleteLocation(${idx})">✕ Remove</button>
       </div>`;
 
     list.appendChild(row);
