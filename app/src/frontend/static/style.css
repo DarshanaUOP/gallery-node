@@ -768,9 +768,28 @@
     padding: 4px 24px 4px 10px;
     outline: none;
     cursor: pointer;
+    /* Without this, the native dropdown popup falls back to a default
+       (often light) palette regardless of the app's own dark/light mode —
+       which is what made option text hard to read. This tells the browser
+       to render the popup itself in a matching palette. */
+    color-scheme: dark;
     transition: border-color 0.15s, background-color 0.15s, color 0.15s, box-shadow 0.15s;
   }
+  html[data-mode="light"] select.filter-select { color-scheme: light; }
   select.filter-select:focus { border-color: var(--accent); }
+
+  /* The dropdown *list* rows always get a fixed, readable color/background
+     of their own — deliberately NOT inheriting the select's own text color
+     (which shifts to var(--accent) while "active", see below). That accent
+     tint is meant for the closed box only; without this override it would
+     leak into every row of the open list, which is what made the default
+     option unreadable (dim-on-dark-popup) while other rows looked
+     differently colored depending on selection/hover state. */
+  select.filter-select option {
+    background-color: var(--surface2);
+    color: var(--text);
+    font-weight: 400;
+  }
 
   /* Fallback for any standalone .filter-select not wrapped in
      .filter-select-wrap (e.g. the photo picker's location dropdown, which
