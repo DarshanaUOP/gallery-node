@@ -3326,7 +3326,9 @@ function renderResolveMismatch(missing) {
     pathEl._fullPath = m.path;
     const metaEl = document.createElement('div');
     metaEl.className = 'resolve-mismatch-meta';
-    metaEl.textContent = `${m.count} indexed file${m.count !== 1 ? 's' : ''} — folder missing or renamed`;
+    metaEl.textContent = m.leaf_count > 1
+      ? `${m.count} indexed file${m.count !== 1 ? 's' : ''} across ${m.leaf_count} subfolders — folder missing or renamed`
+      : `${m.count} indexed file${m.count !== 1 ? 's' : ''} — folder missing or renamed`;
     info.appendChild(pathEl);
     info.appendChild(metaEl);
 

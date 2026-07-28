@@ -900,34 +900,93 @@ def relocate_media_subfolder(old_dir: str, new_dir: str) -> dict:
     return {"updated": updated, "still_missing": still_missing, "old_path": old_root, "new_path": new_root}
 
 
+def _find_missing_subfolder_groups(source_root: str) -> list:
+    """
+    Finds indexed-but-gone subfolders under a location and groups them by
+    their topmost missing ancestor directory.
+
+    Why grouping matters: /a/b/c1/d1 and /a/b/c1/d2 are two separate
+    indexed leaf directories, but if the user renames "c1" to "c3", BOTH
+    go missing together, and both come back the same way — by relocating
+    "c1" itself, not d1 and d2 individually. relocate_media_subfolder()
+    already matches rows by file_path *prefix*, so pointing it at the
+    shared ancestor ("/a/b/c1" -> "/a/b/c3") relinks every leaf underneath
+    it in one pass — d2 lands correctly for free as long as
+    "/a/b/c3/d2" genuinely exists, since each row is still individually
+    verified with os.path.isfile() before being relinked. Grouping here is
+    what lets the Resolve popup surface that as ONE actionable item instead
+    of one per affected leaf subfolder.
+
+    Returns [{path, rel, count, leaf_count}] — one dict per missing
+    ancestor. count is total indexed files affected, leaf_count is how many
+    originally-separate indexed leaf directories that ancestor covers.
+    """
+    conn = get_db_conn()
+    rows = conn.execute(
+        "SELECT file_path, COUNT(*) as cnt FROM media "
+        "WHERE (source_root = ? OR source_root LIKE ?) AND file_path != '' "
+        "GROUP BY file_path",
+        (source_root, source_root + "/%"),
+    ).fetchall()
+
+    root = Path(source_root)
+    groups = {}   # ancestor path -> {"count": int, "leaves": int}
+    for r in rows:
+        leaf = (r["file_path"] or "").rstrip("/\\")
+        if not leaf or os.path.isdir(leaf):
+            continue   # still on disk — not missing
+
+        # Climb from the location's root down toward the leaf and stop at
+        # the first directory that doesn't exist — that's the highest
+        # point a single relocate can fix in one shot.
+        try:
+            rel_parts = Path(leaf).relative_to(root).parts
+        except ValueError:
+            ancestor = leaf
+        else:
+            cur = root
+            ancestor = leaf
+            for part in rel_parts:
+                cur = cur / part
+                if not cur.is_dir():
+                    ancestor = str(cur)
+                    break
+
+        g = groups.setdefault(ancestor, {"count": 0, "leaves": 0})
+        g["count"]  += r["cnt"]
+        g["leaves"] += 1
+
+    result = []
+    for ancestor, info in groups.items():
+        rel = ancestor[len(source_root):].lstrip("/\\") if ancestor.startswith(source_root) else ancestor
+        result.append({
+            "path":       ancestor,
+            "rel":        rel or ".",
+            "count":      info["count"],
+            "leaf_count": info["leaves"],
+        })
+    result.sort(key=lambda d: d["rel"])
+    return result
+
+
 def count_missing_subfolders(configured_path: str) -> int:
     """
     Cheap existence-only check for the "Resolve" button in the Locations
-    Manager: how many of this location's indexed subfolders no longer
-    exist on disk? Unlike diagnose_location_structure(), this never walks
-    the directory tree (no "new folders" check) — it's just a DB query plus
-    an os.path.isdir() per already-indexed directory — so it's cheap enough
-    to run for every location every time the Locations Manager is opened,
-    to decide whether Resolve is worth showing, and to show an exact count.
+    Manager: how many *actionable* missing-subfolder groups does this
+    location have right now? Grouped the same way
+    _find_missing_subfolder_groups does, so this count always matches how
+    many rows the Resolve popup will actually show — a rename higher up
+    the tree that took several indexed subfolders with it still counts as
+    one. Never walks the directory tree (no "new folders" check) — it's
+    just a DB query plus an os.path.isdir() per already-indexed directory —
+    so it's cheap enough to run for every location every time the
+    Locations Manager is opened.
     """
     root = (configured_path or "").rstrip("/\\")
     if not root or not os.path.isdir(root):
         return 0
     source_root = str(Path(root).resolve())
-
-    conn = get_db_conn()
-    rows = conn.execute(
-        "SELECT DISTINCT file_path FROM media "
-        "WHERE (source_root = ? OR source_root LIKE ?) AND file_path != ''",
-        (source_root, source_root + "/%"),
-    ).fetchall()
-
-    count = 0
-    for r in rows:
-        path = (r["file_path"] or "").rstrip("/\\")
-        if path and not os.path.isdir(path):
-            count += 1
-    return count
+    return len(_find_missing_subfolder_groups(source_root))
 
 
 def diagnose_location_structure(configured_path: str) -> dict:
@@ -943,8 +1002,8 @@ def diagnose_location_structure(configured_path: str) -> dict:
     Returns:
       {
         root:    <resolved source_root>,
-        missing: [{path, rel, count}],  # indexed subfolders no longer on disk
-        new:     [{path, rel, count}],  # subfolders on disk with media, not indexed at all
+        missing: [{path, rel, count, leaf_count}],  # missing-ancestor groups — see _find_missing_subfolder_groups
+        new:     [{path, rel, count}],               # subfolders on disk with media, not indexed at all
       }
     """
     root = (configured_path or "").rstrip("/\\")
@@ -962,21 +1021,18 @@ def diagnose_location_structure(configured_path: str) -> dict:
     max_depth    = int(cfg.get("max_scan_depth", 0))
     source_depth = source_root.rstrip("/").count("/")
 
+    missing = _find_missing_subfolder_groups(source_root)
+
+    # Need the raw leaf directory set (not the grouped one) to know which
+    # on-disk directories already correspond to something indexed, when
+    # walking below for the "new" side.
     conn = get_db_conn()
     rows = conn.execute(
-        "SELECT file_path, COUNT(*) as cnt FROM media "
-        "WHERE (source_root = ? OR source_root LIKE ?) AND file_path != '' "
-        "GROUP BY file_path",
+        "SELECT DISTINCT file_path FROM media "
+        "WHERE (source_root = ? OR source_root LIKE ?) AND file_path != ''",
         (source_root, source_root + "/%"),
     ).fetchall()
-    indexed_dirs = {(r["file_path"] or "").rstrip("/\\"): r["cnt"] for r in rows}
-
-    # Indexed directories that no longer exist on disk at all.
-    missing = []
-    for path, cnt in indexed_dirs.items():
-        if path and not os.path.isdir(path):
-            rel = path[len(source_root):].lstrip("/\\") if path.startswith(source_root) else path
-            missing.append({"path": path, "rel": rel or ".", "count": cnt})
+    indexed_dirs = {(r["file_path"] or "").rstrip("/\\") for r in rows}
 
     # Walk the real tree looking for directories that hold qualifying media
     # but aren't represented in the index under this location at all —
