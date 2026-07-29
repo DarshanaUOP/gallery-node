@@ -409,15 +409,26 @@ curl -X POST http://localhost:5000/api/sync
 
 The backend will:
 
-1. Read all visible sources from `data/media.json`
-2. Walk each directory recursively (all subdirectories, following symlinks if enabled)
-3. Skip already-indexed files using resolved path and MD5 hash deduplication
-4. Extract EXIF metadata for images and ffprobe metadata for videos
-5. Incrementally insert new records into `data/luminary.db` in batches of 200 (existing records are untouched)
+1. Purge any indexed records left behind under a location that's no longer configured at all in `data/media.json` — see [the note below](#orphaned-records-after-a-partial-relocate)
+2. Read all visible sources from `data/media.json`
+3. Walk each directory recursively (all subdirectories, following symlinks if enabled)
+4. Skip already-indexed files using resolved path and MD5 hash deduplication
+5. Extract EXIF metadata for images and ffprobe metadata for videos
+6. Incrementally insert new records into `data/luminary.db` in batches of 200 (existing records are untouched)
 
 New media appears in the gallery immediately — no page refresh needed.
 
-If a configured source directory can't be found (moved/renamed/unmounted), or files that were previously indexed under a directory that *is* still reachable have gone missing, Luminary no longer deletes those records. Instead it raises a notification (🔔 in the top bar) with a **Relocate** action — see [Notifications](#notifications) below. The sync summary counter that used to read "Removed" now reads **Missing** for the same reason.
+If a configured source directory can't be found (moved/renamed/unmounted), or files that were previously indexed under a directory that *is* still reachable have gone missing, Luminary no longer deletes those records. Instead it raises a notification (🔔 in the top bar) with a **Relocate** action — see [Notifications](#notifications) below. These are reported in the sync summary as **Missing**, not **Removed**.
+
+**Removed**, in the sync summary, means something different and narrower: records whose location isn't in `data/media.json` *at all* anymore, as opposed to a location that's merely unreachable right now. This normally only shows up after a partial **Relocate**.
+
+#### Orphaned records after a partial relocate
+
+**Relocate** (see [Locations Manager](#locations-manager)) only repoints an indexed record once it's confirmed the file exists at the new path — a record it can't confirm is left exactly as it was, still pointing at the *old* path, rather than guessed at. If the old and new folders aren't perfectly identical (a handful of files were moved elsewhere, renamed, or genuinely lost in the move), those unconfirmed records stay behind under the old, now-unlisted path after `data/media.json` has already been updated to the new one.
+
+Example: a location with 10,000 indexed files is relocated from `/photos/2023` to `/photos/2023-archive`; 9,800 files are found and repointed automatically, but 200 aren't found at the new path and are left as-is, still referencing `/photos/2023`. Since `/photos/2023` no longer appears in `data/media.json`, nothing would ever revisit those 200 records again on its own.
+
+The next **Sync** cleans this up automatically: before scanning for new media, it removes any indexed records whose location isn't in `data/media.json` at all (as above, this does **not** touch a location that's just temporarily unreachable — only one that's been removed or replaced). The sync summary's **Removed** count reflects however many were cleared this way, and their cached thumbnails are deleted too. If you still expect to find those 200 files, locate them on disk and re-add their folder as a source before syncing, so they get re-indexed rather than dropped for good.
 
 ---
 
@@ -531,7 +542,7 @@ All media endpoints support server-side filtering via query parameters.
 | Method | Path | Description |
 |---|---|---|
 | POST | `/api/sync` | Start a background sync of all visible sources. Returns `202 {status: "started"}` immediately, or `409` if a sync is already running |
-| GET | `/api/sync/status` | Poll current sync state — `{running, done, scanned, added, total_at_start, current_file, current_source, log (last 50 lines), result, error}`. `result.missing` is the count of files that couldn't be found on disk this run (they're kept and notified about, not deleted — see [Notifications](#notifications)) |
+| GET | `/api/sync/status` | Poll current sync state — `{running, done, scanned, added, removed, total_at_start, current_file, current_source, log (last 50 lines), result, error}`. `result.missing` is the count of files that couldn't be found on disk this run (they're kept and notified about, not deleted — see [Notifications](#notifications)). `result.removed` is the count of records actually deleted — indexed rows whose location is no longer in `data/media.json` at all, cleared automatically at the start of every sync (see [Syncing Media](#syncing-media)) |
 | GET | `/api/sync/stream` | Server-Sent Events stream of live sync progress — `connected`, `progress`, `log`, `complete`, `heartbeat` events; closes automatically when sync finishes |
 
 ### Albums
@@ -602,6 +613,10 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 ---
 
 ## Troubleshooting
+
+**Sync summary shows a non-zero "Removed" count**
+- This is expected and isn't the old delete-on-missing-file behavior (see [Photos disappeared](#photos-disappeared--lightbox-shows-a-broken-image-after-moving-a-folder) above, which still applies unchanged) — it's records being cleared for a location that isn't in `data/media.json` at all anymore, most commonly 200-ish leftovers after a **Relocate** that didn't confirm every file at the new path
+- See [Orphaned records after a partial relocate](#orphaned-records-after-a-partial-relocate) for the full explanation and what to do if you still expect those files to show up
 
 **No photos after Sync**
 - Verify paths in `data/media.json` are absolute and the directories exist
