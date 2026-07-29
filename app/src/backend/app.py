@@ -2796,6 +2796,7 @@ if FLASK_AVAILABLE:
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                 "-c:a", "aac", "-b:a", "160k",
                 "-movflags", "+faststart",
+                "-f", "mp4",
                 str(tmp_path),
             ]
             log.info("Transcoding HEVC video for browser playback: %s", full_path)
