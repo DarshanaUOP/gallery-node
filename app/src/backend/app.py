@@ -2856,14 +2856,20 @@ if FLASK_AVAILABLE:
 
         # ── GET: serve a cached H.264/AAC MP4 for codecs a lot of browsers
         # (Firefox especially) can't decode natively — HEVC/H.265 is the
-        # main offender. Transcodes once on first request and reuses the
+        # main offender. Only actually transcodes when the requesting
+        # browser told us (via ?client_hevc=1, set from a real
+        # canPlayType() capability check in app.js, not a UA guess) that it
+        # can't already play HEVC itself — so browsers/OSes with native
+        # HEVC support skip the transcode (and its cache) entirely.
+        # Transcodes once on first request that needs it and reuses the
         # cached file after that (see _get_transcoded_video_path above), so
         # this still gets full Range/seek support like any other file.
         # Falls back to the original file if transcoding isn't possible
         # (e.g. ffmpeg missing or the run itself failed).
+        client_has_hevc = request.args.get("client_hevc") == "1"
         serve_path = full_path
         mime       = orig_mime
-        if _needs_transcode(item, full_path):
+        if not client_has_hevc and _needs_transcode(item, full_path):
             try:
                 serve_path = str(_get_transcoded_video_path(unique_name, full_path))
                 mime       = "video/mp4"

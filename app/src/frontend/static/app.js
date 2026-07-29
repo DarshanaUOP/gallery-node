@@ -1357,6 +1357,26 @@ function _fitVjsPlayer() {
 
 window.addEventListener('resize', () => { if (_vjsPlayer) _fitVjsPlayer(); });
 
+// Does this browser's own decoder support HEVC/H.265 natively? Checked once
+// and cached — canPlayType() is a real capability probe (not a UA/browser
+// sniff), so it correctly says "no" on Firefox (no HEVC decoder at all) and
+// "yes"/"maybe" wherever the OS actually provides hardware decoding,
+// without us having to guess by browser name or platform.
+let _hevcSupportCache = null;
+function _browserSupportsHevc() {
+  if (_hevcSupportCache !== null) return _hevcSupportCache;
+  try {
+    const v = document.createElement('video');
+    _hevcSupportCache = (
+      v.canPlayType('video/mp4; codecs="hvc1.1.6.L93.90"') !== '' ||
+      v.canPlayType('video/mp4; codecs="hev1.1.6.L93.90"') !== ''
+    );
+  } catch (e) {
+    _hevcSupportCache = false;
+  }
+  return _hevcSupportCache;
+}
+
 function openLightbox(idx) {
   lbIndex = idx;
   renderLightbox();
@@ -1376,7 +1396,11 @@ function renderLightbox() {
   _disposeVjsPlayer(); // tear down any previous player before we replace lb's contents
 
   if (item.type === 'video') {
-    const videoSrc  = `${API_BASE}/api/video/${encodeURIComponent(item.uniqueName)}`;
+    // Let the backend know if this browser can already decode HEVC/H.265
+    // natively — if so, it skips transcoding entirely for that file (saves
+    // the CPU/disk cost for browsers/OSes that don't need the workaround).
+    const hevcParam = _browserSupportsHevc() ? '?client_hevc=1' : '';
+    const videoSrc  = `${API_BASE}/api/video/${encodeURIComponent(item.uniqueName)}${hevcParam}`;
     const videoMime = _videoMime(item.name);
     const ext       = item.name.split('.').pop().toLowerCase();
     const unsupported = ['avi','mkv','wmv','flv','ts','mts'];
