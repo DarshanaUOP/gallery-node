@@ -2711,6 +2711,81 @@ if FLASK_AVAILABLE:
         except Exception:
             return Response(b"", status=204)
 
+    # ── HEVC/H.265 transcode-on-demand for browser playback ────────────────
+    # Firefox ships no HEVC decoder at all (Chrome sometimes gets away with
+    # it via an OS/hardware decoder, which is why this only shows up as a
+    # cross-browser bug report). There's no client-side fix for that — the
+    # only real option is converting the video server-side. We do it lazily
+    # on first playback request and cache the result, so it only costs time
+    # once per file, not on every open.
+    _VIDEO_TRANSCODE_DIR    = app_paths.CACHE_DIR / "video_transcode"
+    _CODECS_NEEDING_TRANSCODE = {"HEVC", "H265"}
+    _transcode_locks_guard  = threading.Lock()
+    _transcode_locks        = {}
+
+    def _needs_transcode(item) -> bool:
+        codec = (item.get("metadata", {}).get("video", {}).get("codec") or "").upper()
+        return codec in _CODECS_NEEDING_TRANSCODE
+
+    def _transcode_lock_for(key: str) -> threading.Lock:
+        with _transcode_locks_guard:
+            lock = _transcode_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                _transcode_locks[key] = lock
+            return lock
+
+    def _get_transcoded_video_path(unique_name: str, full_path: str) -> Path:
+        """
+        Return a cached, browser-playable H.264/AAC MP4 for an HEVC source,
+        transcoding on first request and reusing the cached copy after that.
+        Cached under app_paths.CACHE_DIR, so it's already covered by the
+        existing Settings → cache size/clear UI (see /api/cache/*) — no new
+        cleanup path needed. Re-transcodes automatically if the source file
+        is replaced (cache is keyed off the source's mtime).
+
+        Raises on failure (missing ffmpeg, bad file, timeout) — caller falls
+        back to serving the original file rather than erroring the request.
+        """
+        _VIDEO_TRANSCODE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_name  = hashlib.sha1(unique_name.encode("utf-8")).hexdigest() + ".mp4"
+        cache_path  = _VIDEO_TRANSCODE_DIR / cache_name
+        src_mtime   = os.path.getmtime(full_path)
+
+        if cache_path.is_file() and cache_path.stat().st_mtime >= src_mtime:
+            return cache_path
+
+        # Only one transcode of a given file at a time — a scrubbing browser
+        # issues several near-simultaneous range requests on first open, and
+        # without this they'd each kick off their own ffmpeg process.
+        lock = _transcode_lock_for(str(cache_path))
+        with lock:
+            if cache_path.is_file() and cache_path.stat().st_mtime >= src_mtime:
+                return cache_path  # another request already finished it
+
+            tmp_path = cache_path.with_suffix(".mp4.tmp")
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(full_path),
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-c:a", "aac", "-b:a", "160k",
+                "-movflags", "+faststart",
+                str(tmp_path),
+            ]
+            log.info("Transcoding HEVC video for browser playback: %s", full_path)
+            r = subprocess.run(cmd, capture_output=True, timeout=1800, **_SUBPROCESS_NO_WINDOW_KWARGS)
+            if r.returncode != 0 or not tmp_path.is_file():
+                if tmp_path.is_file():
+                    tmp_path.unlink(missing_ok=True)
+                log.warning(
+                    "Video transcode failed for %s: %s",
+                    full_path, r.stderr.decode(errors="ignore")[-500:]
+                )
+                raise RuntimeError(f"ffmpeg transcode failed for {full_path}")
+
+            os.replace(tmp_path, cache_path)
+            return cache_path
+
     # ── /api/video/<unique_name>  — byte-range streaming for <video> ──────────
     @app.route("/api/video/<unique_name>", methods=["GET", "HEAD"])
     def api_video(unique_name):
@@ -2721,14 +2796,16 @@ if FLASK_AVAILABLE:
         import mimetypes
         from flask import Response, abort, send_file
 
-        full_path, _ = _resolve_path(unique_name)
+        full_path, item = _resolve_path(unique_name)
 
         if not is_video(full_path):
             abort(415)
 
-        # MIME type
+        # MIME type of the original file — HEAD always reports this, since
+        # it's only ever used by the frontend's own pre-flight existence
+        # check, not by the browser's media engine.
         ext  = Path(full_path).suffix.lower()
-        mime = {
+        orig_mime = {
             ".mp4":  "video/mp4",
             ".m4v":  "video/mp4",
             ".mov":  "video/quicktime",
@@ -2742,20 +2819,35 @@ if FLASK_AVAILABLE:
             ".mts":  "video/mp2t",
         }.get(ext, mimetypes.guess_type(full_path)[0] or "application/octet-stream")
 
-        file_size    = os.path.getsize(full_path)
-        range_header = request.headers.get("Range", None)
-
         # ── HEAD request ──────────────────────────────────────────────────────
         if request.method == "HEAD":
             return Response(status=200, headers={
                 "Accept-Ranges":  "bytes",
-                "Content-Length": str(file_size),
-                "Content-Type":   mime,
+                "Content-Length": str(os.path.getsize(full_path)),
+                "Content-Type":   orig_mime,
             })
+
+        # ── GET: serve a transcoded H.264/AAC MP4 for codecs a lot of
+        # browsers (Firefox especially) can't decode natively — HEVC/H.265
+        # is the main offender. Falls back to the original file if
+        # transcoding isn't possible (e.g. ffmpeg missing or it failed),
+        # same as before this existed.
+        serve_path = full_path
+        mime       = orig_mime
+        if _needs_transcode(item):
+            try:
+                serve_path = str(_get_transcoded_video_path(unique_name, full_path))
+                mime       = "video/mp4"
+            except Exception:
+                serve_path = full_path
+                mime       = orig_mime
+
+        file_size    = os.path.getsize(serve_path)
+        range_header = request.headers.get("Range", None)
 
         # ── No Range header: full file, 200 ──────────────────────────────────
         if not range_header:
-            resp = send_file(full_path, mimetype=mime, conditional=False)
+            resp = send_file(serve_path, mimetype=mime, conditional=False)
             resp.headers["Accept-Ranges"]  = "bytes"
             resp.headers["Content-Length"] = str(file_size)
             resp.headers["Cache-Control"]  = "no-store"
@@ -2769,7 +2861,7 @@ if FLASK_AVAILABLE:
             end   = int(parts[1]) if parts[1].strip() else file_size - 1
         except Exception:
             # Malformed range — send whole file
-            resp = send_file(full_path, mimetype=mime, conditional=False)
+            resp = send_file(serve_path, mimetype=mime, conditional=False)
             resp.headers["Accept-Ranges"] = "bytes"
             return resp
 
@@ -2779,7 +2871,7 @@ if FLASK_AVAILABLE:
 
         # Read the exact requested byte range into memory
         # (safe for typical browser chunks of 256 KB – 2 MB)
-        with open(full_path, "rb") as f:
+        with open(serve_path, "rb") as f:
             f.seek(start)
             data = f.read(length)
 
