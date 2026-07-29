@@ -2711,18 +2711,19 @@ if FLASK_AVAILABLE:
         except Exception:
             return Response(b"", status=204)
 
-    # ── HEVC/H.265 on-the-fly transcode for browser playback ───────────────
+    # ── HEVC/H.265 transcode-on-demand for browser playback ────────────────
     # Firefox ships no HEVC decoder at all (Chrome sometimes gets away with
     # it via an OS/hardware decoder, which is why this only shows up as a
     # cross-browser bug report). There's no client-side fix for that — the
-    # only real option is converting the video server-side. This does the
-    # conversion live and pipes ffmpeg's output straight into the HTTP
-    # response as it's generated — nothing is ever written to disk, so
-    # there's no converted copy left behind in storage. The trade-off:
-    # since the output's total size isn't known up front, these responses
-    # don't support byte-range seeking — scrubbing isn't available on a
-    # video that needed this fallback, only play-through from the start.
+    # only real option is converting the video server-side. We transcode
+    # once on first playback request and cache the H.264/AAC MP4 result on
+    # disk (under app_paths.CACHE_DIR — already covered by Settings' cache
+    # size/clear UI), so every request after that just serves the cached
+    # file directly: full Range/seek support, no repeated ffmpeg runs.
+    _VIDEO_TRANSCODE_DIR     = app_paths.CACHE_DIR / "video_transcode"
     _CODECS_NEEDING_TRANSCODE = {"HEVC", "H265"}
+    _transcode_locks_guard   = threading.Lock()
+    _transcode_locks         = {}
 
     def _probe_codec_quick(full_path: str) -> str:
         """
@@ -2753,57 +2754,63 @@ if FLASK_AVAILABLE:
             codec = _probe_codec_quick(full_path)
         return codec in _CODECS_NEEDING_TRANSCODE
 
-    def _stream_transcoded_video(full_path: str):
+    def _transcode_lock_for(key: str) -> threading.Lock:
+        with _transcode_locks_guard:
+            lock = _transcode_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                _transcode_locks[key] = lock
+            return lock
+
+    def _get_transcoded_video_path(unique_name: str, full_path: str) -> Path:
         """
-        Transcode full_path to H.264/AAC MP4 on the fly and stream it
-        straight to the client via a fragmented-MP4 pipe — no temp file, no
-        cache directory, nothing persisted. The ffmpeg process is killed if
-        the client disconnects or navigates away mid-stream (e.g. closing
-        the lightbox), so nothing keeps running in the background.
+        Return a cached, browser-playable H.264/AAC MP4 for an HEVC source,
+        transcoding on first request and reusing the cached copy after
+        that. Cache is keyed off the source file's mtime, so replacing the
+        source triggers a fresh transcode automatically.
 
-        Raises FileNotFoundError if ffmpeg isn't installed — caller falls
-        back to serving the original file, same as if this didn't exist.
+        Raises on failure (missing ffmpeg, bad file, timeout) — caller
+        falls back to serving the original file rather than erroring the
+        request.
         """
-        from flask import Response, stream_with_context
+        _VIDEO_TRANSCODE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_name = hashlib.sha1(unique_name.encode("utf-8")).hexdigest() + ".mp4"
+        cache_path = _VIDEO_TRANSCODE_DIR / cache_name
+        src_mtime  = os.path.getmtime(full_path)
 
-        cmd = [
-            "ffmpeg", "-loglevel", "error",
-            "-i", str(full_path),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-c:a", "aac", "-b:a", "160k",
-            "-f", "mp4",
-            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-            "pipe:1",
-        ]
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            **_SUBPROCESS_NO_WINDOW_KWARGS
-        )
+        if cache_path.is_file() and cache_path.stat().st_mtime >= src_mtime:
+            return cache_path
 
-        def generate():
-            try:
-                while True:
-                    chunk = proc.stdout.read(65536)
-                    if not chunk:
-                        break
-                    yield chunk
-            finally:
-                # Stream ended normally, or the client went away mid-play
-                # (Werkzeug closes the generator on disconnect, which raises
-                # GeneratorExit here) — either way, don't leave ffmpeg running.
-                if proc.poll() is None:
-                    proc.kill()
-                try:
-                    proc.stdout.close()
-                except Exception:
-                    pass
+        # Only one transcode of a given file at a time — a scrubbing
+        # browser issues several near-simultaneous range requests on first
+        # open, and without this they'd each kick off their own ffmpeg run.
+        lock = _transcode_lock_for(str(cache_path))
+        with lock:
+            if cache_path.is_file() and cache_path.stat().st_mtime >= src_mtime:
+                return cache_path  # another request already finished it
 
-        resp = Response(stream_with_context(generate()), mimetype="video/mp4")
-        resp.headers["Cache-Control"] = "no-store"
-        # Deliberately no Accept-Ranges/Content-Length: this is a live,
-        # length-unknown stream, so standard HTTP seeking isn't available
-        # for it (see docstring above).
-        return resp
+            tmp_path = cache_path.with_suffix(".mp4.tmp")
+            cmd = [
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-i", str(full_path),
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-c:a", "aac", "-b:a", "160k",
+                "-movflags", "+faststart",
+                str(tmp_path),
+            ]
+            log.info("Transcoding HEVC video for browser playback: %s", full_path)
+            r = subprocess.run(cmd, capture_output=True, timeout=1800, **_SUBPROCESS_NO_WINDOW_KWARGS)
+            if r.returncode != 0 or not tmp_path.is_file():
+                if tmp_path.is_file():
+                    tmp_path.unlink(missing_ok=True)
+                log.warning(
+                    "Video transcode failed for %s: %s",
+                    full_path, r.stderr.decode(errors="ignore")[-500:]
+                )
+                raise RuntimeError(f"ffmpeg transcode failed for {full_path}")
+
+            os.replace(tmp_path, cache_path)
+            return cache_path
 
     # ── /api/video/<unique_name>  — byte-range streaming for <video> ──────────
     @app.route("/api/video/<unique_name>", methods=["GET", "HEAD"])
@@ -2846,20 +2853,23 @@ if FLASK_AVAILABLE:
                 "Content-Type":   orig_mime,
             })
 
-        # ── GET: for codecs a lot of browsers (Firefox especially) can't
-        # decode natively — HEVC/H.265 is the main offender — transcode on
-        # the fly and stream the result directly, with nothing written to
-        # disk. Falls back to serving the original file if ffmpeg isn't
-        # available, same fallback behavior as before this existed.
-        if _needs_transcode(item, full_path):
-            try:
-                return _stream_transcoded_video(full_path)
-            except FileNotFoundError:
-                log.warning("ffmpeg not found — cannot transcode %s, serving original", full_path)
-                # fall through and serve the original file below
-
+        # ── GET: serve a cached H.264/AAC MP4 for codecs a lot of browsers
+        # (Firefox especially) can't decode natively — HEVC/H.265 is the
+        # main offender. Transcodes once on first request and reuses the
+        # cached file after that (see _get_transcoded_video_path above), so
+        # this still gets full Range/seek support like any other file.
+        # Falls back to the original file if transcoding isn't possible
+        # (e.g. ffmpeg missing or the run itself failed).
         serve_path = full_path
         mime       = orig_mime
+        if _needs_transcode(item, full_path):
+            try:
+                serve_path = str(_get_transcoded_video_path(unique_name, full_path))
+                mime       = "video/mp4"
+            except Exception:
+                serve_path = full_path
+                mime       = orig_mime
+
         file_size    = os.path.getsize(serve_path)
         range_header = request.headers.get("Range", None)
 
