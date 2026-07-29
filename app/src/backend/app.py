@@ -16,6 +16,8 @@ import sqlite3
 import platform
 import threading
 import subprocess
+import signal
+import atexit
 from pathlib import Path
 from datetime import datetime
 from collections import deque
@@ -2810,6 +2812,108 @@ if FLASK_AVAILABLE:
         except Exception:
             return Response(b"", status=204)
 
+    # ── HEVC/H.265 transcode-on-demand for browser playback ────────────────
+    # Firefox ships no HEVC decoder at all (Chrome sometimes gets away with
+    # it via an OS/hardware decoder, which is why this only shows up as a
+    # cross-browser bug report). There's no client-side fix for that — the
+    # only real option is converting the video server-side. We transcode
+    # once on first playback request and cache the H.264/AAC MP4 result on
+    # disk (under app_paths.CACHE_DIR — already covered by Settings' cache
+    # size/clear UI), so every request after that just serves the cached
+    # file directly: full Range/seek support, no repeated ffmpeg runs.
+    _VIDEO_TRANSCODE_DIR     = app_paths.CACHE_DIR / "video_transcode"
+    _CODECS_NEEDING_TRANSCODE = {"HEVC", "H265"}
+    _transcode_locks_guard   = threading.Lock()
+    _transcode_locks         = {}
+
+    def _probe_codec_quick(full_path: str) -> str:
+        """
+        Fast standalone codec probe, used only as a fallback for items
+        indexed before per-item codec metadata existed (or synced with
+        ffprobe unavailable at the time) — so older libraries still get the
+        fix without needing a full re-sync. Returns "" on any failure,
+        which is treated as "don't transcode" (i.e. previous behavior).
+        """
+        try:
+            cmd = [
+                "ffprobe", "-v", "quiet",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name",
+                "-of", "csv=p=0",
+                str(full_path),
+            ]
+            r = subprocess.run(cmd, capture_output=True, timeout=8, **_SUBPROCESS_NO_WINDOW_KWARGS)
+            if r.returncode == 0:
+                return r.stdout.decode(errors="ignore").strip().upper()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        return ""
+
+    def _needs_transcode(item, full_path: str) -> bool:
+        codec = (item.get("metadata", {}).get("video", {}).get("codec") or "").upper()
+        if not codec:
+            codec = _probe_codec_quick(full_path)
+        return codec in _CODECS_NEEDING_TRANSCODE
+
+    def _transcode_lock_for(key: str) -> threading.Lock:
+        with _transcode_locks_guard:
+            lock = _transcode_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                _transcode_locks[key] = lock
+            return lock
+
+    def _get_transcoded_video_path(unique_name: str, full_path: str) -> Path:
+        """
+        Return a cached, browser-playable H.264/AAC MP4 for an HEVC source,
+        transcoding on first request and reusing the cached copy after
+        that. Cache is keyed off the source file's mtime, so replacing the
+        source triggers a fresh transcode automatically.
+
+        Raises on failure (missing ffmpeg, bad file, timeout) — caller
+        falls back to serving the original file rather than erroring the
+        request.
+        """
+        _VIDEO_TRANSCODE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_name = hashlib.sha1(unique_name.encode("utf-8")).hexdigest() + ".mp4"
+        cache_path = _VIDEO_TRANSCODE_DIR / cache_name
+        src_mtime  = os.path.getmtime(full_path)
+
+        if cache_path.is_file() and cache_path.stat().st_mtime >= src_mtime:
+            return cache_path
+
+        # Only one transcode of a given file at a time — a scrubbing
+        # browser issues several near-simultaneous range requests on first
+        # open, and without this they'd each kick off their own ffmpeg run.
+        lock = _transcode_lock_for(str(cache_path))
+        with lock:
+            if cache_path.is_file() and cache_path.stat().st_mtime >= src_mtime:
+                return cache_path  # another request already finished it
+
+            tmp_path = cache_path.with_suffix(".mp4.tmp")
+            cmd = [
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-i", str(full_path),
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                "-c:a", "aac", "-b:a", "160k",
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                str(tmp_path),
+            ]
+            log.info("Transcoding HEVC video for browser playback: %s", full_path)
+            r = subprocess.run(cmd, capture_output=True, timeout=1800, **_SUBPROCESS_NO_WINDOW_KWARGS)
+            if r.returncode != 0 or not tmp_path.is_file():
+                if tmp_path.is_file():
+                    tmp_path.unlink(missing_ok=True)
+                log.warning(
+                    "Video transcode failed for %s: %s",
+                    full_path, r.stderr.decode(errors="ignore")[-500:]
+                )
+                raise RuntimeError(f"ffmpeg transcode failed for {full_path}")
+
+            os.replace(tmp_path, cache_path)
+            return cache_path
+
     # ── /api/video/<unique_name>  — byte-range streaming for <video> ──────────
     @app.route("/api/video/<unique_name>", methods=["GET", "HEAD"])
     def api_video(unique_name):
@@ -2820,14 +2924,16 @@ if FLASK_AVAILABLE:
         import mimetypes
         from flask import Response, abort, send_file
 
-        full_path, _ = _resolve_path(unique_name)
+        full_path, item = _resolve_path(unique_name)
 
         if not is_video(full_path):
             abort(415)
 
-        # MIME type
+        # MIME type of the original file — HEAD always reports this, since
+        # it's only ever used by the frontend's own pre-flight existence
+        # check, not by the browser's media engine.
         ext  = Path(full_path).suffix.lower()
-        mime = {
+        orig_mime = {
             ".mp4":  "video/mp4",
             ".m4v":  "video/mp4",
             ".mov":  "video/quicktime",
@@ -2841,20 +2947,43 @@ if FLASK_AVAILABLE:
             ".mts":  "video/mp2t",
         }.get(ext, mimetypes.guess_type(full_path)[0] or "application/octet-stream")
 
-        file_size    = os.path.getsize(full_path)
-        range_header = request.headers.get("Range", None)
-
         # ── HEAD request ──────────────────────────────────────────────────────
         if request.method == "HEAD":
             return Response(status=200, headers={
                 "Accept-Ranges":  "bytes",
-                "Content-Length": str(file_size),
-                "Content-Type":   mime,
+                "Content-Length": str(os.path.getsize(full_path)),
+                "Content-Type":   orig_mime,
             })
+
+        # ── GET: serve a cached H.264/AAC MP4 for codecs a lot of browsers
+        # (Firefox especially) can't decode natively — HEVC/H.265 is the
+        # main offender. Only actually transcodes when the requesting
+        # browser told us (via ?client_hevc=1, set from a real
+        # canPlayType() capability check in app.js, not a UA guess) that it
+        # can't already play HEVC itself — so browsers/OSes with native
+        # HEVC support skip the transcode (and its cache) entirely.
+        # Transcodes once on first request that needs it and reuses the
+        # cached file after that (see _get_transcoded_video_path above), so
+        # this still gets full Range/seek support like any other file.
+        # Falls back to the original file if transcoding isn't possible
+        # (e.g. ffmpeg missing or the run itself failed).
+        client_has_hevc = request.args.get("client_hevc") == "1"
+        serve_path = full_path
+        mime       = orig_mime
+        if not client_has_hevc and _needs_transcode(item, full_path):
+            try:
+                serve_path = str(_get_transcoded_video_path(unique_name, full_path))
+                mime       = "video/mp4"
+            except Exception:
+                serve_path = full_path
+                mime       = orig_mime
+
+        file_size    = os.path.getsize(serve_path)
+        range_header = request.headers.get("Range", None)
 
         # ── No Range header: full file, 200 ──────────────────────────────────
         if not range_header:
-            resp = send_file(full_path, mimetype=mime, conditional=False)
+            resp = send_file(serve_path, mimetype=mime, conditional=False)
             resp.headers["Accept-Ranges"]  = "bytes"
             resp.headers["Content-Length"] = str(file_size)
             resp.headers["Cache-Control"]  = "no-store"
@@ -2868,7 +2997,7 @@ if FLASK_AVAILABLE:
             end   = int(parts[1]) if parts[1].strip() else file_size - 1
         except Exception:
             # Malformed range — send whole file
-            resp = send_file(full_path, mimetype=mime, conditional=False)
+            resp = send_file(serve_path, mimetype=mime, conditional=False)
             resp.headers["Accept-Ranges"] = "bytes"
             return resp
 
@@ -2878,7 +3007,7 @@ if FLASK_AVAILABLE:
 
         # Read the exact requested byte range into memory
         # (safe for typical browser chunks of 256 KB – 2 MB)
-        with open(full_path, "rb") as f:
+        with open(serve_path, "rb") as f:
             f.seek(start)
             data = f.read(length)
 
@@ -3568,6 +3697,31 @@ if FLASK_AVAILABLE:
                     use_reloader=False)
 
 
+def _cleanup_video_transcode_cache():
+    """
+    Delete the video-transcode cache directory (and everything in it) on
+    shutdown, so converted HEVC→H.264 copies never persist between runs —
+    only the thumbnail cache and other scratch cache survive a restart.
+    Registered with atexit below, which covers normal interpreter exit
+    (Ctrl+C in dev mode, tray Quit, sys.exit()) as well as SIGTERM once
+    that's translated into a normal exit by the signal handler in the
+    entry point below (relevant for `systemctl stop luminary` on a
+    headless install). Best-effort: doesn't raise if a file is still in
+    use or the directory doesn't exist.
+    """
+    transcode_dir = app_paths.CACHE_DIR / "video_transcode"
+    if not transcode_dir.is_dir():
+        return
+    try:
+        shutil.rmtree(transcode_dir, ignore_errors=True)
+        log.info("Cleared video-transcode cache on shutdown: %s", transcode_dir)
+    except Exception as e:
+        log.warning("Could not fully clear video-transcode cache %s: %s", transcode_dir, e)
+
+
+atexit.register(_cleanup_video_transcode_cache)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3594,6 +3748,16 @@ if __name__ == "__main__":
     if not FLASK_AVAILABLE:
         print("ERROR: Flask not installed. Run: pip install flask flask-cors")
         sys.exit(1)
+
+    # Translate SIGTERM (e.g. `systemctl stop luminary` on a headless
+    # install, or Task Manager's "End task" on Windows) into a normal
+    # Python exit, the same as Ctrl+C already does — otherwise the process
+    # is torn down without ever reaching the try/finally below or the
+    # atexit-registered cache cleanup above.
+    def _handle_sigterm(signum, frame):
+        log.info("Received SIGTERM — shutting down.")
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
     # ── single-instance guard ────────────────────────────────────────────
     # Applies in every environment (dev console, installed tray app, headless

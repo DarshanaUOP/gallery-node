@@ -457,6 +457,7 @@ The next **Sync** cleans this up automatically: before scanning for new media, i
 - **Video player** — [Video.js](https://videojs.com/), bundled locally in `static/vendor/videojs/` (no CDN, works fully offline), wrapping HTTP range-request streaming so the browser loads only what it needs; seeking works without downloading the full file
 - **Missing video detection** — before handing a video's URL to the player, the lightbox does a single `HEAD` request to confirm the file still exists. If it doesn't, a "File not found" message is shown immediately and the player is never mounted — this avoids the browser's own media engine repeatedly probing `/api/video/<id>` on its own (its normal retry/range-probing behaviour against a file that's already known to be missing)
 - **HEIC/HEIF** — decoded on the fly via pillow-heif → pyheif → ImageMagick → ffmpeg fallback chain
+- **HEVC/H.265 auto-transcode, only when actually needed** — the lightbox checks the browser's own decoder via `canPlayType()` (a real capability probe, not a browser/UA guess) and only tells the backend to transcode if that browser genuinely can't decode HEVC itself. `/api/video/<id>` combines that with each item's codec metadata (falling back to a quick on-demand ffprobe check for older library entries) and, only when both say it's needed, transcodes to H.264/AAC MP4 on first playback request, caching the result under the cache directory shown in Settings so it's a one-time cost per file/browser-capability combination for the lifetime of the running app — every request after that serves the cached copy directly, with full seeking/scrubbing support. Browsers/OSes with native HEVC support (e.g. Safari, or Chrome with OS-level hardware decoding) skip the transcode entirely and just get the original file. Falls back to serving the original file if ffmpeg is unavailable or the transcode fails. **The transcode cache is deleted automatically on shutdown** (Ctrl+C, tray Quit, or SIGTERM — e.g. `systemctl stop`) so converted copies never linger in storage between runs; the thumbnail cache and other scratch cache are unaffected and persist as before
 - **Unsupported formats** — clear error message with a direct download link
 
 ### Albums
@@ -605,7 +606,7 @@ Folders group albums for display in the sidebar (collapsible tree). A folder can
 | `data/luminary.db` | ✗ | SQLite database — media records + albums + folders + notifications |
 | `data/luminary.db-wal` / `-shm` | ✗ | SQLite WAL files — transient, safe to delete when server is stopped |
 | `thumbnails/` | ✗ | Thumbnail cache — auto-created on first run, fully git-ignored |
-| `cache/` | ✗ | Scratch cache for temp video frame extraction — auto-created, fully git-ignored |
+| `cache/` | ✗ | Scratch cache for temp video frame extraction, plus transcoded HEVC→H.264 videos in `cache/video_transcode/` (see Requirements/Troubleshooting) — auto-created, fully git-ignored, covered by Settings' cache size/clear UI. `video_transcode/` is also wiped automatically every time the app shuts down |
 
 In dev mode these paths are relative to `app/src/backend/`, as shown above. In an installed build, they live under `%LOCALAPPDATA%\Luminary\` (Windows) or `~/.local/share/Luminary/` (Linux) instead — see [Data Locations](#data-locations--dev-mode-vs-installed-builds).
 | `logs/log-YYYY-MM-DD.log` | ✗ | Daily rotating log files |
@@ -639,7 +640,9 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 
 **Videos not playing**
 - Install ffmpeg: `brew install ffmpeg` / `apt install ffmpeg`
-- `.MOV` files recorded on iPhone with HEVC (H.265) codec will not play in Chrome — Safari supports them natively, or transcode to H.264 MP4
+- `.MOV`/`.MP4` files recorded on iPhone with HEVC (H.265) codec — Firefox ships no HEVC decoder at all, and Chrome's support depends on OS/hardware decoding, so it's inconsistent there too. As of the current `app.py`, `/api/video/<id>` detects HEVC sources (from the codec already recorded in each item's metadata, or a quick on-demand ffprobe check for items indexed before that field existed) and transcodes them to H.264/AAC MP4 on first playback request, caching the result under the cache directory shown in Settings so it only happens once per file
+- **First playback of an HEVC video may take a while** (large files can take minutes) while the transcode runs — this is a known limitation; a background/pre-emptive transcode-on-sync isn't implemented yet. Every subsequent open of that same file is instant and supports full seeking/scrubbing, as long as the app hasn't been restarted since — the transcode cache is cleared automatically on every shutdown, so this cost is paid again once per app run, not once ever
+- If ffmpeg isn't installed, the HEVC transcode silently fails and the original file is served as before — same "browser can't play this format" fallback message you'd have seen previously
 - If *no* video ever shows controls (blank black box, no player UI at all), the Video.js vendor files probably weren't copied alongside `app.js`/`style.css` — confirm `app/src/frontend/static/vendor/videojs/video.min.js` and `video-js.min.css` exist and that `index.html`'s two `static/vendor/videojs/...` tags load without 404s (check the browser console/Network tab)
 
 **Video thumbnails not generating**
