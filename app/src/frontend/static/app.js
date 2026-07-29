@@ -1310,6 +1310,53 @@ function ctxViewMeta() {
 // ─────────────────────────────────────────────
 //  LIGHTBOX
 // ─────────────────────────────────────────────
+
+// Video.js instance currently mounted in the lightbox, if any. Video.js
+// wraps the plain <video> element in its own DOM structure and keeps
+// internal state, so — unlike the old bare <video> tag — it must be
+// explicitly torn down with dispose() before the lightbox content is
+// replaced (navigating to another item, switching to an image, or
+// closing). Just overwriting innerHTML without disposing first would leak
+// the old player instance and its event listeners.
+let _vjsPlayer = null;
+
+function _disposeVjsPlayer() {
+  if (_vjsPlayer) {
+    try { _vjsPlayer.dispose(); } catch (e) { /* already torn down */ }
+    _vjsPlayer = null;
+  }
+}
+
+// Video.js doesn't auto-scale the way a bare <video> with
+// max-width/max-height:100% + width/height:auto did, so we replicate that
+// exact "shrink-to-fit, never upscale, keep aspect ratio, center" behavior
+// manually: measure the wrapper and the video's intrinsic size, and set the
+// player's pixel dimensions to match. Re-run on metadata load and on window
+// resize while a video is open.
+function _fitVjsPlayer() {
+  if (!_vjsPlayer) return;
+  const wrap = document.getElementById('lb-video-wrap');
+  if (!wrap) return;
+
+  let vw, vh;
+  try {
+    vw = _vjsPlayer.videoWidth();
+    vh = _vjsPlayer.videoHeight();
+  } catch (e) { return; }
+  if (!vw || !vh) return;
+
+  const cw = wrap.clientWidth, ch = wrap.clientHeight;
+  if (!cw || !ch) return;
+
+  const scale = Math.min(1, cw / vw, ch / vh); // never upscale, only shrink
+  const w = Math.max(1, Math.floor(vw * scale));
+  const h = Math.max(1, Math.floor(vh * scale));
+  _vjsPlayer.width(w);
+  _vjsPlayer.height(h);
+}
+
+window.addEventListener('resize', () => { if (_vjsPlayer) _fitVjsPlayer(); });
+
 function openLightbox(idx) {
   lbIndex = idx;
   renderLightbox();
@@ -1326,10 +1373,9 @@ function renderLightbox() {
   lbZoomReset(true);
   document.getElementById('lb-zoom-bar').classList.remove('visible');
   _clearLbMissingFilePopup();
+  _disposeVjsPlayer(); // tear down any previous player before we replace lb's contents
 
   if (item.type === 'video') {
-    const prev = lb.querySelector('video');
-    if (prev) { prev.pause(); prev.src = ''; prev.load(); }
     const videoSrc  = `${API_BASE}/api/video/${encodeURIComponent(item.uniqueName)}`;
     const videoMime = _videoMime(item.name);
     const ext       = item.name.split('.').pop().toLowerCase();
@@ -1403,11 +1449,7 @@ function _renderLbVideoPlayer(videoSrc, videoMime, ext, needsWarning, itemName) 
   if (!lb) return;
   lb.innerHTML = `
     <div id="lb-video-wrap">
-      <video id="lb-video" controls
-             preload="${config.video_preload || 'metadata'}"
-             ${config.video_autoplay ? 'autoplay muted' : ''}
-             playsinline
-             onerror="handleLbVideoError()">
+      <video id="lb-video" class="video-js vjs-luminary" playsinline>
         <source src="${videoSrc}" type="${videoMime}">
       </video>
       <div id="lb-video-err" style="display:none;flex-direction:column;align-items:center;
@@ -1422,6 +1464,31 @@ function _renderLbVideoPlayer(videoSrc, videoMime, ext, needsWarning, itemName) 
       ${needsWarning ? `<div style="font-size:11px;color:var(--danger);opacity:0.8;text-align:center">
         ⚠ .${ext.toUpperCase()} may not play in browsers — MP4 or WebM recommended</div>` : ''}
     </div>`;
+
+  const videoEl = document.getElementById('lb-video');
+  if (!videoEl || typeof videojs !== 'function') return;
+
+  _vjsPlayer = videojs(videoEl, {
+    controls:  true,
+    preload:   config.video_preload  || 'metadata',
+    autoplay:  true,
+    playsinline: true,
+    fluid:     false,
+    fill:      false,
+    sources:   [{ src: videoSrc, type: videoMime }],
+  });
+
+  // Same failure semantics as before: renderLightbox already confirmed via
+  // HEAD request that the file exists before this player was ever created,
+  // so an 'error' event here is a genuine playback/codec issue, not a
+  // missing file — handleLbVideoError doesn't need to re-check.
+  _vjsPlayer.on('error', handleLbVideoError);
+
+  // Video.js doesn't inherit the old CSS max-width/max-height:100% sizing,
+  // so size the player manually once we know the video's real dimensions,
+  // and again any time they change (e.g. metadata arrives late).
+  _vjsPlayer.on('loadedmetadata', _fitVjsPlayer);
+  _vjsPlayer.ready(_fitVjsPlayer);
 }
 
 // ─────────────────────────────────────────────
@@ -1759,15 +1826,20 @@ function handleLbFullImageError() {
   loadNotifications();   // pick up the notification the backend just raised
 }
 
-// Fired by the <video>'s onerror. renderLightbox already ran a HEAD check
-// before this element was ever mounted, so a missing file never gets this
-// far — an error here means the browser genuinely can't decode the format,
-// so we just show the "can't play this format" message directly. No extra
-// request needed (and no more repeated hits to /api/video for a file we
-// already know is fine).
+// Fired by the Video.js player's 'error' event. renderLightbox already ran
+// a HEAD check before this player was ever mounted, so a missing file never
+// gets this far — an error here means the browser genuinely can't decode
+// the format, so we just show the "can't play this format" message
+// directly. No extra request needed (and no more repeated hits to
+// /api/video for a file we already know is fine).
 function handleLbVideoError() {
   const err = document.getElementById('lb-video-err');
   if (err) err.style.display = 'flex';
+  // Hide the now-broken player itself rather than leaving a dead control
+  // bar showing over nothing.
+  const wrap = document.getElementById('lb-video-wrap');
+  const vjsEl = wrap ? wrap.querySelector('.video-js') : null;
+  if (vjsEl) vjsEl.style.display = 'none';
 }
 
 function showLbMissingFilePopup() {
@@ -1803,8 +1875,7 @@ function _clearLbMissingFilePopup() {
 
 function closeLightbox() {
   _lbDetachEvents();
-  const vid = document.getElementById('lb-content')?.querySelector('video');
-  if (vid) { vid.pause(); vid.src = ''; vid.load(); }
+  _disposeVjsPlayer();
   document.getElementById('lightbox').classList.remove('open');
   _destroyMiniMap('lb-detail-minimap');
   _clearLbMissingFilePopup();
