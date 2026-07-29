@@ -8,7 +8,7 @@ A lightweight, local-first photo and video gallery. Index media from your filesy
 
 - Python 3.8+
 - ffmpeg — for video thumbnails and metadata (`apt install ffmpeg` or `brew install ffmpeg`)
-- Internet connection for the **Map** view — Leaflet, the marker-clustering plugin, and OpenStreetMap tiles are loaded from a CDN at runtime. Everything else works fully offline.
+- Internet connection for the **Map** view — Leaflet, the marker-clustering plugin, and OpenStreetMap tiles are loaded from a CDN at runtime. Everything else, including the lightbox's Video.js video player (bundled locally, no CDN), works fully offline.
 - `pystray` (installed via `requirements.txt`) — only used by installed builds, for the system tray icon. On Linux this is the fallback backend; a native GTK + AppIndicator backend is tried first, see [System Tray](#system-tray-installed-builds-only). Not needed for dev-mode (`./run.sh`).
 - `psutil` (installed via `requirements.txt`, optional) — powers the CPU/memory rows on the tray's [Dashboard](#dashboard-installed-builds-only). Everything else on the Dashboard works fine without it.
 
@@ -104,7 +104,11 @@ luminary/
 │           ├── index.html             # Frontend markup
 │           └── static/
 │               ├── app.js             # Frontend logic
-│               └── style.css          # Frontend styles
+│               ├── style.css          # Frontend styles
+│               └── vendor/
+│                   └── videojs/          # Video.js, bundled locally — no CDN dependency
+│                       ├── video.min.js
+│                       └── video-js.min.css
 └── scripts/
     ├── Readme.md                 # What the build scripts do
     ├── build-linux.sh            # Packages a portable Linux build (see BUILD.md)
@@ -439,8 +443,8 @@ If a configured source directory can't be found (moved/renamed/unmounted), or fi
 - **Progressive image loading** — blurred thumbnail shown immediately while full resolution loads, replaced with a smooth fade
 - **Zoom** — mouse wheel, +/− buttons, 1:1 actual size, fit-to-screen, drag to pan, pinch-to-zoom on touch, double-click to toggle; keyboard: `+` `-` `0` `1`
 - **Keyboard navigation** — `←` `→` to navigate, `Esc` to close
-- **Video player** — native `<video>` element with HTTP range-request streaming so the browser loads only what it needs; seeking works without downloading the full file
-- **Missing video detection** — before handing a video's URL to the `<video>` element, the lightbox does a single `HEAD` request to confirm the file still exists. If it doesn't, a "File not found" message is shown immediately and the `<video>` element is never mounted — this avoids the browser's own media engine repeatedly probing `/api/video/<id>` on its own (its normal retry/range-probing behaviour against a file that's already known to be missing)
+- **Video player** — [Video.js](https://videojs.com/), bundled locally in `static/vendor/videojs/` (no CDN, works fully offline), wrapping HTTP range-request streaming so the browser loads only what it needs; seeking works without downloading the full file
+- **Missing video detection** — before handing a video's URL to the player, the lightbox does a single `HEAD` request to confirm the file still exists. If it doesn't, a "File not found" message is shown immediately and the player is never mounted — this avoids the browser's own media engine repeatedly probing `/api/video/<id>` on its own (its normal retry/range-probing behaviour against a file that's already known to be missing)
 - **HEIC/HEIF** — decoded on the fly via pillow-heif → pyheif → ImageMagick → ffmpeg fallback chain
 - **Unsupported formats** — clear error message with a direct download link
 
@@ -611,7 +615,7 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 - If neither applies, the folder itself is reachable and only that specific file is gone (deleted, or renamed outside Luminary) — check it manually
 
 **A video keeps showing a loading spinner, or the server logs repeated `/api/video/<id>` requests for a file that no longer exists**
-- Fixed as of the current `app.js` — the lightbox does one `HEAD` request to confirm a video file still exists before ever handing its URL to the `<video>` element. If missing, "File not found" is shown immediately with no further requests. Previously, handing a missing file straight to `<video>` let the browser's own media engine retry/range-probe the URL repeatedly on its own before finally giving up
+- Fixed as of the current `app.js` — the lightbox does one `HEAD` request to confirm a video file still exists before ever mounting the Video.js player against its URL. If missing, "File not found" is shown immediately with no further requests. Previously, handing a missing file straight to `<video>` let the browser's own media engine retry/range-probe the URL repeatedly on its own before finally giving up
 
 **Thumbnails not appearing / HEIC images not loading**
 - Install `pillow-heif`: `pip install pillow-heif`
@@ -621,6 +625,7 @@ In dev mode these paths are relative to `app/src/backend/`, as shown above. In a
 **Videos not playing**
 - Install ffmpeg: `brew install ffmpeg` / `apt install ffmpeg`
 - `.MOV` files recorded on iPhone with HEVC (H.265) codec will not play in Chrome — Safari supports them natively, or transcode to H.264 MP4
+- If *no* video ever shows controls (blank black box, no player UI at all), the Video.js vendor files probably weren't copied alongside `app.js`/`style.css` — confirm `app/src/frontend/static/vendor/videojs/video.min.js` and `video-js.min.css` exist and that `index.html`'s two `static/vendor/videojs/...` tags load without 404s (check the browser console/Network tab)
 
 **Video thumbnails not generating**
 - ffmpeg must be on `PATH`: `which ffmpeg`
