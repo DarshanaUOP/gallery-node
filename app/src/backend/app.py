@@ -16,6 +16,8 @@ import sqlite3
 import platform
 import threading
 import subprocess
+import signal
+import atexit
 from pathlib import Path
 from datetime import datetime
 from collections import deque
@@ -3593,6 +3595,31 @@ if FLASK_AVAILABLE:
                     use_reloader=False)
 
 
+def _cleanup_video_transcode_cache():
+    """
+    Delete the video-transcode cache directory (and everything in it) on
+    shutdown, so converted HEVC→H.264 copies never persist between runs —
+    only the thumbnail cache and other scratch cache survive a restart.
+    Registered with atexit below, which covers normal interpreter exit
+    (Ctrl+C in dev mode, tray Quit, sys.exit()) as well as SIGTERM once
+    that's translated into a normal exit by the signal handler in the
+    entry point below (relevant for `systemctl stop luminary` on a
+    headless install). Best-effort: doesn't raise if a file is still in
+    use or the directory doesn't exist.
+    """
+    transcode_dir = app_paths.CACHE_DIR / "video_transcode"
+    if not transcode_dir.is_dir():
+        return
+    try:
+        shutil.rmtree(transcode_dir, ignore_errors=True)
+        log.info("Cleared video-transcode cache on shutdown: %s", transcode_dir)
+    except Exception as e:
+        log.warning("Could not fully clear video-transcode cache %s: %s", transcode_dir, e)
+
+
+atexit.register(_cleanup_video_transcode_cache)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3619,6 +3646,16 @@ if __name__ == "__main__":
     if not FLASK_AVAILABLE:
         print("ERROR: Flask not installed. Run: pip install flask flask-cors")
         sys.exit(1)
+
+    # Translate SIGTERM (e.g. `systemctl stop luminary` on a headless
+    # install, or Task Manager's "End task" on Windows) into a normal
+    # Python exit, the same as Ctrl+C already does — otherwise the process
+    # is torn down without ever reaching the try/finally below or the
+    # atexit-registered cache cleanup above.
+    def _handle_sigterm(signum, frame):
+        log.info("Received SIGTERM — shutting down.")
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
     # ── single-instance guard ────────────────────────────────────────────
     # Applies in every environment (dev console, installed tray app, headless
