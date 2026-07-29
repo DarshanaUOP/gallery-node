@@ -1471,7 +1471,7 @@ function _renderLbVideoPlayer(videoSrc, videoMime, ext, needsWarning, itemName) 
   _vjsPlayer = videojs(videoEl, {
     controls:  true,
     preload:   config.video_preload  || 'metadata',
-    autoplay:  config.video_autoplay ? 'muted' : false,
+    autoplay:  true,
     playsinline: true,
     fluid:     false,
     fill:      false,
