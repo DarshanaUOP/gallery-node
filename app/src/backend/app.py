@@ -601,6 +601,92 @@ def _check_missing_media(source_roots, emit=None) -> int:
     return total_missing
 
 
+def _remove_orphaned_source_records(sources, emit=None) -> int:
+    """
+    Purge media rows whose source_root doesn't match ANY currently
+    configured location — as opposed to _check_missing_media() above, which
+    only flags individual missing *files* under a location that's still
+    configured.
+
+    Why this is needed: relocate_media_source() only repoints a row's
+    source_root/file_path when the file it points to can actually be
+    confirmed at the new location; a row it can't confirm is deliberately
+    left pointing at the OLD source_root rather than guessed at (see its
+    docstring). Concretely — location "/a/b/c" (10,000 indexed files) gets
+    relocated to "/a/b/d", and 200 of those files aren't found under
+    "/a/b/d" (moved separately, renamed, whatever): relocate_media_source
+    updates media.json's entry to "/a/b/d" and repoints the other 9,800
+    rows, but leaves those 200 rows with source_root still "/a/b/c" —
+    a location that no longer appears in media.json at all. Nothing in the
+    normal sync loop ever revisits "/a/b/c" again (it isn't in `sources`
+    any more), so those rows would otherwise sit in the database forever:
+    never rescanned, never flagged missing, never cleaned up, never shown.
+
+    Called once at the very start of every sync — before the missing-file
+    check and before the scan/add phase — so a manual Sync doubles as
+    garbage collection for exactly this leftover case. Only rows whose
+    source_root matches NONE of the currently configured paths (visible or
+    hidden — hidden just means "don't scan it right now", not "forget
+    it") are removed; a location that's merely offline/unreachable at the
+    moment is still configured, so its rows are left alone here (that's
+    _check_missing_media's job, and it deliberately doesn't delete either).
+
+    Returns the number of rows removed.
+    """
+    conn = get_db_conn()
+
+    # Resolve every currently-configured path the same way sync_library
+    # resolves it when scanning (str(Path(dir_path).resolve())) so the
+    # comparison is apples-to-apples regardless of trailing slashes or a
+    # relative vs. absolute config string. resolve() with strict=False (the
+    # default) is a pure string normalization, not a filesystem check, so an
+    # offline/unreachable location still resolves to the same root it would
+    # if it were reachable — it won't get mistaken for orphaned here.
+    configured_roots = set()
+    for source in sources:
+        raw = (source.get("path") or "").rstrip("/\\")
+        if not raw:
+            continue
+        try:
+            configured_roots.add(str(Path(raw).resolve()))
+        except (OSError, RuntimeError):
+            configured_roots.add(raw)
+
+    rows = conn.execute(
+        "SELECT source_root, COUNT(*) as cnt FROM media "
+        "WHERE source_root IS NOT NULL AND source_root != '' "
+        "GROUP BY source_root"
+    ).fetchall()
+    orphaned_roots = [r["source_root"] for r in rows if r["source_root"] not in configured_roots]
+    if not orphaned_roots:
+        return 0
+
+    placeholders = ",".join("?" for _ in orphaned_roots)
+    to_delete = conn.execute(
+        f"SELECT uniqueName FROM media WHERE source_root IN ({placeholders})",
+        orphaned_roots,
+    ).fetchall()
+    unique_names = [r["uniqueName"] for r in to_delete]
+
+    removed = delete_media_records(unique_names)  # also clears cached thumbnails
+
+    if removed:
+        for root in orphaned_roots:
+            log.info(
+                "Sync: purging orphaned records under %s — no longer a configured "
+                "location (likely left behind by a relocate that didn't fully resolve)",
+                root,
+            )
+            if emit:
+                emit("log", msg=f"Removed stale records for: {root}")
+            # The old path is gone from media.json entirely now, so any unread
+            # "can't find this location" notification for it would otherwise
+            # sit unread forever — clear it, same as a successful relocate does.
+            resolve_location_notifications(_configured_path_for_source_root(root))
+
+    return removed
+
+
 # ─────────────────────────────────────────────
 #  NOTIFICATIONS
 # ─────────────────────────────────────────────
@@ -1666,6 +1752,7 @@ _sync_state = {
     "running":        False,
     "scanned":        0,
     "added":          0,
+    "removed":        0,
     "total_at_start": 0,
     "current_file":   "",
     "current_source": "",
@@ -1691,6 +1778,7 @@ def _sync_snapshot() -> dict:
             "running":        _sync_state["running"],
             "scanned":        _sync_state["scanned"],
             "added":          _sync_state["added"],
+            "removed":        _sync_state["removed"],
             "total_at_start": _sync_state["total_at_start"],
             "current_file":   _sync_state["current_file"],
             "current_source": _sync_state["current_source"],
@@ -2075,6 +2163,16 @@ def sync_library(progress=None) -> dict:
         {f.lower() for f in cfg.get("supported_video_formats", [])}
     )
 
+    # ── Phase 0: garbage-collect records left behind under a source_root
+    # that's no longer configured at all (e.g. a relocate that couldn't
+    # confirm every file at the new location — see
+    # _remove_orphaned_source_records() for the full scenario). Deliberately
+    # runs BEFORE the missing-file check and the scan/add phase below, so a
+    # plain Sync click also clears out exactly this kind of leftover.
+    removed = _remove_orphaned_source_records(sources, emit=emit)
+    if removed:
+        emit("progress", removed=removed)
+
     # ── Phase 1: figure out which sources are reachable right now, and check
     # for any DB records under them whose file is gone — BEFORE computing the
     # dedup hash/path snapshot below. This ordering matters: on a rename,
@@ -2211,9 +2309,10 @@ def sync_library(progress=None) -> dict:
         upsert_media_rows(new_entries)
 
     total = get_media_count()
-    log.info("Sync complete — scanned %d, added %d, missing %d, total %d", scanned, added, missing, total)
-    emit("log", msg=f"Sync complete — {added} new, {missing} missing, {total} total")
-    return {"added": added, "scanned": scanned, "missing": missing, "total": total}
+    log.info("Sync complete — scanned %d, added %d, removed %d, missing %d, total %d",
+              scanned, added, removed, missing, total)
+    emit("log", msg=f"Sync complete — {added} new, {removed} removed, {missing} missing, {total} total")
+    return {"added": added, "scanned": scanned, "removed": removed, "missing": missing, "total": total}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3159,6 +3258,7 @@ if FLASK_AVAILABLE:
             _sync_state["result"]         = None
             _sync_state["scanned"]        = 0
             _sync_state["added"]          = 0
+            _sync_state["removed"]        = 0
             _sync_state["current_file"]   = ""
             _sync_state["current_source"] = ""
             _sync_state["total_at_start"] = get_media_count()
@@ -3172,6 +3272,7 @@ if FLASK_AVAILABLE:
                 updates = {}
                 if kw.get("scanned") is not None: updates["scanned"] = kw["scanned"]
                 if kw.get("added")   is not None: updates["added"]   = kw["added"]
+                if kw.get("removed") is not None: updates["removed"] = kw["removed"]
                 if kw.get("file"):                updates["current_file"] = kw["file"]
                 if kw.get("msg"):                 updates["log"] = kw["msg"]
                 if updates:
@@ -3186,7 +3287,8 @@ if FLASK_AVAILABLE:
                     running=False, done=True,
                     result=result,
                     current_file="", current_source="",
-                    log=f"✓ Complete — {result['added']} new, {result.get('missing', 0)} missing, {result['total']} total",
+                    log=f"✓ Complete — {result['added']} new, {result.get('removed', 0)} removed, "
+                        f"{result.get('missing', 0)} missing, {result['total']} total",
                 )
             except Exception as e:
                 log.exception("Background sync failed")
