@@ -67,6 +67,10 @@ luminary/
 ├── requirements.txt               # Python dependencies (includes waitress — production WSGI server)
 ├── run.sh                        # Startup script (dev mode)
 ├── build/                        # PyInstaller's own intermediate build cache — git-ignored
+├── .claude/
+│   └── skills/
+│       └── luminary/
+│           └── SKILL.md          # Claude Code project skill — see "Claude Code Skill" below
 ├── app/
 │   ├── build/                    # Packaged app output (see scripts/) — git-ignored
 │   │   ├── linux/portable/Luminary/
@@ -131,6 +135,10 @@ On first run `app.py` automatically creates `media.json` with a default entry po
 `index.html` is served from `app/src/frontend/`, with `app.js` and `style.css` served from `app/src/frontend/static/` — no build step or bundler required, just edit and refresh.
 
 `Luminary.spec` and the top-level `build/` folder are PyInstaller's own working files, regenerated on every run of the build scripts — see `BUILD.md` and `scripts/Readme.md` for packaging a standalone executable, `.deb`, or Windows installer.
+
+### Claude Code Skill
+
+`.claude/skills/luminary/SKILL.md` is a project skill for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) (and Claude Desktop's Code tab). It's committed to the repo so it travels with every clone — Claude Code picks it up automatically from `.claude/skills/` with no setup step. It's a reference map of this codebase's architecture and conventions (schema-migration pattern, route/data-access naming, frontend state objects, where to make a given kind of change, etc.), consulted automatically whenever Claude is asked to work on this project, so contributions stay consistent with existing patterns instead of introducing a second way of doing something the codebase already does one way. It doesn't run any code and has no effect outside of Claude Code sessions in this repo. If you're not using Claude Code, you can ignore this folder entirely.
 
 ### Data Locations — dev mode vs. installed builds
 
@@ -295,6 +303,7 @@ All fields with their defaults:
   "default_sort": "date-desc",
   "default_date_field": "modified",
   "show_hidden_default": false,
+  "album_nav_sort": "created-desc",
 
   "lazy_load_batch": 50,
   "media_page_size": 500,
@@ -352,6 +361,7 @@ Each style has its own dark and light variant, controlled independently by `them
 | `default_sort` | `date-desc` | `date-desc` \| `date-asc` \| `name` |
 | `default_date_field` | `modified` | `modified` \| `created` — which date is used for sorting |
 | `show_hidden_default` | `false` | Show hidden media on initial load |
+| `album_nav_sort` | `created-desc` | `created-desc` \| `created-asc` \| `name-asc` \| `name-desc` — order of the sidebar's folders/albums tree (top-level folders, the albums nested in each one, and any unfiled albums are all sorted by this same rule). Set from the dropdown above the sidebar's Albums section, not the Settings panel |
 
 **Performance**
 
@@ -465,6 +475,8 @@ The next **Sync** cleans this up automatically: before scanning for new media, i
 - **Add Photos picker** — full-screen thumbnail grid, server-paginated, with search and location filter; shows "Added" badge on photos already in the album; scrolls to load more; **Add All** button bulk-adds every photo matching the current location filter in a single request
 - Add individual photos via the per-card context menu (⋮)
 - Remove photos from an album via context menu when inside that album view
+- **Folders** — group albums into collapsible folders in the sidebar; an album belongs to at most one folder. Deleting a folder deletes the albums inside it (never the underlying media)
+- **Sort control** — a dropdown above the sidebar's Albums section orders the whole tree by Newest / Oldest / Name (A–Z) / Name (Z–A). Folders, the albums nested inside each folder, and any unfiled albums are all sorted by the same rule at once, using each item's creation timestamp or name. The choice is saved to `album_nav_sort` in `configuration.json` and persists across reloads
 
 ### Map
 - **⊙ Map view** — geotagged photos and videos plotted on an interactive Leaflet map (loaded from CDN — requires an internet connection for map tiles and the Leaflet/marker-cluster libraries)
@@ -550,8 +562,8 @@ All media endpoints support server-side filtering via query parameters.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/albums` | Full albums array |
-| POST | `/api/album/create` | `{"name": "…"}` — returns created album with generated `id` |
+| GET | `/api/albums` | Full albums array — each album is `{id, name, folder_id, created_at, media}`. `created_at` is `"YYYY-MM-DD HH:MM:SS"` (local time), stamped when the album is created and preserved across saves — used by the sidebar's sort control |
+| POST | `/api/album/create` | `{"name": "…"}` — returns created album with generated `id` and `created_at` |
 | POST | `/api/album/add` | `{"albumId": "…", "uniqueName": "…"}` |
 | POST | `/api/album/add-bulk` | `{"albumId": "…", "uniqueNames": ["…", …]}` — adds many photos to an album in one transaction. Returns `{ok: true, added: N}` where `N` is the number newly inserted (duplicates skipped) |
 | POST | `/api/album/move` | `{"albumId": "…", "folderId": "…"|null}` — moves an album into a folder, or out of any folder if `folderId` is `null` |
@@ -562,8 +574,8 @@ Folders group albums for display in the sidebar (collapsible tree). A folder can
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/folders` | All folders as `[{id, name}]` |
-| POST | `/api/folder/create` | `{"name": "…"}` — returns created folder |
+| GET | `/api/folders` | All folders as `[{id, name, created_at}]`. `created_at` is `"YYYY-MM-DD HH:MM:SS"` (local time), stamped when the folder is created — used by the sidebar's sort control |
+| POST | `/api/folder/create` | `{"name": "…"}` — returns created folder with generated `id` and `created_at` |
 | POST | `/api/folder/rename` | `{"folderId": "…", "name": "…"}` |
 | POST | `/api/folder/delete` | `{"folderId": "…", "force": false}` — if the folder still has albums inside and `force` isn't set, returns `409 {needs_confirmation: true, album_count, album_names}` instead of deleting anything. Call again with `force: true` to proceed. Deleting a folder deletes the albums inside it (and their album-membership rows) but never touches the underlying media files/records |
 
