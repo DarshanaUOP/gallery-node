@@ -44,6 +44,12 @@
     <div class="sidebar-label" style="display:flex;justify-content:space-between;align-items:center;padding-right:12px">
       Albums
       <span style="display:flex;gap:10px;align-items:center">
+        <select id="album-nav-sort" class="album-nav-sort-select" title="Sort folders &amp; albums" onchange="setAlbumNavSort(this.value)">
+          <option value="created-desc">Newest</option>
+          <option value="created-asc">Oldest</option>
+          <option value="name-asc">Name (A–Z)</option>
+          <option value="name-desc">Name (Z–A)</option>
+        </select>
         <span style="cursor:pointer;color:var(--text-dim);font-size:13px" onclick="openCreateFolder()" title="New folder">⛁+</span>
         <span style="cursor:pointer;color:var(--accent);font-size:16px" onclick="openCreateAlbum()" title="New album">+</span>
       </span>

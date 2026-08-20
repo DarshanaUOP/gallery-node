@@ -379,6 +379,28 @@
     border-radius: 10px;
   }
 
+  /* Sort control for the folders/albums tree — sits inline in the "Albums"
+     sidebar-label row, so it's kept deliberately compact/borderless to not
+     compete visually with the New Folder / New Album icons beside it. */
+  .album-nav-sort-select {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: calc(9px * var(--font-scale));
+    letter-spacing: 0.03em;
+    text-transform: none;
+    cursor: pointer;
+    outline: none;
+    max-width: 74px;
+    padding: 2px 0;
+  }
+  .album-nav-sort-select:hover,
+  .album-nav-sort-select:focus { color: var(--text); }
+  .album-nav-sort-select option {
+    background: var(--surface);
+    color: var(--text);
+  }
+
   /* Folders — collapsible containers that group albums in the sidebar */
   .folder-block { margin-bottom: 1px; }
 
