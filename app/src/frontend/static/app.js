@@ -139,6 +139,8 @@ async function loadConfig() {
       showHidden = true;
       document.getElementById('show-hidden-toggle').classList.add('on');
     }
+    const sortSel = document.getElementById('album-nav-sort');
+    if (sortSel) sortSel.value = config.album_nav_sort || 'created-desc';
     applyConfigToUI(config);
   } catch {
     config = { lazy_load_batch: 50, show_hidden_default: false };
@@ -300,10 +302,35 @@ function softRefresh() {
   });
 }
 
+// Comparator for the sidebar's folder/album tree, driven by config.album_nav_sort
+// ('created-desc' | 'created-asc' | 'name-asc' | 'name-desc'). Used for BOTH
+// the top-level folders list and each folder's nested albums, plus the
+// unfiled-albums list, so everything in the tree stays consistently ordered.
+// 'created_at' is a plain 'YYYY-MM-DD HH:MM:SS' string, which sorts
+// correctly lexicographically — no Date parsing needed. Items missing it
+// (shouldn't happen post-migration, but just in case) sort last.
+function _albumNavComparator() {
+  const mode = (config.album_nav_sort || 'created-desc');
+  const [field, dir] = mode.startsWith('name') ? ['name', mode.slice(5)] : ['created_at', mode.slice(8)];
+  const sign = dir === 'asc' ? 1 : -1;
+  return (a, b) => {
+    if (field === 'name') {
+      return sign * String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' });
+    }
+    const av = a.created_at || '';
+    const bv = b.created_at || '';
+    if (av === bv) return 0;
+    if (!av) return 1;   // missing created_at always sorts last, regardless of direction
+    if (!bv) return -1;
+    return sign * (av < bv ? -1 : 1);
+  };
+}
+
 function renderAlbumNav() {
   const nav     = document.getElementById('album-nav');
-  const folders = db.folders || [];
-  const albums  = db.albums  || [];
+  const cmp     = _albumNavComparator();
+  const folders = [...(db.folders || [])].sort(cmp);
+  const albums  = db.albums || [];
   nav.innerHTML = '';
 
   if (folders.length === 0 && albums.length === 0) {
@@ -311,10 +338,10 @@ function renderAlbumNav() {
     return;
   }
 
-  // Folders first (each showing the albums filed inside it), then any
-  // albums that aren't in a folder.
+  // Folders first (each showing the albums filed inside it, sorted by the
+  // same rule), then any albums that aren't in a folder.
   folders.forEach(folder => {
-    const folderAlbums = albums.filter(a => a.folder_id === folder.id);
+    const folderAlbums = albums.filter(a => a.folder_id === folder.id).sort(cmp);
     const collapsed    = collapsedFolders.has(folder.id);
 
     const block = document.createElement('div');
@@ -342,9 +369,33 @@ function renderAlbumNav() {
     nav.appendChild(block);
   });
 
-  albums.filter(a => !a.folder_id).forEach(album => {
+  albums.filter(a => !a.folder_id).sort(cmp).forEach(album => {
     nav.appendChild(_albumNavItem(album, false));
   });
+}
+
+// Called by the sidebar's "Sort folders & albums" dropdown. Applies
+// immediately (re-render is just a sort + DOM rebuild, no reload needed)
+// and persists to configuration.json via the same partial-PATCH pattern
+// used elsewhere (see toggleThemeMode) so it survives a reload.
+async function setAlbumNavSort(value) {
+  const previous = config.album_nav_sort;
+  config.album_nav_sort = value;   // apply immediately for a snappy UI
+  renderAlbumNav();
+  try {
+    const r = await fetch(`${API_BASE}/api/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ album_nav_sort: value }),
+    });
+    if (!r.ok) throw new Error('Server returned ' + r.status);
+  } catch {
+    config.album_nav_sort = previous;  // revert so the UI doesn't silently disagree with configuration.json
+    const sel = document.getElementById('album-nav-sort');
+    if (sel) sel.value = previous;
+    renderAlbumNav();
+    toast('Could not save sort order — is app.py running?', 'error');
+  }
 }
 
 // Builds one album row for the sidebar tree (nested = indented under a folder)

@@ -48,5 +48,6 @@
   "log_level": "INFO",
   "log_retention_days": 30,
   "style": "modern",
-  "font_size": "large"
+  "font_size": "large",
+  "album_nav_sort": "name-asc"
 }

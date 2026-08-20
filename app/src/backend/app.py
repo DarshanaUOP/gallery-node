@@ -215,6 +215,12 @@ def save_json(path: Path, data):
 _db_lock = threading.Lock()   # serialises all WRITE operations
 _local   = threading.local()  # each thread gets its own connection (WAL allows concurrent reads)
 
+def _now_str() -> str:
+    """Current local time as 'YYYY-MM-DD HH:MM:SS' — used for created_at stamps
+    on albums/folders (and anywhere else that wants a plain sortable string
+    rather than SQLite's own datetime('now'), which is UTC)."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 def get_db_conn() -> sqlite3.Connection:
     """
     Return a thread-local SQLite connection.
@@ -312,6 +318,26 @@ def _init_schema():
         )
         conn.commit()
     conn.execute("CREATE INDEX IF NOT EXISTS idx_albums_folder ON albums(folder_id)")
+    conn.commit()
+
+    # created_at (YYYY-MM-DD HH:MM:SS, local time — see _now_str()) — added
+    # the same post-hoc way as folder_id above so upgrading installs pick it
+    # up without losing existing albums/folders. SQLite's ALTER TABLE only
+    # accepts a constant DEFAULT, so existing rows are backfilled separately
+    # (with the current time — the best available substitute for a real
+    # creation time that was never recorded before this column existed).
+    if "created_at" not in existing_cols:
+        conn.execute("ALTER TABLE albums ADD COLUMN created_at TEXT")
+        conn.execute("UPDATE albums SET created_at = ? WHERE created_at IS NULL", (_now_str(),))
+        conn.commit()
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_albums_created_at ON albums(created_at)")
+
+    existing_folder_cols = {row["name"] for row in conn.execute("PRAGMA table_info(folders)").fetchall()}
+    if "created_at" not in existing_folder_cols:
+        conn.execute("ALTER TABLE folders ADD COLUMN created_at TEXT")
+        conn.execute("UPDATE folders SET created_at = ? WHERE created_at IS NULL", (_now_str(),))
+        conn.commit()
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_folders_created_at ON folders(created_at)")
     conn.commit()
 
 # Initialize SQLite schema on module load (creates tables/indexes if missing)
@@ -1592,9 +1618,10 @@ def get_media_stats() -> dict:
 
 def load_albums() -> list:
     """Return all albums as list[dict] — same shape as the old albums.json array,
-    plus a 'folder_id' field (None when the album isn't inside a folder)."""
+    plus a 'folder_id' field (None when the album isn't inside a folder) and
+    a 'created_at' timestamp ('YYYY-MM-DD HH:MM:SS') used for sidebar sorting."""
     conn  = get_db_conn()
-    rows  = conn.execute("SELECT id, name, folder_id FROM albums").fetchall()
+    rows  = conn.execute("SELECT id, name, folder_id, created_at FROM albums").fetchall()
     out   = []
     for a in rows:
         media_rows = conn.execute(
@@ -1602,16 +1629,19 @@ def load_albums() -> list:
             (a["id"],)
         ).fetchall()
         out.append({
-            "id":        a["id"],
-            "name":      a["name"],
-            "folder_id": a["folder_id"],
-            "media":     [m["uniqueName"] for m in media_rows],
+            "id":         a["id"],
+            "name":       a["name"],
+            "folder_id":  a["folder_id"],
+            "created_at": a["created_at"],
+            "media":      [m["uniqueName"] for m in media_rows],
         })
     return out
 
 def save_albums(albums: list):
     """Replace all albums + their membership atomically under _db_lock.
-    Preserves 'folder_id' on each album dict (None/absent = no folder)."""
+    Preserves 'folder_id' and 'created_at' on each album dict (an album dict
+    missing 'created_at' — e.g. hand-built by a caller that pre-dates this
+    field — gets stamped with the current time rather than losing it)."""
     conn = get_db_conn()
     with _db_lock:
         with conn:
@@ -1619,8 +1649,9 @@ def save_albums(albums: list):
             conn.execute("DELETE FROM albums")
             for a in albums:
                 conn.execute(
-                    "INSERT INTO albums (id, name, folder_id) VALUES (?, ?, ?)",
-                    (a.get("id"), a.get("name", "Untitled"), a.get("folder_id"))
+                    "INSERT INTO albums (id, name, folder_id, created_at) VALUES (?, ?, ?, ?)",
+                    (a.get("id"), a.get("name", "Untitled"), a.get("folder_id"),
+                     a.get("created_at") or _now_str())
                 )
                 for pos, un in enumerate(a.get("media", [])):
                     conn.execute(
@@ -1630,12 +1661,16 @@ def save_albums(albums: list):
     log.info("Saved %d albums to SQLite", len(albums))
 
 def create_album(name: str, folder_id: str = None) -> dict:
-    conn  = get_db_conn()
-    album = {"name": name, "id": "album_" + str(uuid.uuid4())[:8], "media": [], "folder_id": folder_id}
+    conn       = get_db_conn()
+    created_at = _now_str()
+    album = {
+        "name": name, "id": "album_" + str(uuid.uuid4())[:8], "media": [],
+        "folder_id": folder_id, "created_at": created_at,
+    }
     with conn:
         conn.execute(
-            "INSERT INTO albums (id, name, folder_id) VALUES (?, ?, ?)",
-            (album["id"], album["name"], folder_id)
+            "INSERT INTO albums (id, name, folder_id, created_at) VALUES (?, ?, ?, ?)",
+            (album["id"], album["name"], folder_id, created_at)
         )
     return album
 
@@ -1679,16 +1714,24 @@ def move_album_to_folder(album_id: str, folder_id: str = None):
 # files/records always survive a folder deletion.
 
 def load_folders() -> list:
-    """Return all folders as list[dict] {id, name}, ordered by name."""
+    """Return all folders as list[dict] {id, name, created_at}, ordered by
+    name. ('created_at' is 'YYYY-MM-DD HH:MM:SS' — used by the sidebar's
+    Name/Created sort control; the frontend re-sorts client-side rather than
+    relying on this SQL ORDER BY, so the ordering here is just a stable
+    fallback for any other consumer of the endpoint.)"""
     conn = get_db_conn()
-    rows = conn.execute("SELECT id, name FROM folders ORDER BY name COLLATE NOCASE").fetchall()
-    return [{"id": r["id"], "name": r["name"]} for r in rows]
+    rows = conn.execute("SELECT id, name, created_at FROM folders ORDER BY name COLLATE NOCASE").fetchall()
+    return [{"id": r["id"], "name": r["name"], "created_at": r["created_at"]} for r in rows]
 
 def create_folder(name: str) -> dict:
-    conn   = get_db_conn()
-    folder = {"id": "folder_" + str(uuid.uuid4())[:8], "name": name}
+    conn       = get_db_conn()
+    created_at = _now_str()
+    folder = {"id": "folder_" + str(uuid.uuid4())[:8], "name": name, "created_at": created_at}
     with conn:
-        conn.execute("INSERT INTO folders (id, name) VALUES (?, ?)", (folder["id"], folder["name"]))
+        conn.execute(
+            "INSERT INTO folders (id, name, created_at) VALUES (?, ?, ?)",
+            (folder["id"], folder["name"], created_at)
+        )
     return folder
 
 def rename_folder(folder_id: str, name: str) -> bool:
@@ -2113,6 +2156,11 @@ def load_config() -> dict:
         "default_sort":             "date-desc",  # date-desc | date-asc | name
         "default_date_field":       "modified",   # modified | created
         "show_hidden_default":      False,
+        # Sidebar folders/albums tree — how folders (and the albums nested
+        # inside each one, plus any top-level albums) are ordered. Applied
+        # entirely client-side in renderAlbumNav() using each item's
+        # 'created_at'/'name'; persisted here so it survives a reload.
+        "album_nav_sort":           "created-desc",  # created-desc | created-asc | name-asc | name-desc
         # Performance
         "lazy_load_batch":          50,
         "media_page_size":          500,
