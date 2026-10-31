@@ -402,12 +402,37 @@ async function setAlbumNavSort(value) {
 function _albumNavItem(album, nested) {
   const d = document.createElement('div');
   d.className = 'album-nav-item' + (nested ? ' nested' : '') + (currentAlbumId === album.id ? ' active' : '');
-  d.innerHTML = `
-    <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(album.name)}</span>
-    <span class="album-rename-icon" title="Move to folder" onclick="event.stopPropagation();openMoveAlbum('${album.id}')">⇄</span>
-    <span class="album-rename-icon" title="Rename" onclick="event.stopPropagation();openRenameAlbum('${album.id}')">✎</span>
-    <span class="album-count">${album.media.length}</span>`;
-  d.onclick = () => setView(album.id, d);
+  const name = document.createElement('span');
+  name.style.flex = '1';
+  name.style.overflow = 'hidden';
+  name.style.textOverflow = 'ellipsis';
+  name.style.whiteSpace = 'nowrap';
+  name.textContent = album.name;
+
+  const move = document.createElement('span');
+  move.className = 'album-rename-icon';
+  move.title = 'Move to folder';
+  move.textContent = '⇄';
+  move.addEventListener('click', event => {
+    event.stopPropagation();
+    openMoveAlbum(album.id);
+  });
+
+  const rename = document.createElement('span');
+  rename.className = 'album-rename-icon';
+  rename.title = 'Rename';
+  rename.textContent = '✎';
+  rename.addEventListener('click', event => {
+    event.stopPropagation();
+    openRenameAlbum(album.id);
+  });
+
+  const count = document.createElement('span');
+  count.className = 'album-count';
+  count.textContent = String(album.media.length);
+
+  d.append(name, move, rename, count);
+  d.addEventListener('click', () => setView(album.id, d));
   return d;
 }
 

@@ -104,13 +104,13 @@ class ServerController:
             try:
                 from waitress import create_server
                 self._server = create_server(
-                    self._app, host="0.0.0.0", port=self.port, threads=16
+                    self._app, host="127.0.0.1", port=self.port, threads=16
                 )
                 target = self._server.run
-                log.info("Starting Luminary backend (Waitress) on http://0.0.0.0:%d", self.port)
+                log.info("Starting Luminary backend (Waitress) on http://127.0.0.1:%d", self.port)
             except ImportError:
                 from werkzeug.serving import make_server
-                self._server = make_server("0.0.0.0", self.port, self._app, threaded=True)
+                self._server = make_server("127.0.0.1", self.port, self._app, threaded=True)
                 target = self._server.serve_forever
                 log.warning(
                     "Waitress not installed — using Flask's development server "

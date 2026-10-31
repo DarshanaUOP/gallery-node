@@ -18,6 +18,7 @@ import threading
 import subprocess
 import signal
 import atexit
+from urllib.parse import urlsplit
 from pathlib import Path
 from datetime import datetime
 from collections import deque
@@ -54,11 +55,10 @@ except ImportError:
 
 try:
     from flask import Flask, jsonify, request
-    from flask_cors import CORS
     FLASK_AVAILABLE = True
 except ImportError:
     FLASK_AVAILABLE = False
-    print("[WARN] Flask/flask-cors not installed. Run: pip install flask flask-cors")
+    print("[WARN] Flask not installed. Run: pip install flask")
 
 try:
     from waitress import serve as _waitress_serve
@@ -2372,7 +2372,41 @@ def sync_library(progress=None) -> dict:
 if FLASK_AVAILABLE:
     frontend_dir = app_paths.RESOURCES_DIR
     app = Flask(__name__, static_folder=str(frontend_dir), static_url_path="")
-    CORS(app, expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "Content-Type"])
+
+    @app.before_request
+    def restrict_api_to_local_clients():
+        """Reject non-loopback hosts and cross-origin state-changing requests."""
+        try:
+            request_host = urlsplit("//" + request.host).hostname
+        except ValueError:
+            request_host = None
+        if request_host not in {"localhost", "127.0.0.1"}:
+            return jsonify({"error": "Local access only"}), 403
+
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            origin = request.headers.get("Origin")
+            if origin:
+                origin_scheme = None
+                try:
+                    origin_parts = urlsplit(origin)
+                    origin_scheme = origin_parts.scheme
+                    origin_host = origin_parts.hostname
+                    origin_port = origin_parts.port or (
+                        443 if origin_scheme == "https" else 80
+                    )
+                except ValueError:
+                    origin_host = None
+                    origin_port = None
+                try:
+                    request_port = int(request.environ.get("SERVER_PORT", 0))
+                except (TypeError, ValueError):
+                    request_port = 0
+                if (
+                    origin_scheme != "http"
+                    or origin_host != request_host
+                    or origin_port != request_port
+                ):
+                    return jsonify({"error": "Cross-origin mutation denied"}), 403
 
     @app.route("/")
     def serve_index():
@@ -2598,6 +2632,8 @@ if FLASK_AVAILABLE:
             abort(404)
         file_meta = item.get("metadata", {}).get("file", {})
         file_dir  = file_meta.get("path", "")
+        if not isinstance(file_dir, str) or not isinstance(item.get("name"), str):
+            abort(404)
         full_path = os.path.join(file_dir, item["name"])
         if not os.path.isfile(full_path):
             source_root = file_meta.get("source_root", "")
@@ -2631,7 +2667,38 @@ if FLASK_AVAILABLE:
                     action_label="View Location" if raw_path else None,
                 )
             abort(404)
-        return full_path, item
+
+        try:
+            resolved_file = Path(full_path).resolve(strict=True)
+            configured_roots = {
+                str(Path(source["path"]).resolve())
+                for source in load_json(MEDIA_JSON, [])
+                if isinstance(source, dict)
+                and isinstance(source.get("path"), str)
+                and source["path"].strip()
+            }
+            source_root = file_meta.get("source_root")
+            if source_root:
+                if not isinstance(source_root, str):
+                    abort(404)
+                resolved_root = Path(source_root).resolve()
+                if str(resolved_root) not in configured_roots:
+                    abort(404)
+                allowed_roots = [resolved_root]
+            else:
+                allowed_roots = [Path(root) for root in configured_roots]
+
+            resolved_file_norm = os.path.normcase(str(resolved_file))
+            if not any(
+                os.path.commonpath(
+                    [resolved_file_norm, os.path.normcase(str(root))]
+                ) == os.path.normcase(str(root))
+                for root in allowed_roots
+            ):
+                abort(404)
+        except (OSError, RuntimeError, ValueError):
+            abort(404)
+        return str(resolved_file), item
 
     def _open_as_pil(full_path):
         """Delegate to module-level open_image_any_format (handles HEIC/HEIF)."""
@@ -3572,21 +3639,31 @@ if FLASK_AVAILABLE:
     @app.route("/api/db", methods=["POST"])
     def api_db_post():
         """
-        Save updated albums and/or individual media record changes from the frontend.
-        Media records are UPSERTED (never full-table replaced) to prevent data loss
-        when the frontend only has a partial page of records loaded.
+        Save updated albums from the frontend.
         Albums are always replaced in full (they're small and always fully loaded).
+        Media records are scanner-owned and cannot be changed through this endpoint.
         """
         data = request.get_json(force=True)
-        if not data:
-            return jsonify({"error": "No data"}), 400
+        if not isinstance(data, dict) or not data:
+            return jsonify({"error": "Expected a non-empty JSON object"}), 400
 
         if "media" in data and data["media"]:
-            # Upsert — update only the records sent, leave all others untouched
-            upsert_media_rows(data["media"])
+            return jsonify({"error": "Media records cannot be changed through this endpoint"}), 400
 
         if "albums" in data:
-            save_albums(data["albums"])
+            albums = data["albums"]
+            if not isinstance(albums, list) or any(
+                not isinstance(album, dict)
+                or not isinstance(album.get("id"), str)
+                or not 1 <= len(album["id"]) <= 128
+                or any(
+                    not (char.isascii() and (char.isalnum() or char in "_-"))
+                    for char in album["id"]
+                )
+                for album in albums
+            ):
+                return jsonify({"error": "Albums must have safe string IDs"}), 400
+            save_albums(albums)
 
         return jsonify({"ok": True})
 
@@ -3725,7 +3802,7 @@ if FLASK_AVAILABLE:
 
     def run_server(port: int = 5000):
         if WAITRESS_AVAILABLE:
-            log.info("Starting Luminary backend (Waitress) on http://0.0.0.0:%d", port)
+            log.info("Starting Luminary backend (Waitress) on http://127.0.0.1:%d", port)
             # threads=16: a media gallery fires many concurrent thumbnail/image
             # requests per page load (browsers open several connections at once),
             # and /api/sync/stream holds one thread open for its entire duration
@@ -3733,7 +3810,7 @@ if FLASK_AVAILABLE:
             # ("Task queue depth" warnings) — 16 gives real headroom. The shared
             # SQLite connection is thread-local (see get_db_conn) and writes are
             # serialised via _db_lock, so more worker threads is safe.
-            _waitress_serve(app, host="0.0.0.0", port=port, threads=16)
+            _waitress_serve(app, host="127.0.0.1", port=port, threads=16)
         else:
             log.warning("Waitress not installed — using Flask's development server "
                         "(not recommended for production). Run: pip install waitress")
@@ -3741,7 +3818,7 @@ if FLASK_AVAILABLE:
             # shared SQLite connection is never accessed concurrently. The sync runs in
             # its own daemon thread but only writes between request cycles. WAL mode
             # means reads (most requests) never block on the sync write thread.
-            app.run(host="0.0.0.0", port=port, debug=False, threaded=True,
+            app.run(host="127.0.0.1", port=port, debug=False, threaded=True,
                     use_reloader=False)
 
 
@@ -3794,7 +3871,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     if not FLASK_AVAILABLE:
-        print("ERROR: Flask not installed. Run: pip install flask flask-cors")
+        print("ERROR: Flask not installed. Run: pip install flask")
         sys.exit(1)
 
     # Translate SIGTERM (e.g. `systemctl stop luminary` on a headless
